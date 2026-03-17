@@ -12,6 +12,9 @@ class FloatPoint
   float y = 0;
   FloatPoint() = default;
   FloatPoint(float x, float y) : x(x), y(y) {}
+  FloatPoint operator+(const FloatPoint& other) const{
+    return FloatPoint(this->x + other.x, this->y + other.y);
+  }
 };
 
 }  // namespace gpl
