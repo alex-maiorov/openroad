@@ -1341,9 +1341,43 @@ GCell& NesterovBaseCommon::getGCell(size_t index)
   return gCellStor_[index];
 }
 
+GNet& NesterovBaseCommon::getGNet(size_t index)
+{
+  if (index >= gNetStor_.size()) {
+    log_->error(utl::GPL,
+                316,
+                "getGNet: index {} out of bounds (gNetStor_.size() = {}).",
+                index,
+                gNetStor_.size());
+  }
+  return gNetStor_[index];
+}
+
+GPin& NesterovBaseCommon::getGPin(size_t index)
+{
+  if (index >= gPinStor_.size()) {
+    log_->error(utl::GPL,
+                316,
+                "getGPin: index {} out of bounds (gPinStor_.size() = {}).",
+                index,
+                gPinStor_.size());
+  }
+  return gPinStor_[index];
+}
+
 size_t NesterovBaseCommon::getGCellIndex(const GCell* gCell) const
 {
   return std::distance(gCellStor_.data(), gCell);
+}
+
+size_t NesterovBaseCommon::getGPinIndex(const GPin* gPin) const
+{
+  return std::distance(gPinStor_.data(), gPin);
+}
+
+size_t NesterovBaseCommon::getGNetIndex(const GCell* gNet) const
+{
+  return std::distance(gNetStor_.data(), gNet);
 }
 
 // get x,y WA Gradient values with given GCell
@@ -4342,4 +4376,11 @@ static float getSecondNorm(const std::vector<FloatPoint>& a)
   }
   return std::sqrt(norm / (2.0 * a.size()));
 }
+
+
+
+
 }  // namespace gpl
+
+
+

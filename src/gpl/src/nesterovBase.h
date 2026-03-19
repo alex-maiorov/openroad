@@ -876,6 +876,12 @@ class NesterovBaseCommon
   GCell& getGCell(size_t index);
   size_t getGCellIndex(const GCell* gCell) const;
 
+  GNet& getGNet(size_t index);
+  size_t getGNetIndex(const GNet* gNet) const;
+
+  GPin& getGPin(size_t index);
+  size_t getGPinIndex(const GPin* gPin) const;
+
   void printGCells();
   void printGPins();
 
@@ -1369,5 +1375,7 @@ inline constexpr const char* format_label_um2 = "{:27} {:10.3f} um^2";
 inline constexpr const char* format_label_percent = "{:27} {:10.2f} %";
 inline constexpr const char* format_label_um2_with_delta
     = "{:27} {:10.3f} um^2 ({:+.2f}%)";
+
+
 
 }  // namespace gpl
