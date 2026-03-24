@@ -6,6 +6,8 @@
 #include <cstddef>
 #include <memory>
 #include <vector>
+#include "nesterovPass.h"
+
 
 namespace grt {
 class GlobalRouter;
@@ -15,6 +17,10 @@ namespace rsz {
 class Resizer;
 }
 
+namespace sta {
+  class Sta;
+}
+
 namespace utl {
 class Logger;
 }
@@ -22,6 +28,7 @@ class Logger;
 namespace gpl {
 
 class NesterovBaseCommon;
+class NesterovPassBase;
 class GNet;
 
 class TimingBase
@@ -58,6 +65,51 @@ class TimingBase
   std::vector<int> timingOverflowChk_;
   float net_weight_max_ = 5;
   void initTimingOverflowChk();
+};
+
+struct ViolatingPath{
+  std::vector<size_t> gCellIndexSequence;
+  float negativeSlack;
+};
+
+class TimingPass : public NesterovPassBase
+{
+public:
+  // TimingBase();
+  TimingPass(std::shared_ptr<NesterovBaseCommon> nbc,
+             grt::GlobalRouter* grt,
+             rsz::Resizer* rs,
+             sta::Sta* sta,
+             utl::Logger* log);
+
+  void runSTA(){
+    sta_->updateTiming(false);
+
+    // FIXME: Not sure what it does exactly, but allegedly required. Figure out what it is doing.
+    sta_->ensureLibLinked();
+  }
+  void gradientPass(NesterovBaseCommon& nbc,
+                    NesterovBaseVars& nbv,
+                    const std::vector<FloatPoint>& grad) override;
+
+private:
+
+  std::vector<ViolatingPath>
+
+  bool _enabled = false;
+  grt::GlobalRouter* grt_ = nullptr;
+  rsz::Resizer* rs_ = nullptr;
+  utl::Logger* log_ = nullptr;
+  sta::Sta* sta_ = nullptr;
+  std::shared_ptr<NesterovBaseCommon> nbc_;
+
+  size_t top_n=10; // how many violating paths per endpoint to attract
+  float violation_weight;
+  float
+
+  std::vector<int> timingNetWeightOverflow_;
+  std::vector<int> timingOverflowChk_;
+  float net_weight_max_ = 5;
 };
 
 }  // namespace gpl

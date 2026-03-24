@@ -194,4 +194,11 @@ bool TimingBase::executeTimingDriven(bool run_journal_restore)
   return true;
 }
 
+TimingPass::gradientPass(NesterovBaseCommon& nbc,
+                         NesterovBaseVars& nbv,
+                         const std::vector<FloatPoint>& grad)
+  {
+
+  }
+
 }  // namespace gpl

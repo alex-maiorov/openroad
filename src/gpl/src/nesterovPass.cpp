@@ -35,22 +35,31 @@ namespace gpl{
         }
     }
 
-    std::set<size_t>& NesterovPassCellPairwiseBase::getConnectedCells(
+    std::set<size_t> NesterovPassCellPairwiseBase::getConnectedCells(
         NesterovBaseCommon& nbc,
         NesterovBaseVars& nbv,
         size_t sourceGCellIndex)
     {
-        GCell gCell = nbc.getGCell(sourceGCellIndex);
-        auto pins = gCell.gPins();
+        GCell srcGCell = nbc.getGCell(sourceGCellIndex);
+        auto pins = srcGCell.gPins();
 
         std::set<size_t> connectedGCells;
 
         // FIXME: Figure out a more efficient way to do this
-        for (auto pin : pins) {
-            GNet* net_ptr = pin->getGNet();
-            net_ptr->
+        for (auto origin_pin : pins) {
+            GNet* net_ptr = origin_pin->getGNet();
+            auto destGPins = net_ptr->getGPins();
+            for(auto destGPin : destGPins){
+                GCell* destGCell = destGPin->getGCell();
+                size_t destGCellIndex = nbc.getGCellIndex(destGCell);
+                if(destGCellIndex != sourceGCellIndex) [[likely]]{
+                    connectedGCells.insert(destGCellIndex);
+                }
+            }
 
         }
+
+        return connectedGCells;
     }
     //   std::set<size_t> NesterovPassCellToNetBase::nonZeroPinToNet(
     //     NesterovBaseCommon& nbc,

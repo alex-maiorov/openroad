@@ -45,12 +45,13 @@ namespace gpl {
     class NesterovPassCellPairwiseBase : public NesterovPassBase
     {
     public:
-        // Takes source cell ID, returns nonzero destination indeces for cell-to-cell force calculations.
-        //TODO: the return vector may cause large heap fragmentation, may need re-architecting if it is a problem. However it is fairly likely not to be as the return value from this will be dropped fairly quickly.
-        // WARNING: Please avoid writing to some global state in this function because that is likely to introduce data races later.
-        virtual std::set<size_t>& nonZeroCellPairings(NesterovBaseCommon& nbc, NesterovBaseVars& nbv, size_t sourceGCellIndex)=0;
+        // Takes source cell ID, returns nonzero-force destination indeces for cell-to-cell force calculations.
+        virtual std::set<size_t> nonZeroCellPairings(NesterovBaseCommon& nbc, NesterovBaseVars& nbv, size_t sourceGCellIndex){
+            return getConnectedCells(nbc, nbv, sourceGCellIndex);
+        }
 
-        std::set<size_t>& getConnectedCells(NesterovBaseCommon& nbc,
+        //Gives all cells connected via nets to this cell.
+        std::set<size_t> getConnectedCells(NesterovBaseCommon& nbc,
                                             NesterovBaseVars& nbv,
                                             size_t sourceGCellIndex);
 
@@ -88,8 +89,6 @@ namespace gpl {
                         NesterovBaseVars& nbv,
                         const std::vector<FloatPoint>& grad) override;
     };
-
-
     // // Force
     // class NesterovPinPairwiseBase : public NesterovPassBase
     // {
