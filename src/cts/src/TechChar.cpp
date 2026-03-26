@@ -32,7 +32,6 @@
 #include "sta/Sdc.hh"
 #include "sta/Search.hh"
 #include "sta/SearchClass.hh"
-#include "sta/StringSeq.hh"
 #include "sta/TableModel.hh"
 #include "sta/TimingArc.hh"
 #include "sta/TimingModel.hh"
@@ -47,7 +46,6 @@ using utl::CTS;
 TechChar::TechChar(CtsOptions* options,
                    odb::dbDatabase* db,
                    sta::dbSta* sta,
-                   rsz::Resizer* /*resizer not-used*/,
                    est::EstimateParasitics* estimate_parasitics,
                    sta::dbNetwork* db_network,
                    utl::Logger* logger)
@@ -1092,7 +1090,7 @@ void TechChar::createStaInstance()
   for (auto scene : openSta_->scenes()) {
     scene_names.push_back(scene->name().c_str());
   }
-  openStaChar_->makeScenes(&scene_names);
+  openStaChar_->makeScenes(scene_names);
 
   // Gets the corner and other analysis attributes from the new instance.
   charCorner_ = openStaChar_->cmdScene();
@@ -1298,7 +1296,7 @@ void TechChar::updateBufferTopologiesOld(TechChar::SolutionData& solution)
       odb::dbInst* inst = solution.instVector[index];
       inst->swapMaster(newBufMaster);
       // clang-format off
-      --masterItr; 
+      --masterItr;
       debugPrint(logger_, CTS, "tech char", 1, "updateBufferTopologies swap "
                  "from {} to {}, index:{}",
                  *(masterItr), newBufMaster->getName(), index);
