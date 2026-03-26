@@ -73,43 +73,43 @@ struct ViolatingPath{
 };
 
 class TimingPass : public NesterovPassBase
-{
-public:
-  // TimingBase();
-  TimingPass(std::shared_ptr<NesterovBaseCommon> nbc,
-             grt::GlobalRouter* grt,
-             rsz::Resizer* rs,
-             sta::Sta* sta,
-             utl::Logger* log);
+  {
+  public:
+    // TimingBase();
+    TimingPass(std::shared_ptr<NesterovBaseCommon> nbc,
+              grt::GlobalRouter* grt,
+              rsz::Resizer* rs,
+              sta::Sta* sta,
+              utl::Logger* log);
 
-  void runSTA(){
-    sta_->updateTiming(false);
+    void runSTA(){
+      sta_->updateTiming(false);
 
-    // FIXME: Not sure what it does exactly, but allegedly required. Figure out what it is doing.
-    sta_->ensureLibLinked();
-  }
-  void gradientPass(NesterovBaseCommon& nbc,
-                    NesterovBaseVars& nbv,
-                    const std::vector<FloatPoint>& grad) override;
+      // FIXME: Not sure what it does exactly, but allegedly required. Figure out what it is doing.
+      sta_->ensureLibLinked();
+    }
+    void gradientPass(NesterovBaseCommon& nbc,
+                      NesterovBaseVars& nbv,
+                      const std::vector<FloatPoint>& grad) override;
 
-private:
+  private:
 
-  std::vector<ViolatingPath>
+    std::vector<ViolatingPath> getViolatingPaths(int top_n);
 
-  bool _enabled = false;
-  grt::GlobalRouter* grt_ = nullptr;
-  rsz::Resizer* rs_ = nullptr;
-  utl::Logger* log_ = nullptr;
-  sta::Sta* sta_ = nullptr;
-  std::shared_ptr<NesterovBaseCommon> nbc_;
+    bool _enabled = false;
+    grt::GlobalRouter* grt_ = nullptr;
+    rsz::Resizer* rs_ = nullptr;
+    utl::Logger* log_ = nullptr;
+    sta::Sta* sta_ = nullptr;
+    std::shared_ptr<NesterovBaseCommon> nbc_;
 
-  size_t top_n=10; // how many violating paths per endpoint to attract
-  float violation_weight;
-  float
+    size_t top_n=10; // how many violating paths per endpoint to attract
+    float proj_weight; // How hard to pull cells towards the straight line
+    float end_to_end_weight; //How hard to pull end cells towards each other
 
-  std::vector<int> timingNetWeightOverflow_;
-  std::vector<int> timingOverflowChk_;
-  float net_weight_max_ = 5;
-};
+    std::vector<int> timingNetWeightOverflow_;
+    std::vector<int> timingOverflowChk_;
+    float net_weight_max_ = 5;
+  };
 
 }  // namespace gpl
