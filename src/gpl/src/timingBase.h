@@ -6,8 +6,8 @@
 #include <cstddef>
 #include <memory>
 #include <vector>
-#include "nesterovPass.h"
 
+#include "nesterovPass.h"
 
 namespace grt {
 class GlobalRouter;
@@ -18,7 +18,7 @@ class Resizer;
 }
 
 namespace sta {
-  class Sta;
+class Sta;
 }
 
 namespace utl {
@@ -67,49 +67,56 @@ class TimingBase
   void initTimingOverflowChk();
 };
 
-struct ViolatingPath{
+struct ViolatingPath
+{
   std::vector<size_t> gCellIndexSequence;
-  float negativeSlack;
+  float slack;
 };
 
 class TimingPass : public NesterovPassBase
+{
+ public:
+  // TimingBase();
+  TimingPass(std::shared_ptr<NesterovBaseCommon> nbc,
+             grt::GlobalRouter* grt,
+             rsz::Resizer* rs,
+             sta::Sta* sta,
+             utl::Logger* log);
+
+  void runSTA()
   {
-  public:
-    // TimingBase();
-    TimingPass(std::shared_ptr<NesterovBaseCommon> nbc,
-              grt::GlobalRouter* grt,
-              rsz::Resizer* rs,
-              sta::Sta* sta,
-              utl::Logger* log);
+    sta_->updateTiming(false);
 
-    void runSTA(){
-      sta_->updateTiming(false);
+    // FIXME: Not sure what it does exactly, but allegedly required. Figure out
+    // what it is doing.
+    sta_->ensureLibLinked();
+  }
+  void gradientPass(NesterovBaseCommon& nbc,
+                    NesterovBaseVars& nbv,
+                    const std::vector<FloatPoint>& grad) override;
 
-      // FIXME: Not sure what it does exactly, but allegedly required. Figure out what it is doing.
-      sta_->ensureLibLinked();
-    }
-    void gradientPass(NesterovBaseCommon& nbc,
-                      NesterovBaseVars& nbv,
-                      const std::vector<FloatPoint>& grad) override;
+ private:
+  std::vector<ViolatingPath> getViolatingPaths(int path_end_count);
 
-  private:
+  bool _enabled = false;
+  grt::GlobalRouter* grt_ = nullptr;
+  rsz::Resizer* rs_ = nullptr;
+  utl::Logger* log_ = nullptr;
+  sta::Sta* sta_ = nullptr;
 
-    std::vector<ViolatingPath> getViolatingPaths(int top_n);
+  size_t top_n = 10;        // how many violating paths per endpoint to attract
+  float proj_weight;        // How hard to pull cells towards the straight line
+  float end_to_end_weight;  // How hard to pull end cells towards each other
 
-    bool _enabled = false;
-    grt::GlobalRouter* grt_ = nullptr;
-    rsz::Resizer* rs_ = nullptr;
-    utl::Logger* log_ = nullptr;
-    sta::Sta* sta_ = nullptr;
-    std::shared_ptr<NesterovBaseCommon> nbc_;
+  // Fed into the formula for force scaling weight(call it w): w = e**(slack_sharpness)
+  //TODO: Figure out sane values for these, or a numerical method of optimizing them. I also am not sure that the exponential approach is actually good.
+  // Also for the above, high sharpness values are expected to be suceptible to numerical instability
+  float slack_sharpness; // How sharp the exponential is going to be.
+  float slack_offset; // This is added to the slack. Negative values will make critical paths optimized more, while positive ones will make the timing
 
-    size_t top_n=10; // how many violating paths per endpoint to attract
-    float proj_weight; // How hard to pull cells towards the straight line
-    float end_to_end_weight; //How hard to pull end cells towards each other
-
-    std::vector<int> timingNetWeightOverflow_;
-    std::vector<int> timingOverflowChk_;
-    float net_weight_max_ = 5;
-  };
+  std::vector<int> timingNetWeightOverflow_;
+  std::vector<int> timingOverflowChk_;
+  float net_weight_max_ = 5;
+};
 
 }  // namespace gpl
