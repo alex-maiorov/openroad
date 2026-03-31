@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <memory>
 #include <vector>
+#include "sta/Sta.hh"
 
 #include "nesterovPass.h"
 
@@ -79,9 +80,7 @@ struct ViolatingPath
 class TimingPass : public NesterovPassBase
 {
  public:
-  TimingPass(grt::GlobalRouter* grt,
-             rsz::Resizer* rs,
-             sta::Sta* sta,
+  TimingPass(sta::Sta* sta,
              utl::Logger* log,
              size_t top_n = 10,
              float proj_weight = 1.0F,

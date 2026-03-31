@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "AbstractGraphics.h"
+#include "timingBase.h"
 #include "nesterovBase.h"
 #include "odb/dbBlockCallBackObj.h"
 #include "point.h"

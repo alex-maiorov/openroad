@@ -22,6 +22,12 @@
 #include "routeBase.h"
 #include "timingBase.h"
 #include "utl/Logger.h"
+#include "sta/Sta.hh"
+
+namespace sta {
+  class Sta;
+  class dbSta;
+}
 
 namespace gpl {
 using utl::GPL;
@@ -48,8 +54,7 @@ NesterovPlace::NesterovPlace(const NesterovPlaceVars& npVars,
   log_ = log;
 
   // Initialized with hardcoded values. FIXME: Figure out best way to pass these here without excessive configuration.
-  tp_ = std::make_shared<TimingPass>(
-      rb_.get(), tb_->getResizer(), sta_, log_, 10, 1.0f, 1.0f, 1.0f, 0.0f);
+  tp_ = std::make_shared<TimingPass>(static_cast<sta::Sta*>(sta_), log_, 10, 1.0f, 1.0f, 1.0f, 0.0f);
 
   db_cbk_ = std::make_unique<nesterovDbCbk>(this);
   nbc_->setCbk(db_cbk_.get());
@@ -585,7 +590,7 @@ void NesterovPlace::runTimingPass(int iter,
 
 
     for (auto& nb : nbVec_) {
-      nb->updateGradientsWithTiming(*tp_, *nb_);
+      nb->updateGradientsWithTiming(*tp_);
     }
 
     ++timing_driven_count;

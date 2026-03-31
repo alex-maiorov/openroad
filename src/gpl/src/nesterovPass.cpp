@@ -30,7 +30,7 @@ namespace gpl{
         for (size_t src_idx = 0; src_idx < n_cells; src_idx++) {
             auto dest_idxs = nonZeroCellPairings(nbc, nbv, src_idx);
             for (auto dest_idx : dest_idxs){
-                grad[src_idx] += calculatePairwiseGradient(nbc, nbv, src_idx, dest_idx);
+                grad[src_idx] += calculateCellPairwiseGradient(nbc, nbv, src_idx, dest_idx);
             }
         }
     }

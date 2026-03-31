@@ -27,18 +27,14 @@ namespace gpl {
 
 using utl::GPL;
 
-TimingPass::TimingPass(grt::GlobalRouter* grt,
-                       rsz::Resizer* rs,
-                       sta::Sta* sta,
+TimingPass::TimingPass(sta::Sta* sta,
                        utl::Logger* log,
                        size_t top_n,
                        float proj_weight,
                        float end_to_end_weight,
                        float slack_sharpness,
                        float slack_offset)
-    : grt_(grt),
-      rs_(rs),
-      sta_(sta),
+    : sta_(sta),
       log_(log),
       top_n(top_n),
       proj_weight(proj_weight),

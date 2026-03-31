@@ -1064,7 +1064,7 @@ class NesterovBase
                        float wlCoeffX,
                        float wlCoeffY);
 
-  void updateGradientsWithTiming(TimingPass& tp, NesterovBaseVars& nbv);
+  void updateGradientsWithTiming(TimingPass& tp);
 
   void nbUpdatePrevGradient(float wlCoeffX, float wlCoeffY);
   void nbUpdateCurGradient(float wlCoeffX, float wlCoeffY);

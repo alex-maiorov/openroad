@@ -25,6 +25,7 @@
 #include "fft.h"
 #include "gpl/Replace.h"
 #include "nesterovPlace.h"
+#include "timingBase.h"
 #include "odb/db.h"
 #include "omp.h"
 #include "placerBase.h"
@@ -1375,7 +1376,7 @@ size_t NesterovBaseCommon::getGPinIndex(const GPin* gPin) const
   return std::distance(gPinStor_.data(), gPin);
 }
 
-size_t NesterovBaseCommon::getGNetIndex(const GCell* gNet) const
+size_t NesterovBaseCommon::getGNetIndex(const GNet* gNet) const
 {
   return std::distance(gNetStor_.data(), gNet);
 }
@@ -2793,8 +2794,7 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
   debugPrint(log_, GPL, "updateGrad", 1, "GradSum: {:g}", gradSum);
 }
 
-void NesterovBase::updateGradientsWithTiming(TimingPass& tp,
-                                             NesterovBaseVars& nbv)
+void NesterovBase::updateGradientsWithTiming(TimingPass& tp)
 {
   std::vector<FloatPoint> wireLengthGrads(nb_gcells_.size());
   std::vector<FloatPoint> densityGrads(nb_gcells_.size());
@@ -2802,7 +2802,7 @@ void NesterovBase::updateGradientsWithTiming(TimingPass& tp,
 
   updateGradients(sumGrads, wireLengthGrads, densityGrads, 1.0f, 1.0f);
 
-  tp.gradientPass(*nbc_, nbv, sumGrads);
+  tp.gradientPass(*nbc_, nbVars_, sumGrads);
 
   for (size_t i = 0; i < nb_gcells_.size(); i++) {
     GCell* gCell = nb_gcells_.at(i);
