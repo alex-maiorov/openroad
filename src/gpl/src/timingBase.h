@@ -95,7 +95,7 @@ class TimingPass : public NesterovPassBase
   }
   void gradientPass(NesterovBaseCommon& nbc,
                     NesterovBaseVars& nbv,
-                    const std::vector<FloatPoint>& grad) override;
+                    std::vector<FloatPoint>& grad) override;
 
  private:
   std::vector<ViolatingPath> getViolatingPaths(int path_end_count);

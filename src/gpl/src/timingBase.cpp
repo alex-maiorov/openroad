@@ -346,9 +346,9 @@ std::vector<ViolatingPath> TimingPass::getViolatingPaths(int path_end_count)
   return violating_paths;
 }
 
-TimingPass::gradientPass(NesterovBaseCommon& nbc,
+void TimingPass::gradientPass(NesterovBaseCommon& nbc,
                          NesterovBaseVars& nbv,
-                         const std::vector<FloatPoint>& grad)
+                         std::vector<FloatPoint>& grad)
 {
   if (!_enabled) {
     return;

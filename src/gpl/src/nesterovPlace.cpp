@@ -23,6 +23,7 @@
 #include "timingBase.h"
 #include "utl/Logger.h"
 #include "sta/Sta.hh"
+#include "db_sta/dbSta.hh"
 
 namespace sta {
   class Sta;
