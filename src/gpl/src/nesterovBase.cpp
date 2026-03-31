@@ -2793,6 +2793,45 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
   debugPrint(log_, GPL, "updateGrad", 1, "GradSum: {:g}", gradSum);
 }
 
+void NesterovBase::updateGradientsWithTiming(TimingPass& tp,
+                                             NesterovBaseVars& nbv)
+{
+  std::vector<FloatPoint> wireLengthGrads(nb_gcells_.size());
+  std::vector<FloatPoint> densityGrads(nb_gcells_.size());
+  std::vector<FloatPoint> sumGrads(nb_gcells_.size());
+
+  updateGradients(sumGrads, wireLengthGrads, densityGrads, 1.0f, 1.0f);
+
+  tp.gradientPass(*nbc_, nbv, sumGrads);
+
+  for (size_t i = 0; i < nb_gcells_.size(); i++) {
+    GCell* gCell = nb_gcells_.at(i);
+    sumGrads[i].x = wireLengthGrads[i].x + densityPenalty_ * densityGrads[i].x
+                    + gCell->getGradientX();
+    sumGrads[i].y = wireLengthGrads[i].y + densityPenalty_ * densityGrads[i].y
+                    + gCell->getGradientY();
+
+    FloatPoint wireLengthPreCondi = nbc_->getWireLengthPreconditioner(gCell);
+    FloatPoint densityPrecondi = getDensityPreconditioner(gCell);
+
+    FloatPoint sumPrecondi(
+        wireLengthPreCondi.x + (densityPenalty_ * densityPrecondi.x),
+        wireLengthPreCondi.y + (densityPenalty_ * densityPrecondi.y));
+
+    sumPrecondi.x
+        = std::max(sumPrecondi.x, NesterovPlaceVars::minPreconditioner);
+    sumPrecondi.y
+        = std::max(sumPrecondi.y, NesterovPlaceVars::minPreconditioner);
+
+    sumGrads[i].x /= sumPrecondi.x;
+    sumGrads[i].y /= sumPrecondi.y;
+
+    curSLPSumGrads_[i] = sumGrads[i];
+    prevSLPSumGrads_[i] = sumGrads[i];
+    nextSLPSumGrads_[i] = sumGrads[i];
+  }
+}
+
 void NesterovBase::nbUpdatePrevGradient(float wlCoeffX, float wlCoeffY)
 {
   updateGradients(prevSLPSumGrads_,
@@ -4395,10 +4434,4 @@ static float getSecondNorm(const std::vector<FloatPoint>& a)
   return std::sqrt(norm / (2.0 * a.size()));
 }
 
-
-
-
 }  // namespace gpl
-
-
-

@@ -52,6 +52,7 @@ class Net;
 class GPin;
 class FFT;
 class nesterovDbCbk;
+class TimingPass;
 
 class GCell
 {
@@ -1063,6 +1064,8 @@ class NesterovBase
                        float wlCoeffX,
                        float wlCoeffY);
 
+  void updateGradientsWithTiming(TimingPass& tp, NesterovBaseVars& nbv);
+
   void nbUpdatePrevGradient(float wlCoeffX, float wlCoeffY);
   void nbUpdateCurGradient(float wlCoeffX, float wlCoeffY);
   void nbUpdateNextGradient(float wlCoeffX, float wlCoeffY);
@@ -1376,7 +1379,5 @@ inline constexpr const char* format_label_um2 = "{:27} {:10.3f} um^2";
 inline constexpr const char* format_label_percent = "{:27} {:10.2f} %";
 inline constexpr const char* format_label_um2_with_delta
     = "{:27} {:10.3f} um^2 ({:+.2f}%)";
-
-
 
 }  // namespace gpl

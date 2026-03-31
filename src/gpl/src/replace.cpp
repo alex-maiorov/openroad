@@ -299,6 +299,7 @@ bool Replace::initNesterovPlace(const PlaceOptions& options,
                                           nbVec_,
                                           rb_,
                                           tb_,
+                                          sta_,
                                           graphics_->MakeNew(log_),
                                           log_);
   }

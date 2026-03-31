@@ -23,6 +23,10 @@ namespace odb {
 class dbInst;
 }
 
+namespace sta {
+class dbSta;
+}
+
 namespace gpl {
 
 class PlacerBase;
@@ -30,6 +34,7 @@ class PlacerBaseCommon;
 class Instance;
 class RouteBase;
 class TimingBase;
+class TimingPass;
 
 class NesterovPlace
 {
@@ -42,6 +47,7 @@ class NesterovPlace
                 std::vector<std::shared_ptr<NesterovBase>>& nbVec,
                 std::shared_ptr<RouteBase> rb,
                 std::shared_ptr<TimingBase> tb,
+                sta::dbSta* sta,
                 std::unique_ptr<AbstractGraphics> graphics,
                 utl::Logger* log);
   ~NesterovPlace();
@@ -92,6 +98,14 @@ class NesterovPlace
                        int& timing_driven_count,
                        int64_t& td_accumulated_delta_area,
                        bool is_routability_gpl_iter);
+
+  void runTimingPass(int iter,
+                     const std::string& timing_driven_dir,
+                     int routability_driven_count,
+                     int& timing_driven_count,
+                     int64_t& td_accumulated_delta_area,
+                     bool is_routability_gpl_iter);
+
   bool isDiverged(float& diverge_snapshot_WlCoefX,
                   float& diverge_snapshot_WlCoefY,
                   bool& is_diverge_snapshot_saved);
@@ -128,6 +142,9 @@ class NesterovPlace
   utl::Logger* log_ = nullptr;
   std::shared_ptr<RouteBase> rb_;
   std::shared_ptr<TimingBase> tb_;
+  std::shared_ptr<TimingPass> tp_;
+  sta::dbSta* sta_ = nullptr;
+  int tp_sta_run_interval = 10;
   NesterovPlaceVars npVars_;
   std::unique_ptr<AbstractGraphics> graphics_;
 
