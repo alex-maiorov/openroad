@@ -50,6 +50,9 @@ class TimingBase
 
   void setTimingNetWeightMax(float max);
 
+  grt::GlobalRouter* getGlobalRouter() const { return grt_; }
+  rsz::Resizer* getResizer() const { return rs_; }
+
   // updateNetWeight.
   // True: successfully reweighted gnets
   // False: no slacks found
