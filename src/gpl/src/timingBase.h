@@ -76,19 +76,19 @@ struct ViolatingPath
 class TimingPass : public NesterovPassBase
 {
  public:
-  // TimingBase();
-  TimingPass(std::shared_ptr<NesterovBaseCommon> nbc,
-             grt::GlobalRouter* grt,
+  TimingPass(grt::GlobalRouter* grt,
              rsz::Resizer* rs,
              sta::Sta* sta,
-             utl::Logger* log);
+             utl::Logger* log,
+             size_t top_n = 10,
+             float proj_weight = 1.0F,
+             float end_to_end_weight = 1.0F,
+             float slack_sharpness = 1.0F,
+             float slack_offset = 0.0F);
 
   void runSTA()
   {
     sta_->updateTiming(false);
-
-    // FIXME: Not sure what it does exactly, but allegedly required. Figure out
-    // what it is doing.
     sta_->ensureLibLinked();
   }
   void gradientPass(NesterovBaseCommon& nbc,
@@ -104,19 +104,13 @@ class TimingPass : public NesterovPassBase
   utl::Logger* log_ = nullptr;
   sta::Sta* sta_ = nullptr;
 
-  size_t top_n = 10;        // how many violating paths per endpoint to attract
-  float proj_weight;        // How hard to pull cells towards the straight line
-  float end_to_end_weight;  // How hard to pull end cells towards each other
+  size_t top_n = 10;
+  float proj_weight = 1.0F;
+  float end_to_end_weight = 1.0F;
+  float slack_sharpness = 1.0F;
+  float slack_offset = 0.0F;
 
-  // Fed into the formula for force scaling weight(call it w): w = e**(slack_sharpness)
-  //TODO: Figure out sane values for these, or a numerical method of optimizing them. I also am not sure that the exponential approach is actually good.
-  // Also for the above, high sharpness values are expected to be suceptible to numerical instability
-  float slack_sharpness; // How sharp the exponential is going to be.
-  float slack_offset; // This is added to the slack. Negative values will make critical paths optimized more, while positive ones will make the timing
-
-  std::vector<int> timingNetWeightOverflow_;
-  std::vector<int> timingOverflowChk_;
-  float net_weight_max_ = 5;
+  static constexpr float kMinSlackThreshold = 1e-3f;
 };
 
 }  // namespace gpl

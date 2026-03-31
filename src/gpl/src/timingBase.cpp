@@ -27,6 +27,27 @@ namespace gpl {
 
 using utl::GPL;
 
+TimingPass::TimingPass(grt::GlobalRouter* grt,
+                       rsz::Resizer* rs,
+                       sta::Sta* sta,
+                       utl::Logger* log,
+                       size_t top_n,
+                       float proj_weight,
+                       float end_to_end_weight,
+                       float slack_sharpness,
+                       float slack_offset)
+    : grt_(grt),
+      rs_(rs),
+      sta_(sta),
+      log_(log),
+      top_n(top_n),
+      proj_weight(proj_weight),
+      end_to_end_weight(end_to_end_weight),
+      slack_sharpness(slack_sharpness),
+      slack_offset(slack_offset)
+{
+}
+
 // TimingBase
 TimingBase::TimingBase() = default;
 
@@ -218,10 +239,11 @@ std::vector<ViolatingPath> TimingPass::getViolatingPaths(int path_end_count)
   int group_path_count = PathGroup::group_path_count_max;
   // Limit to top_n worst paths per unique endpoint pin
   int endpoint_path_count = path_end_count;
-  bool unique_pins = false;   // Don't filter for unique pins
-  bool unique_edges = false;  // Don't filter for unique edges
-  float slack_min = -1e30f;   // Capture all paths (no lower bound)
-  float slack_max = slack_offset; // TODO: Figure out a sane cutoff for this that might also include things slightly beyond this based on slack_sharpness
+  bool unique_pins = false;        // Don't filter for unique pins
+  bool unique_edges = false;       // Don't filter for unique edges
+  float slack_min = -1e30f;        // Capture all paths (no lower bound)
+  float slack_max = slack_offset;  // TODO: Architectural decision: Figure out
+                                   // how to deal with near-violations.
   bool sort_by_slack = true;  // Sort results by slack (most negative first)
 
   // Empty path_groups means search all path groups (e.g., max, min, etc.)
@@ -265,7 +287,8 @@ std::vector<ViolatingPath> TimingPass::getViolatingPaths(int path_end_count)
   for (PathEnd* end : ends) {
     // Get the endpoint pin of this path (the sink/flop input or output port)
     const Pin* pin = end->vertex(sta_)->pin();
-    // TODO: I think this is positive slack(i.e. negative numbers mean we need to do things)
+    // Slack is negative for violating paths, positive for meeting timing.
+    // We only query paths with slack <= slack_offset (typically <= 0).
     Slack slack = end->slack(sta_);
 
     // Skip paths with infinite slack (shouldn't happen with slack_max=0,
@@ -351,14 +374,15 @@ TimingPass::gradientPass(NesterovBaseCommon& nbc,
     const float end2_x = end2.cx();
     const float end2_y = end2.cy();
 
-    // If the slack is this large we have other problems and probably shouldn't run the force on this path
-    // FIXME: Figure out a reasonable way of doing this programmatically, without magic numbers preferably.
-    if(std::abs(path.slack) > 1e-3f){
+    if (std::abs(path.slack) > kMinSlackThreshold) {
       continue;
     }
 
-    // TODO: Consult with Philippe and Martin about whether this is a reasonable weight function to begin with
-    const float slack_weight = exp(-1.0f * slack_sharpness * (slack + slack_offset));
+    // Weight function: exp(-sharpness * (slack + offset))
+    // Negative slack (violation) increases weight; zero slack gives weight =
+    // exp(-offset).
+    const float slack_weight
+        = exp(-1.0f * slack_sharpness * (slack + slack_offset));
 
     for (size_t i = 0; i < gCell_indices.size(); ++i) {
       const size_t cell_idx = gCell_indices[i];
