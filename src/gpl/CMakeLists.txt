@@ -26,6 +26,7 @@ swig_lib(NAME      gpl
 
 add_library(gpl_lib
   src/AbstractGraphics.cpp
+  src/point.cpp
   src/replace.cpp
   src/initialPlace.cpp
   src/nesterovPlace.cpp
