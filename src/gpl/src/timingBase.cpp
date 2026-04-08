@@ -12,13 +12,16 @@
 #include <vector>
 
 #include "db_sta/dbNetwork.hh"
+#include "db_sta/dbSta.hh"
 #include "grt/GlobalRouter.h"
 #include "nesterovBase.h"
 #include "placerBase.h"
 #include "rsz/Resizer.hh"
 #include "sta/Fuzzy.hh"
+#include "sta/MinMax.hh"
 #include "sta/NetworkClass.hh"
 #include "sta/PathEnd.hh"
+#include "sta/PathGroup.hh"
 #include "sta/Search.hh"
 #include "sta/Sta.hh"
 #include "utl/Logger.h"
@@ -26,8 +29,9 @@
 namespace gpl {
 
 using utl::GPL;
+using namespace sta;
 
-TimingPass::TimingPass(sta::Sta* sta,
+TimingPass::TimingPass(sta::dbSta* sta,
                        utl::Logger* log,
                        size_t top_n,
                        float proj_weight,
@@ -217,22 +221,22 @@ bool TimingBase::executeTimingDriven(bool run_journal_restore)
 
 // Fairly obvious what this should do. LLMs were fairly heavily utilized for
 // this, however the code seems sensible.
-std::vector<ViolatingPath> TimingPass::getViolatingPaths(int path_end_count)
+std::vector<ViolatingPath> TimingPass::getViolatingPaths(int path_end_count, NesterovBaseCommon& nbc)
 {
   // Filter parameters for finding path ends.
   // nullptr means no restriction on that filter dimension.
-  ExceptionFrom* from = nullptr;      // No from-pin filter
-  ExceptionThruSeq* thrus = nullptr;  // No thru-pin filter
-  ExceptionTo* to = nullptr;          // No to-pin filter
-  bool unconstrained = false;         // Only report unconstrained endpoints
+  sta::ExceptionFrom* from = nullptr;      // No from-pin filter
+  sta::ExceptionThruSeq* thrus = nullptr;  // No thru-pin filter
+  sta::ExceptionTo* to = nullptr;          // No to-pin filter
+  bool unconstrained = false;  // Only report unconstrained endpoints
 
   // Empty scene sequence means search all timing scenes (corners)
-  SceneSeq scenes;
+  sta::SceneSeq scenes;
   // Use max() to consider both min (setup) and max (hold) delay analysis
-  const MinMaxAll* delay_min_max = MinMaxAll::max();
+  const sta::MinMaxAll* delay_min_max = sta::MinMaxAll::max();
 
   // How many paths to find per path group (max means unlimited)
-  int group_path_count = PathGroup::group_path_count_max;
+  int group_path_count = sta::PathGroup::group_path_count_max;
   // Limit to top_n worst paths per unique endpoint pin
   int endpoint_path_count = path_end_count;
   bool unique_pins = false;        // Don't filter for unique pins
@@ -243,7 +247,7 @@ std::vector<ViolatingPath> TimingPass::getViolatingPaths(int path_end_count)
   bool sort_by_slack = true;  // Sort results by slack (most negative first)
 
   // Empty path_groups means search all path groups (e.g., max, min, etc.)
-  StdStringSeq path_groups;
+  sta::StringSeq path_groups;
   bool setup = true;      // Include setup timing paths
   bool hold = false;      // Exclude hold timing paths
   bool recovery = false;  // Exclude recovery paths
@@ -253,26 +257,26 @@ std::vector<ViolatingPath> TimingPass::getViolatingPaths(int path_end_count)
 
   // Query STA for path ends matching our filter criteria
   // This returns paths sorted by slack (most critical first)
-  PathEndSeq ends = sta_->findPathEnds(from,
-                                       thrus,
-                                       to,
-                                       unconstrained,
-                                       scenes,
-                                       delay_min_max,
-                                       group_path_count,
-                                       endpoint_path_count,
-                                       unique_pins,
-                                       unique_edges,
-                                       slack_min,
-                                       slack_max,
-                                       sort_by_slack,
-                                       path_groups,
-                                       setup,
-                                       hold,
-                                       recovery,
-                                       removal,
-                                       clk_gating_setup,
-                                       clk_gating_hold);
+  sta::PathEndSeq ends = sta_->findPathEnds(from,
+                                            thrus,
+                                            to,
+                                            unconstrained,
+                                            scenes,
+                                            delay_min_max,
+                                            group_path_count,
+                                            endpoint_path_count,
+                                            unique_pins,
+                                            unique_edges,
+                                            slack_min,
+                                            slack_max,
+                                            sort_by_slack,
+                                            path_groups,
+                                            setup,
+                                            hold,
+                                            recovery,
+                                            removal,
+                                            clk_gating_setup,
+                                            clk_gating_hold);
 
   // Get the database network adapter for converting between OpenSTA and OpenDB
   // objects
@@ -280,7 +284,7 @@ std::vector<ViolatingPath> TimingPass::getViolatingPaths(int path_end_count)
   std::vector<ViolatingPath> violating_paths;
 
   // Iterate through each path endpoint found by STA
-  for (PathEnd* end : ends) {
+  for (sta::PathEnd* end : ends) {
     // Get the endpoint pin of this path (the sink/flop input or output port)
     const Pin* pin = end->vertex(sta_)->pin();
     // Slack is negative for violating paths, positive for meeting timing.
@@ -317,10 +321,10 @@ std::vector<ViolatingPath> TimingPass::getViolatingPaths(int path_end_count)
       GPin* gPin = nullptr;
       if (iterm != nullptr) {
         // Internal pin (connected to an instance)
-        gPin = nbc_->dbToNb(iterm);
+        gPin = nbc.dbToNb(iterm);
       } else if (bterm != nullptr) {
         // Boundary pin (top-level input/output port)
-        gPin = nbc_->dbToNb(bterm);
+        gPin = nbc.dbToNb(bterm);
       }
       // moditerm pins (hierarchical) are not yet supported
 
@@ -329,7 +333,7 @@ std::vector<ViolatingPath> TimingPass::getViolatingPaths(int path_end_count)
         GCell* gCell = gPin->getGCell();
         if (gCell != nullptr) {
           // Get the unique index of this GCell in the placement grid
-          size_t gCell_index = nbc_->getGCellIndex(gCell);
+          size_t gCell_index = nbc.getGCellIndex(gCell);
           gCell_indices.push_back(gCell_index);
         }
       }
@@ -347,14 +351,14 @@ std::vector<ViolatingPath> TimingPass::getViolatingPaths(int path_end_count)
 }
 
 void TimingPass::gradientPass(NesterovBaseCommon& nbc,
-                         NesterovBaseVars& nbv,
-                         std::vector<FloatPoint>& grad)
+                              NesterovBaseVars& nbv,
+                              std::vector<FloatPoint>& grad)
 {
   if (!_enabled) {
     return;
   }
 
-  std::vector<ViolatingPath> paths = getViolatingPaths(top_n);
+  std::vector<ViolatingPath> paths = getViolatingPaths(top_n, nbc);
 
   for (const auto& path : paths) {
     const auto& gCell_indices = path.gCellIndexSequence;

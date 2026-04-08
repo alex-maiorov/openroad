@@ -16,19 +16,19 @@
 #include <vector>
 
 #include "AbstractGraphics.h"
+#include "db_sta/dbSta.hh"
 #include "nesterovBase.h"
 #include "odb/db.h"
 #include "placerBase.h"
 #include "routeBase.h"
+#include "sta/Sta.hh"
 #include "timingBase.h"
 #include "utl/Logger.h"
-#include "sta/Sta.hh"
-#include "db_sta/dbSta.hh"
 
 namespace sta {
-  class Sta;
-  class dbSta;
-}
+class Sta;
+class dbSta;
+}  // namespace sta
 
 namespace gpl {
 using utl::GPL;
@@ -54,8 +54,9 @@ NesterovPlace::NesterovPlace(const NesterovPlaceVars& npVars,
   sta_ = sta;
   log_ = log;
 
-  // Initialized with hardcoded values. FIXME: Figure out best way to pass these here without excessive configuration.
-  tp_ = std::make_shared<TimingPass>(static_cast<sta::Sta*>(sta_), log_, 10, 1.0f, 1.0f, 1.0f, 0.0f);
+  // Initialized with hardcoded values. FIXME: Figure out best way to pass these
+  // here without excessive configuration.
+  tp_ = std::make_shared<TimingPass>(sta_, log_, 10, 1.0f, 1.0f, 1.0f, 0.0f);
 
   db_cbk_ = std::make_unique<nesterovDbCbk>(this);
   nbc_->setCbk(db_cbk_.get());
@@ -585,10 +586,9 @@ void NesterovPlace::runTimingPass(int iter,
                100,
                "Timing-pass iteration {}",
                ++npVars_.timingDrivenIterCounter);
-    if(npVars_.timingDrivenIterCounter % tp_sta_run_interval == 0){
+    if (npVars_.timingDrivenIterCounter % tp_sta_run_interval == 0) {
       tp_->runSTA();
     }
-
 
     for (auto& nb : nbVec_) {
       nb->updateGradientsWithTiming(*tp_);

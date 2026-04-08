@@ -6,9 +6,10 @@
 #include <cstddef>
 #include <memory>
 #include <vector>
-#include "sta/Sta.hh"
 
+#include "db_sta/dbSta.hh"
 #include "nesterovPass.h"
+#include "sta/Sta.hh"
 
 namespace grt {
 class GlobalRouter;
@@ -80,7 +81,7 @@ struct ViolatingPath
 class TimingPass : public NesterovPassBase
 {
  public:
-  TimingPass(sta::Sta* sta,
+  TimingPass(sta::dbSta* sta,
              utl::Logger* log,
              size_t top_n = 10,
              float proj_weight = 1.0F,
@@ -98,13 +99,13 @@ class TimingPass : public NesterovPassBase
                     std::vector<FloatPoint>& grad) override;
 
  private:
-  std::vector<ViolatingPath> getViolatingPaths(int path_end_count);
+  std::vector<ViolatingPath> getViolatingPaths(int path_end_count, NesterovBaseCommon& nbc);
 
   bool _enabled = false;
   grt::GlobalRouter* grt_ = nullptr;
   rsz::Resizer* rs_ = nullptr;
   utl::Logger* log_ = nullptr;
-  sta::Sta* sta_ = nullptr;
+  sta::dbSta* sta_ = nullptr;
 
   size_t top_n = 10;
   float proj_weight = 1.0F;

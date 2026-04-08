@@ -18,8 +18,8 @@ class FloatPoint
     return FloatPoint(this->x + other.x, this->y + other.y);
   }
 
-  FloatPoint operator+(const FloatPoint& other) const{
-    return FloatPoint(this->x + other.x, this->y + other.y);
+  FloatPoint operator-(const FloatPoint& other) const{
+    return FloatPoint(this->x - other.x, this->y - other.y);
   }
 
   // Multiply by scalar.
