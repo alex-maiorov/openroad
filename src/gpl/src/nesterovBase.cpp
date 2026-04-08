@@ -1334,7 +1334,7 @@ GCell& NesterovBaseCommon::getGCell(size_t index)
 {
   if (index >= gCellStor_.size()) {
     log_->error(utl::GPL,
-                316,
+                330,
                 "getGCell: index {} out of bounds (gCellStor_.size() = {}).",
                 index,
                 gCellStor_.size());
@@ -1346,7 +1346,7 @@ GNet& NesterovBaseCommon::getGNet(size_t index)
 {
   if (index >= gNetStor_.size()) {
     log_->error(utl::GPL,
-                316,
+                331,
                 "getGNet: index {} out of bounds (gNetStor_.size() = {}).",
                 index,
                 gNetStor_.size());
@@ -1358,7 +1358,7 @@ GPin& NesterovBaseCommon::getGPin(size_t index)
 {
   if (index >= gPinStor_.size()) {
     log_->error(utl::GPL,
-                316,
+                332,
                 "getGPin: index {} out of bounds (gPinStor_.size() = {}).",
                 index,
                 gPinStor_.size());

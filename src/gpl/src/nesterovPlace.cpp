@@ -583,7 +583,7 @@ void NesterovPlace::runTimingPass(int iter,
         = (average_overflow_unscaled_ > npVars_.keepResizeBelowOverflow);
 
     log_->info(GPL,
-               100,
+               103,
                "Timing-pass iteration {}",
                ++npVars_.timingDrivenIterCounter);
     if (npVars_.timingDrivenIterCounter % tp_sta_run_interval == 0) {

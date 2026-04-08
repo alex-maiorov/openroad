@@ -18,3 +18,7 @@ Detailed guides are in `docs/agents/` subdirectory:
 3. **Always use `git commit -s`** for DCO compliance.
 4. When amending submodule commits, parent repo submodule reference must also be updated via `git submodule update --init --recursive`. It is needed after any merge/pull.
 5. **Trace bugs upstream** -- when a bug appears in output (e.g., Verilog), find the data creation point (e.g., `buffer_ports`, `remove_buffers`), not the serialization point (e.g., `VerilogWriter`).
+
+## Things to Ignore
+
+1. Any comment with an action item implying a significant design choice or a requirement to consult with project authors is to be left alone, and the corresponding code is not to be changed. 

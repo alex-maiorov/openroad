@@ -38,8 +38,8 @@ TimingPass::TimingPass(sta::dbSta* sta,
                        float end_to_end_weight,
                        float slack_sharpness,
                        float slack_offset)
-    : sta_(sta),
-      log_(log),
+    : log_(log),
+      sta_(sta),
       top_n(top_n),
       proj_weight(proj_weight),
       end_to_end_weight(end_to_end_weight),
@@ -221,7 +221,9 @@ bool TimingBase::executeTimingDriven(bool run_journal_restore)
 
 // Fairly obvious what this should do. LLMs were fairly heavily utilized for
 // this, however the code seems sensible.
-std::vector<ViolatingPath> TimingPass::getViolatingPaths(int path_end_count, NesterovBaseCommon& nbc)
+std::vector<ViolatingPath> TimingPass::getViolatingPaths(
+    int path_end_count,
+    NesterovBaseCommon& nbc)
 {
   // Filter parameters for finding path ends.
   // nullptr means no restriction on that filter dimension.
@@ -286,7 +288,7 @@ std::vector<ViolatingPath> TimingPass::getViolatingPaths(int path_end_count, Nes
   // Iterate through each path endpoint found by STA
   for (sta::PathEnd* end : ends) {
     // Get the endpoint pin of this path (the sink/flop input or output port)
-    const Pin* pin = end->vertex(sta_)->pin();
+    const sta::Pin* pin = end->vertex(sta_)->pin();
     // Slack is negative for violating paths, positive for meeting timing.
     // We only query paths with slack <= slack_offset (typically <= 0).
     Slack slack = end->slack(sta_);
@@ -308,7 +310,7 @@ std::vector<ViolatingPath> TimingPass::getViolatingPaths(int path_end_count, Nes
 
     while (path != nullptr) {
       // Get the pin at this timing point in the path
-      const Pin* path_pin = path->pin(sta_);
+      const sta::Pin* path_pin = path->pin(sta_);
 
       // Convert OpenSTA Pin* to OpenDB objects.
       // The network adapter can extract any of: dbITerm, dbBTerm, or dbModITerm
