@@ -18,6 +18,10 @@ class FloatPoint
     return FloatPoint(this->x + other.x, this->y + other.y);
   }
 
+  FloatPoint operator+(const FloatPoint& other) const{
+    return FloatPoint(this->x + other.x, this->y + other.y);
+  }
+
   // Multiply by scalar.
   // TODO: Figure out if this is a dangerous overload to do.
   FloatPoint operator*(const float& w) const{

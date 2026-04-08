@@ -378,7 +378,7 @@ void TimingPass::gradientPass(NesterovBaseCommon& nbc,
     // Negative slack (violation) increases weight; zero slack gives weight =
     // exp(-offset).
     const float slack_weight
-        = exp(-1.0f * slack_sharpness * (slack + slack_offset));
+        = exp(-1.0f * slack_sharpness * (path.slack + slack_offset));
 
     for (size_t i = 0; i < gCell_indices.size(); ++i) {
       const size_t cell_idx = gCell_indices[i];
