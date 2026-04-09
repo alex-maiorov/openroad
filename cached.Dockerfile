@@ -61,6 +61,7 @@ if [ "$numThreads" = "NotSet" ]; then
     numThreads=$(nproc)
 fi
 cmake --build build -- -j ${numThreads}
+cp -r build build_persistent
 EOF
 
 COPY --chmod=775 --chown=user:user etc/docker-entrypoint.sh /usr/local/bin/.
@@ -71,7 +72,9 @@ COPY --chmod=775 --chown=user:user etc/docker-entrypoint.sh /usr/local/bin/.
 
 FROM $devImage AS final
 
-COPY --from=builder /OpenROAD/build/bin/openroad /usr/bin/.
+# Changed to allow for build caching
+# COPY --from=builder /OpenROAD/build/bin/openroad /usr/bin/.
+COPY --from=builder /OpenROAD/build_persistent/bin/openroad /usr/bin/.
 ENV OPENROAD_EXE=/usr/bin/openroad
 
 RUN <<EOF
