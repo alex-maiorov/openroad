@@ -98,8 +98,15 @@ class TimingPass : public NesterovPassBase
                     NesterovBaseVars& nbv,
                     std::vector<FloatPoint>& grad) override;
 
+  void setTopN(size_t top_n) { top_n = top_n; }
+  void setProjWeight(float weight) { proj_weight = weight; }
+  void setEndToEndWeight(float weight) { end_to_end_weight = weight; }
+  void setSlackSharpness(float sharpness) { slack_sharpness = sharpness; }
+  void setSlackOffset(float offset) { slack_offset = offset; }
+
  private:
-  std::vector<ViolatingPath> getViolatingPaths(int path_end_count, NesterovBaseCommon& nbc);
+  std::vector<ViolatingPath> getViolatingPaths(int path_end_count,
+                                               NesterovBaseCommon& nbc);
 
   bool _enabled = false;
   grt::GlobalRouter* grt_ = nullptr;

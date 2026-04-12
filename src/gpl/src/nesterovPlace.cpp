@@ -42,7 +42,12 @@ NesterovPlace::NesterovPlace(const NesterovPlaceVars& npVars,
                              std::shared_ptr<TimingBase> tb,
                              sta::dbSta* sta,
                              std::unique_ptr<gpl::AbstractGraphics> graphics,
-                             utl::Logger* log)
+                             utl::Logger* log,
+                             int timing_pass_top_n,
+                             float timing_pass_proj_weight,
+                             float timing_pass_end_to_end_weight,
+                             float timing_pass_slack_sharpness,
+                             float timing_pass_slack_offset)
     : npVars_(npVars)
 {
   pbc_ = pbc;
@@ -54,9 +59,13 @@ NesterovPlace::NesterovPlace(const NesterovPlaceVars& npVars,
   sta_ = sta;
   log_ = log;
 
-  // Initialized with hardcoded values. FIXME: Figure out best way to pass these
-  // here without excessive configuration.
-  tp_ = std::make_shared<TimingPass>(sta_, log_, 10, 1.0f, 1.0f, 1.0f, 0.0f);
+  tp_ = std::make_shared<TimingPass>(sta_,
+                                     log_,
+                                     timing_pass_top_n,
+                                     timing_pass_proj_weight,
+                                     timing_pass_end_to_end_weight,
+                                     timing_pass_slack_sharpness,
+                                     timing_pass_slack_offset);
 
   db_cbk_ = std::make_unique<nesterovDbCbk>(this);
   nbc_->setCbk(db_cbk_.get());
@@ -83,6 +92,41 @@ NesterovPlace::NesterovPlace(const NesterovPlaceVars& npVars,
 NesterovPlace::~NesterovPlace()
 {
   reset();
+}
+
+void NesterovPlace::setTimingPassTopN(int top_n)
+{
+  if (tp_) {
+    tp_->setTopN(top_n);
+  }
+}
+
+void NesterovPlace::setTimingPassProjWeight(float proj_weight)
+{
+  if (tp_) {
+    tp_->setProjWeight(proj_weight);
+  }
+}
+
+void NesterovPlace::setTimingPassEndToEndWeight(float end_to_end_weight)
+{
+  if (tp_) {
+    tp_->setEndToEndWeight(end_to_end_weight);
+  }
+}
+
+void NesterovPlace::setTimingPassSlackSharpness(float slack_sharpness)
+{
+  if (tp_) {
+    tp_->setSlackSharpness(slack_sharpness);
+  }
+}
+
+void NesterovPlace::setTimingPassSlackOffset(float slack_offset)
+{
+  if (tp_) {
+    tp_->setSlackOffset(slack_offset);
+  }
 }
 
 void NesterovPlace::npUpdatePrevGradient(

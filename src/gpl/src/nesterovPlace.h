@@ -10,10 +10,10 @@
 #include <vector>
 
 #include "AbstractGraphics.h"
-#include "timingBase.h"
 #include "nesterovBase.h"
 #include "odb/dbBlockCallBackObj.h"
 #include "point.h"
+#include "timingBase.h"
 #include "utl/prometheus/gauge.h"
 
 namespace utl {
@@ -50,7 +50,12 @@ class NesterovPlace
                 std::shared_ptr<TimingBase> tb,
                 sta::dbSta* sta,
                 std::unique_ptr<AbstractGraphics> graphics,
-                utl::Logger* log);
+                utl::Logger* log,
+                int timing_pass_top_n = 10,
+                float timing_pass_proj_weight = 1.0F,
+                float timing_pass_end_to_end_weight = 1.0F,
+                float timing_pass_slack_sharpness = 1.0F,
+                float timing_pass_slack_offset = 0.0F);
   ~NesterovPlace();
 
   // return iteration count
@@ -70,6 +75,12 @@ class NesterovPlace
 
   void setTargetOverflow(float overflow) { npVars_.targetOverflow = overflow; }
   void setMaxIters(int limit) { npVars_.maxNesterovIter = limit; }
+
+  void setTimingPassTopN(int top_n);
+  void setTimingPassProjWeight(float proj_weight);
+  void setTimingPassEndToEndWeight(float end_to_end_weight);
+  void setTimingPassSlackSharpness(float slack_sharpness);
+  void setTimingPassSlackOffset(float slack_offset);
 
   void npUpdatePrevGradient(const std::shared_ptr<NesterovBase>& nb);
   void npUpdateCurGradient(const std::shared_ptr<NesterovBase>& nb);

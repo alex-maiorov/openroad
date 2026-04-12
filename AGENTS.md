@@ -22,3 +22,5 @@ Detailed guides are in `docs/agents/` subdirectory:
 ## Things to Ignore
 
 1. Any comment with an action item implying a significant design choice or a requirement to consult with project authors is to be left alone, and the corresponding code is not to be changed. 
+
+2. Do not run clang-format without asking

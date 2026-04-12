@@ -73,6 +73,13 @@ static gpl::PlaceOptions getOptions(
   checkKey(keys, "-init_density_penalty", options.initDensityPenaltyFactor);
   checkKey(keys, "-init_wirelength_coef", options.initWireLengthCoef);
   checkKey(keys, "-reference_hpwl", options.referenceHpwl);
+  checkKey(keys, "-timing_gradpass_top_n", options.timingGradPassTopN);
+  checkKey(keys, "-timing_gradpass_proj_weight", options.timingGradPassProjWeight);
+  checkKey(
+      keys, "-timing_gradpass_end_to_end_weight", options.timingGradPassEndToEndWeight);
+  checkKey(
+      keys, "-timing_gradpass_slack_sharpness", options.timingGradPassSlackSharpness);
+  checkKey(keys, "-timing_gradpass_slack_offset", options.timingGradPassSlackOffset);
 
   if (auto it = keys.find("-density"); it != keys.end()) {
     if (it->second == "uniform") {
