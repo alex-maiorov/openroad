@@ -19,8 +19,13 @@ Detailed guides are in `docs/agents/` subdirectory:
 4. When amending submodule commits, parent repo submodule reference must also be updated via `git submodule update --init --recursive`. It is needed after any merge/pull.
 5. **Trace bugs upstream** -- when a bug appears in output (e.g., Verilog), find the data creation point (e.g., `buffer_ports`, `remove_buffers`), not the serialization point (e.g., `VerilogWriter`).
 
-## Things to Ignore
+## AI Agent Skills
 
-1. Any comment with an action item implying a significant design choice or a requirement to consult with project authors is to be left alone, and the corresponding code is not to be changed. 
+Skills are located in `.agents/skills/` (with `.claude/skills` symlink for Claude Code).
 
-2. Do not run clang-format without asking
+| Skill | Purpose | Invocation |
+|-------|---------|------------|
+| `triage-issue` | Reproduce bug and minimize test case with whittle.py | `/triage-issue <issue#>` |
+| `fix-bug` | Trace root cause, implement fix, create tests, prepare commit | `/fix-bug <issue#-or-error-code>` |
+| `add-test` | Add integration/unit tests with dual CMake+Bazel registration | `/add-test <module> [description]` |
+| `review-pr` | Draft local PR review notes (correctness > QoR > testing); human posts | `/review-pr <pr#-or-url>` |
