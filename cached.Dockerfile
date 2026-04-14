@@ -61,8 +61,10 @@ if [ "$numThreads" = "NotSet" ]; then
     numThreads=$(nproc)
 fi
 cmake --build build -- -j ${numThreads}
-cp -r build build_persistent
+cp -rp build build_persistent
 EOF
+
+RUN cp -rp build_persistent build
 
 COPY --chmod=775 --chown=user:user etc/docker-entrypoint.sh /usr/local/bin/.
 
@@ -70,19 +72,19 @@ COPY --chmod=775 --chown=user:user etc/docker-entrypoint.sh /usr/local/bin/.
 #                                 Final Image                                  #
 ################################################################################
 
-FROM $devImage AS final
+# FROM $devImage AS final
+#
+# # Changed to allow for build caching
+# # COPY --from=builder /OpenROAD/build/bin/openroad /usr/bin/.
+# COPY --from=builder /OpenROAD/build_persistent/bin/openroad /usr/bin/.
+# ENV OPENROAD_EXE=/usr/bin/openroad
+#
+# RUN <<EOF
+# groupadd user --gid 9000
+# useradd --create-home --uid 9000 -g user --skel /etc/skel --shell /bin/bash user
+# EOF
+#
+# USER user
+# WORKDIR /home/user
 
-# Changed to allow for build caching
-# COPY --from=builder /OpenROAD/build/bin/openroad /usr/bin/.
-COPY --from=builder /OpenROAD/build_persistent/bin/openroad /usr/bin/.
-ENV OPENROAD_EXE=/usr/bin/openroad
-
-RUN <<EOF
-groupadd user --gid 9000
-useradd --create-home --uid 9000 -g user --skel /etc/skel --shell /bin/bash user
-EOF
-
-USER user
-WORKDIR /home/user
-
-ENTRYPOINT [ "openroad" ]
+ENTRYPOINT [ "bash" ]
