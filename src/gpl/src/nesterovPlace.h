@@ -13,6 +13,7 @@
 #include "nesterovBase.h"
 #include "odb/dbBlockCallBackObj.h"
 #include "point.h"
+#include "timingBase.h"
 #include "utl/prometheus/gauge.h"
 
 namespace utl {
@@ -23,6 +24,10 @@ namespace odb {
 class dbInst;
 }
 
+namespace sta {
+class dbSta;
+}
+
 namespace gpl {
 
 class PlacerBase;
@@ -30,6 +35,7 @@ class PlacerBaseCommon;
 class Instance;
 class RouteBase;
 class TimingBase;
+class TimingPass;
 
 class NesterovPlace
 {
@@ -42,8 +48,14 @@ class NesterovPlace
                 std::vector<std::shared_ptr<NesterovBase>>& nbVec,
                 std::shared_ptr<RouteBase> rb,
                 std::shared_ptr<TimingBase> tb,
+                sta::dbSta* sta,
                 std::unique_ptr<AbstractGraphics> graphics,
-                utl::Logger* log);
+                utl::Logger* log,
+                int timing_pass_top_n = 10,
+                float timing_pass_proj_weight = 1.0F,
+                float timing_pass_end_to_end_weight = 1.0F,
+                float timing_pass_slack_sharpness = 1.0F,
+                float timing_pass_slack_offset = 0.0F);
   ~NesterovPlace();
 
   // return iteration count
@@ -63,6 +75,12 @@ class NesterovPlace
 
   void setTargetOverflow(float overflow) { npVars_.targetOverflow = overflow; }
   void setMaxIters(int limit) { npVars_.maxNesterovIter = limit; }
+
+  void setTimingPassTopN(int top_n);
+  void setTimingPassProjWeight(float proj_weight);
+  void setTimingPassEndToEndWeight(float end_to_end_weight);
+  void setTimingPassSlackSharpness(float slack_sharpness);
+  void setTimingPassSlackOffset(float slack_offset);
 
   void npUpdatePrevGradient(const std::shared_ptr<NesterovBase>& nb);
   void npUpdateCurGradient(const std::shared_ptr<NesterovBase>& nb);
@@ -92,6 +110,14 @@ class NesterovPlace
                        int& timing_driven_count,
                        int64_t& td_accumulated_delta_area,
                        bool is_routability_gpl_iter);
+
+  void runTimingPass(int iter,
+                     const std::string& timing_driven_dir,
+                     int routability_driven_count,
+                     int& timing_driven_count,
+                     int64_t& td_accumulated_delta_area,
+                     bool is_routability_gpl_iter);
+
   bool isDiverged(float& diverge_snapshot_WlCoefX,
                   float& diverge_snapshot_WlCoefY,
                   bool& is_diverge_snapshot_saved);
@@ -128,6 +154,9 @@ class NesterovPlace
   utl::Logger* log_ = nullptr;
   std::shared_ptr<RouteBase> rb_;
   std::shared_ptr<TimingBase> tb_;
+  std::shared_ptr<TimingPass> tp_;
+  sta::dbSta* sta_ = nullptr;
+  int tp_sta_run_interval = 10;
   NesterovPlaceVars npVars_;
   std::unique_ptr<AbstractGraphics> graphics_;
 

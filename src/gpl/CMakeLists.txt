@@ -26,11 +26,13 @@ swig_lib(NAME      gpl
 
 add_library(gpl_lib
   src/AbstractGraphics.cpp
+  src/point.cpp
   src/replace.cpp
   src/initialPlace.cpp
   src/nesterovPlace.cpp
   src/placerBase.cpp
   src/nesterovBase.cpp
+  src/nesterovPass.cpp
   src/fft.cpp
   src/fftsg.cpp
   src/fftsg2d.cpp

@@ -52,6 +52,7 @@ class Net;
 class GPin;
 class FFT;
 class nesterovDbCbk;
+class TimingPass;
 
 class GCell
 {
@@ -876,6 +877,12 @@ class NesterovBaseCommon
   GCell& getGCell(size_t index);
   size_t getGCellIndex(const GCell* gCell) const;
 
+  GNet& getGNet(size_t index);
+  size_t getGNetIndex(const GNet* gNet) const;
+
+  GPin& getGPin(size_t index);
+  size_t getGPinIndex(const GPin* gPin) const;
+
   void printGCells();
   void printGPins();
 
@@ -1056,6 +1063,8 @@ class NesterovBase
                        std::vector<FloatPoint>& densityGrads,
                        float wlCoeffX,
                        float wlCoeffY);
+
+  void updateGradientsWithTiming(TimingPass& tp);
 
   void nbUpdatePrevGradient(float wlCoeffX, float wlCoeffY);
   void nbUpdateCurGradient(float wlCoeffX, float wlCoeffY);

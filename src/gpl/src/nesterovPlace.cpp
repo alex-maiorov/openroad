@@ -17,12 +17,19 @@
 #include <vector>
 
 #include "AbstractGraphics.h"
+#include "db_sta/dbSta.hh"
 #include "nesterovBase.h"
 #include "odb/db.h"
 #include "placerBase.h"
 #include "routeBase.h"
+#include "sta/Sta.hh"
 #include "timingBase.h"
 #include "utl/Logger.h"
+
+namespace sta {
+class Sta;
+class dbSta;
+}  // namespace sta
 
 namespace gpl {
 using utl::GPL;
@@ -34,8 +41,14 @@ NesterovPlace::NesterovPlace(const NesterovPlaceVars& npVars,
                              std::vector<std::shared_ptr<NesterovBase>>& nbVec,
                              std::shared_ptr<RouteBase> rb,
                              std::shared_ptr<TimingBase> tb,
+                             sta::dbSta* sta,
                              std::unique_ptr<gpl::AbstractGraphics> graphics,
-                             utl::Logger* log)
+                             utl::Logger* log,
+                             int timing_pass_top_n,
+                             float timing_pass_proj_weight,
+                             float timing_pass_end_to_end_weight,
+                             float timing_pass_slack_sharpness,
+                             float timing_pass_slack_offset)
     : npVars_(npVars)
 {
   pbc_ = pbc;
@@ -44,7 +57,16 @@ NesterovPlace::NesterovPlace(const NesterovPlaceVars& npVars,
   nbVec_ = nbVec;
   rb_ = std::move(rb);
   tb_ = std::move(tb);
+  sta_ = sta;
   log_ = log;
+
+  tp_ = std::make_shared<TimingPass>(sta_,
+                                     log_,
+                                     timing_pass_top_n,
+                                     timing_pass_proj_weight,
+                                     timing_pass_end_to_end_weight,
+                                     timing_pass_slack_sharpness,
+                                     timing_pass_slack_offset);
 
   db_cbk_ = std::make_unique<nesterovDbCbk>(this);
   nbc_->setCbk(db_cbk_.get());
@@ -71,6 +93,41 @@ NesterovPlace::NesterovPlace(const NesterovPlaceVars& npVars,
 NesterovPlace::~NesterovPlace()
 {
   reset();
+}
+
+void NesterovPlace::setTimingPassTopN(int top_n)
+{
+  if (tp_) {
+    tp_->setTopN(top_n);
+  }
+}
+
+void NesterovPlace::setTimingPassProjWeight(float proj_weight)
+{
+  if (tp_) {
+    tp_->setProjWeight(proj_weight);
+  }
+}
+
+void NesterovPlace::setTimingPassEndToEndWeight(float end_to_end_weight)
+{
+  if (tp_) {
+    tp_->setEndToEndWeight(end_to_end_weight);
+  }
+}
+
+void NesterovPlace::setTimingPassSlackSharpness(float slack_sharpness)
+{
+  if (tp_) {
+    tp_->setSlackSharpness(slack_sharpness);
+  }
+}
+
+void NesterovPlace::setTimingPassSlackOffset(float slack_offset)
+{
+  if (tp_) {
+    tp_->setSlackOffset(slack_offset);
+  }
 }
 
 void NesterovPlace::npUpdatePrevGradient(
@@ -548,6 +605,41 @@ void NesterovPlace::runTimingDriven(int iter,
     if (!shouldTdProceed) {
       npVars_.timingDrivenMode = false;
     }
+  }
+}
+
+void NesterovPlace::runTimingPass(int iter,
+                                  const std::string& timing_driven_dir,
+                                  int routability_driven_revert_count,
+                                  int& timing_driven_count,
+                                  int64_t& td_accumulated_delta_area,
+                                  bool is_routability_gpl_iter)
+{
+  if (!tp_) {
+    return;
+  }
+
+  if (npVars_.timingDrivenMode
+      && tb_->isTimingNetWeightOverflow(average_overflow_unscaled_)
+      && (!is_routability_gpl_iter || !npVars_.routability_driven_mode)) {
+    updateDb();
+
+    bool virtual_td_iter
+        = (average_overflow_unscaled_ > npVars_.keepResizeBelowOverflow);
+
+    log_->info(GPL,
+               103,
+               "Timing-pass iteration {}",
+               ++npVars_.timingDrivenIterCounter);
+    if (npVars_.timingDrivenIterCounter % tp_sta_run_interval == 0) {
+      tp_->runSTA();
+    }
+
+    for (auto& nb : nbVec_) {
+      nb->updateGradientsWithTiming(*tp_);
+    }
+
+    ++timing_driven_count;
   }
 }
 
@@ -1097,12 +1189,20 @@ int NesterovPlace::doNesterovPlace(int start_iter)
       ++npVars_.maxNesterovIter;
     }
 
-    runTimingDriven(nesterov_iter,
-                    timing_driven_dir,
-                    routability_driven_revert_count,
-                    timing_driven_count,
-                    td_accumulated_delta_area,
-                    is_routability_gpl_iter);
+    // runTimingDriven(nesterov_iter,
+    //                 timing_driven_dir,
+    //                 routability_driven_revert_count,
+    //                 timing_driven_count,
+    //                 td_accumulated_delta_area,
+    //                 is_routability_gpl_iter);
+
+    // Run the cell-to-cell timing pass
+    runTimingPass(nesterov_iter,
+                  timing_driven_dir,
+                  routability_driven_revert_count,
+                  timing_driven_count,
+                  td_accumulated_delta_area,
+                  is_routability_gpl_iter);
 
     if (isDiverged(diverge_snapshot_WlCoefX,
                    diverge_snapshot_WlCoefY,
