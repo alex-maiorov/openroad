@@ -1,0 +1,56 @@
+Bootstrap: docker
+From: ubuntu:24.04
+
+%environment
+    export DEBIAN_FRONTEND=noninteractive
+    export TZ=America/Los_Angeles
+    export LANG=C.UTF-8
+    export LC_ALL=C.UTF-8
+    export OPENROAD_EXE=/usr/bin/openroad
+
+%files
+    etc/DependencyInstaller.sh /tmp/DependencyInstaller.sh
+    . /OpenROAD
+
+%post
+    set -e
+    # Install dependencies
+    chmod +x /OpenROAD/etc/DependencyInstaller.sh
+    /OpenROAD/etc/DependencyInstaller.sh -ci -base
+    /OpenROAD/etc/DependencyInstaller.sh -ci -common -save-deps-prefixes=/etc/openroad_deps_prefixes.txt
+    
+    if echo "ubuntu" | grep -q "ubuntu"; then
+        echo "fromImage contains 'ubuntu' — stripping section from libQt5Core.so"
+        strip --remove-section=.note.ABI-tag /usr/lib/x86_64-linux-gnu/libQt5Core.so || true
+    fi
+    rm -f /tmp/DependencyInstaller.sh
+
+    # Create user
+    groupadd user --gid 9000
+    useradd --create-home --uid 9000 -g user --shell /bin/bash user
+
+    # Build OpenROAD
+    cd /OpenROAD
+    if [ -f /opt/rh/gcc-toolset-13/enable ]; then
+        source /opt/rh/gcc-toolset-13/enable
+    fi
+    
+    DEPS_ARGS=""
+    if [ -f /etc/openroad_deps_prefixes.txt ]; then
+        DEPS_ARGS=$(cat /etc/openroad_deps_prefixes.txt)
+    fi
+    
+    # Note: The Dockerfile used ARG orVersion. 
+    # In Apptainer def files, we can't easily pass build-time args via the command line 
+    # in the same way, so we'll assume the default or handle it via environment if needed.
+    # For now, we'll just build with standard Release.
+    cmake -B build -S . -DCMAKE_BUILD_TYPE=Release $DEPS_ARGS
+    cmake --build build -- -j $(nproc)
+
+    # Install binary and entrypoint
+    cp /OpenROAD/build/bin/openroad /usr/bin/
+    cp /OpenROAD/etc/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+    chmod 775 /usr/local/bin/docker-entrypoint.sh
+
+%runscript
+    exec openroad "$@"

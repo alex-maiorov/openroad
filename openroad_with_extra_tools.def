@@ -1,0 +1,56 @@
+Bootstrap: docker
+Stage: build
+From: ubuntu:24.04
+
+%environment
+    export DEBIAN_FRONTEND=noninteractive
+    export TZ=Europe/Zurich
+    export LANG=C.UTF-8
+    export LC_ALL=C.UTF-8
+    export OPENROAD_EXE=/usr/bin/openroad
+
+%files
+    . /OpenROAD
+
+%post
+    # set -e
+
+    # Install dependencies
+    chmod +x /OpenROAD/etc/DependencyInstaller.sh
+    /OpenROAD/etc/DependencyInstaller.sh -ci -base
+    /OpenROAD/etc/DependencyInstaller.sh -ci -common -save-deps-prefixes=/etc/openroad_deps_prefixes.txt
+
+    if grep -q "ubuntu" /etc/os-release; then
+        strip --remove-section=.note.ABI-tag /usr/lib/x86_64-linux-gnu/libQt5Core.so || true
+    fi
+
+    # Build OpenROAD
+    cd /OpenROAD
+
+    if [ -f /opt/rh/gcc-toolset-13/enable ]; then
+        source /opt/rh/gcc-toolset-13/enable
+    fi
+
+    DEPS_ARGS=""
+    if [ -f /etc/openroad_deps_prefixes.txt ]; then
+        DEPS_ARGS=$(cat /etc/openroad_deps_prefixes.txt)
+    fi
+
+    cmake -B build -S . -DCMAKE_BUILD_TYPE=Release $DEPS_ARGS
+    cmake --build build -- -j $(nproc)
+
+Bootstrap: docker
+Stage: final
+From: hpretl/iic-osic-tools:2025.12
+
+%files from build
+    /OpenROAD/build/bin/openroad /foss/tools/openroad/bin/openroad
+    /OpenROAD/etc/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+%post
+    chmod 777 /foss/tools/openroad/bin/openroad
+    chmod 775 /usr/local/bin/docker-entrypoint.sh
+
+
+%labels
+    Author OpenROAD
+
