@@ -52,5 +52,9 @@ From: ubuntu:24.04
     cp /OpenROAD/etc/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
     chmod 775 /usr/local/bin/docker-entrypoint.sh
 
+    # Philosophers still ask to this day why we need this, but we do.
+    echo "" > /etc/ld.so.conf.d/99_openroad.conf
+    echo "/opt/or-tools/lib/" >> /etc/ld.so.conf.d/99_openroad.conf
+
 %runscript
     exec openroad "$@"

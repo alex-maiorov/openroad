@@ -53,6 +53,10 @@ From: hpretl/iic-osic-tools:2025.12
     chmod 777 /foss/tools/openroad/bin/openroad
     chmod 775 /usr/local/bin/docker-entrypoint.sh
 
+    # Philosophers still ask to this day why we need this, but we do.
+    echo "" > /etc/ld.so.conf.d/99_openroad.conf
+    echo "/opt/or-tools/lib/" >> /etc/ld.so.conf.d/99_openroad.conf
+    ldconfig
 
 %labels
     Author OpenROAD
