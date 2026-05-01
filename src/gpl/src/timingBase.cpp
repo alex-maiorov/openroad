@@ -10,6 +10,8 @@
 #include <memory>
 #include <utility>
 #include <vector>
+#include <format>
+#include <string>
 
 #include "db_sta/dbNetwork.hh"
 #include "db_sta/dbSta.hh"
@@ -352,10 +354,9 @@ std::vector<ViolatingPath> TimingPass::getViolatingPaths(
   return violating_paths;
 }
 
-ViolatingPathStats TimingPass::getViolatingPathStats(int path_end_count,
+ViolatingPathStats TimingPass::getViolatingPathStats(std::vector<ViolatingPath>& paths,
                                                      NesterovBaseCommon& nbc)
 {
-  auto paths = getViolatingPaths(path_end_count, nbc);
   if (paths.empty()) {
     return {0, 0.0f, 0.0f, 0.0f};
   }
@@ -378,18 +379,20 @@ void TimingPass::gradientPass(NesterovBaseCommon& nbc,
     return;
   }
 
-  auto stats = getViolatingPathStats(top_n, nbc);
-  debugPrint(log_,
-             GPL,
-             "timing",
-             1,
-             "Timing pass run: {} violating paths, avg slack: {:.4f}, min slack: {:.4f}, max slack: {:.4f}",
-             stats.count,
-             stats.avg_slack,
-             stats.min_slack,
-             stats.max_slack);
-
   std::vector<ViolatingPath> paths = getViolatingPaths(top_n, nbc);
+
+  auto stats = getViolatingPathStats(paths, nbc);
+  auto count_str = std::to_string(stats.count);
+  auto avg_str = fmt::format("{:.4f}", stats.avg_slack);
+  auto min_str = fmt::format("{:.4f}", stats.min_slack);
+  auto max_str = fmt::format("{:.4f}", stats.max_slack);
+
+  log_->info(log_, GPL, "timing", 340, "Timing pass run: {} violating paths", count_str);
+  log_->info(log_, GPL, "timing", 341, "avg slack: {}", avg_str);
+  log_->info(log_, GPL, "timing", 342, "min slack: {}", min_str);
+  log_->info(log_, GPL, "timing", 343, "max slack: {}", max_str);
+
+
 
   for (const auto& path : paths) {
     const auto& gCell_indices = path.gCellIndexSequence;

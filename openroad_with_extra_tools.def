@@ -1,6 +1,6 @@
-Bootstrap: docker
+Bootstrap: localimage
 Stage: build
-From: ubuntu:24.04
+From: ../../openroad_base.sif
 
 %environment
     export DEBIAN_FRONTEND=noninteractive
@@ -10,21 +10,15 @@ From: ubuntu:24.04
     export OPENROAD_EXE=/usr/bin/openroad
 
 %files
-    . /OpenROAD
+    . /OpenROAD-new
 
 %post
     # set -e
 
+    # Let us hope that excluding git is not a bad idea.
+    rsync -rluv --checksum --exclude="*.git*" /OpenROAD-new/ /OpenROAD/
+
     # Install dependencies
-    chmod +x /OpenROAD/etc/DependencyInstaller.sh
-    /OpenROAD/etc/DependencyInstaller.sh -ci -base
-    /OpenROAD/etc/DependencyInstaller.sh -ci -common -save-deps-prefixes=/etc/openroad_deps_prefixes.txt
-
-    if grep -q "ubuntu" /etc/os-release; then
-        strip --remove-section=.note.ABI-tag /usr/lib/x86_64-linux-gnu/libQt5Core.so || true
-    fi
-
-    # Build OpenROAD
     cd /OpenROAD
 
     if [ -f /opt/rh/gcc-toolset-13/enable ]; then

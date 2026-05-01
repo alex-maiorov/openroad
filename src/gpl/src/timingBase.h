@@ -108,7 +108,7 @@ class TimingPass : public NesterovPassBase
                      NesterovBaseVars& nbv,
                      std::vector<FloatPoint>& grad) override;
 
-   ViolatingPathStats getViolatingPathStats(int path_end_count,
+   ViolatingPathStats getViolatingPathStats(std::vector<ViolatingPath>& paths,
                                             NesterovBaseCommon& nbc);
 
    void setTopN(size_t top_n) { top_n = top_n; }
