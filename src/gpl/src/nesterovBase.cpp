@@ -2,6 +2,8 @@
 // Copyright (c) 2018-2025, The OpenROAD Authors
 
 #include "nesterovBase.h"
+#include "timingBase.h"
+#include "timingBase.h"
 
 #include <algorithm>
 #include <cassert>

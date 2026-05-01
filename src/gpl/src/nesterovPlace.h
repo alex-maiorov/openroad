@@ -156,12 +156,14 @@ class NesterovPlace
   std::vector<std::shared_ptr<NesterovBase>> nbVec_;
   utl::Logger* log_ = nullptr;
   std::shared_ptr<RouteBase> rb_;
-  std::shared_ptr<TimingBase> tb_;
-  std::shared_ptr<TimingPass> tp_;
-  sta::dbSta* sta_ = nullptr;
-   int timing_gradpass_sta_run_interval = 10;
+   std::shared_ptr<TimingBase> tb_;
+   std::shared_ptr<TimingPass> tp_;
+   sta::dbSta* sta_ = nullptr;
    NesterovPlaceVars npVars_;
-  std::unique_ptr<AbstractGraphics> graphics_;
+   int timing_gradpass_sta_run_interval = 10;
+   std::unique_ptr<AbstractGraphics> graphics_;
+
+
 
   float total_sum_overflow_ = 0;
   float total_sum_overflow_unscaled_ = 0;
