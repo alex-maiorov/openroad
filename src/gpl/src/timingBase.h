@@ -78,8 +78,17 @@ struct ViolatingPath
   float slack;
 };
 
-class TimingPass : public NesterovPassBase
+struct ViolatingPathStats {
+  size_t count;
+  float avg_slack;
+  float min_slack;
+  float max_slack;
+};
+
+class TimingBase
 {
+
+
  public:
   TimingPass(sta::dbSta* sta,
              utl::Logger* log,
@@ -89,16 +98,23 @@ class TimingPass : public NesterovPassBase
              float slack_sharpness = 1.0F,
              float slack_offset = 0.0F);
 
-  void runSTA()
-  {
-    sta_->updateTiming(false);
-    sta_->ensureLibLinked();
-  }
-  void gradientPass(NesterovBaseCommon& nbc,
-                    NesterovBaseVars& nbv,
-                    std::vector<FloatPoint>& grad) override;
+   void runSTA()
+   {
+     sta_->updateTiming(false);
+     sta_->ensureLibLinked();
+     debugPrint(log_, GPL, "timing", 1, "STA updated.");
+   }
 
-  void setTopN(size_t top_n) { top_n = top_n; }
+   void gradientPass(NesterovBaseCommon& nbc,
+                     NesterovBaseVars& nbv,
+                     std::vector<FloatPoint>& grad) override;
+
+   ViolatingPathStats getViolatingPathStats(int path_end_count,
+                                            NesterovBaseCommon& nbc);
+
+   void setTopN(size_t top_n) { top_n = top_n; }
+
+
   void setProjWeight(float weight) { proj_weight = weight; }
   void setEndToEndWeight(float weight) { end_to_end_weight = weight; }
   void setSlackSharpness(float sharpness) { slack_sharpness = sharpness; }

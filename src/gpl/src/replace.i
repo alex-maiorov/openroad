@@ -77,9 +77,11 @@ static gpl::PlaceOptions getOptions(
   checkKey(keys, "-timing_gradpass_proj_weight", options.timingGradPassProjWeight);
   checkKey(
       keys, "-timing_gradpass_end_to_end_weight", options.timingGradPassEndToEndWeight);
-  checkKey(
-      keys, "-timing_gradpass_slack_sharpness", options.timingGradPassSlackSharpness);
-  checkKey(keys, "-timing_gradpass_slack_offset", options.timingGradPassSlackOffset);
+   checkKey(
+       keys, "-timing_gradpass_slack_sharpness", options.timingGradPassSlackSharpness);
+   checkKey(keys, "-timing_gradpass_slack_offset", options.timingGradPassSlackOffset);
+   checkKey(keys, "-timing_gradpass_sta_run_interval", options.timingGradPassStaRunInterval);
+
 
   if (auto it = keys.find("-density"); it != keys.end()) {
     if (it->second == "uniform") {

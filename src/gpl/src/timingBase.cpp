@@ -352,6 +352,24 @@ std::vector<ViolatingPath> TimingPass::getViolatingPaths(
   return violating_paths;
 }
 
+ViolatingPathStats TimingPass::getViolatingPathStats(int path_end_count,
+                                                     NesterovBaseCommon& nbc)
+{
+  auto paths = getViolatingPaths(path_end_count, nbc);
+  if (paths.empty()) {
+    return {0, 0.0f, 0.0f, 0.0f};
+  }
+  float sum = 0;
+  float min_s = paths[0].slack;
+  float max_s = paths[0].slack;
+  for (const auto& p : paths) {
+    sum += p.slack;
+    if (p.slack < min_s) min_s = p.slack;
+    if (p.slack > max_s) max_s = p.slack;
+  }
+  return {paths.size(), sum / paths.size(), min_s, max_s};
+}
+
 void TimingPass::gradientPass(NesterovBaseCommon& nbc,
                               NesterovBaseVars& nbv,
                               std::vector<FloatPoint>& grad)
@@ -359,6 +377,17 @@ void TimingPass::gradientPass(NesterovBaseCommon& nbc,
   if (!_enabled) {
     return;
   }
+
+  auto stats = getViolatingPathStats(top_n, nbc);
+  debugPrint(log_,
+             GPL,
+             "timing",
+             1,
+             "Timing pass run: {} violating paths, avg slack: {:.4f}, min slack: {:.4f}, max slack: {:.4f}",
+             stats.count,
+             stats.avg_slack,
+             stats.min_slack,
+             stats.max_slack);
 
   std::vector<ViolatingPath> paths = getViolatingPaths(top_n, nbc);
 

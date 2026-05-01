@@ -54,8 +54,10 @@ class NesterovPlace
                 int timing_pass_top_n = 10,
                 float timing_pass_proj_weight = 1.0F,
                 float timing_pass_end_to_end_weight = 1.0F,
-                float timing_pass_slack_sharpness = 1.0F,
-                float timing_pass_slack_offset = 0.0F);
+                 float timing_pass_slack_sharpness = 1.0F,
+                 float timing_pass_slack_offset = 0.0F,
+                 int timing_pass_sta_run_interval = 10);
+
   ~NesterovPlace();
 
   // return iteration count
@@ -80,9 +82,10 @@ class NesterovPlace
   void setTimingPassProjWeight(float proj_weight);
   void setTimingPassEndToEndWeight(float end_to_end_weight);
   void setTimingPassSlackSharpness(float slack_sharpness);
-  void setTimingPassSlackOffset(float slack_offset);
+   void setTimingPassSlackOffset(float slack_offset);
+   void setTimingPassStaRunInterval(int interval);
 
-  void npUpdatePrevGradient(const std::shared_ptr<NesterovBase>& nb);
+   void npUpdatePrevGradient(const std::shared_ptr<NesterovBase>& nb);
   void npUpdateCurGradient(const std::shared_ptr<NesterovBase>& nb);
   void npUpdateNextGradient(const std::shared_ptr<NesterovBase>& nb);
 
@@ -156,8 +159,8 @@ class NesterovPlace
   std::shared_ptr<TimingBase> tb_;
   std::shared_ptr<TimingPass> tp_;
   sta::dbSta* sta_ = nullptr;
-  int tp_sta_run_interval = 10;
-  NesterovPlaceVars npVars_;
+   int timing_gradpass_sta_run_interval = 10;
+   NesterovPlaceVars npVars_;
   std::unique_ptr<AbstractGraphics> graphics_;
 
   float total_sum_overflow_ = 0;

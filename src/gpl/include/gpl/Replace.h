@@ -94,11 +94,13 @@ struct PlaceOptions
   int padRight = 0;
 
   // TimingPass parameters for gradient-based timing optimization
-  int timingGradPassTopN = 10;
-  float timingGradPassProjWeight = 1.0F;
-  float timingGradPassEndToEndWeight = 1.0F;
-  float timingGradPassSlackSharpness = 1.0F;
-  float timingGradPassSlackOffset = 0.0F;
+   int timingGradPassTopN = 10;
+   float timingGradPassProjWeight = 1.0F;
+   float timingGradPassEndToEndWeight = 1.0F;
+   float timingGradPassSlackSharpness = 1.0F;
+   float timingGradPassSlackOffset = 0.0F;
+   int timingGradPassStaRunInterval = 10;
+
 
   void skipIo();
   void validate(utl::Logger* log);

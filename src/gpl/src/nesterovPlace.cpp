@@ -35,21 +35,22 @@ namespace gpl {
 using utl::GPL;
 
 NesterovPlace::NesterovPlace(const NesterovPlaceVars& npVars,
-                             const std::shared_ptr<PlacerBaseCommon>& pbc,
-                             const std::shared_ptr<NesterovBaseCommon>& nbc,
-                             std::vector<std::shared_ptr<PlacerBase>>& pbVec,
-                             std::vector<std::shared_ptr<NesterovBase>>& nbVec,
-                             std::shared_ptr<RouteBase> rb,
-                             std::shared_ptr<TimingBase> tb,
-                             sta::dbSta* sta,
-                             std::unique_ptr<gpl::AbstractGraphics> graphics,
-                             utl::Logger* log,
-                             int timing_pass_top_n,
-                             float timing_pass_proj_weight,
-                             float timing_pass_end_to_end_weight,
-                             float timing_pass_slack_sharpness,
-                             float timing_pass_slack_offset)
-    : npVars_(npVars)
+                              const std::shared_ptr<PlacerBaseCommon>& pbc,
+                              const std::shared_ptr<NesterovBaseCommon>& nbc,
+                              std::vector<std::shared_ptr<PlacerBase>>& pbVec,
+                              std::vector<std::shared_ptr<NesterovBase>>& nbVec,
+                              std::shared_ptr<RouteBase> rb,
+                              std::shared_ptr<TimingBase> tb,
+                              sta::dbSta* sta,
+                              std::unique_ptr<gpl::AbstractGraphics> graphics,
+                              utl::Logger* log,
+                              int timing_pass_top_n,
+                              float timing_pass_proj_weight,
+                              float timing_pass_end_to_end_weight,
+                              float timing_pass_slack_sharpness,
+                              float timing_pass_slack_offset,
+                              int timing_pass_sta_run_interval)
+    : npVars_(npVars), timing_gradpass_sta_run_interval(timing_pass_sta_run_interval)
 {
   pbc_ = pbc;
   nbc_ = nbc;
@@ -59,6 +60,7 @@ NesterovPlace::NesterovPlace(const NesterovPlaceVars& npVars,
   tb_ = std::move(tb);
   sta_ = sta;
   log_ = log;
+
 
   tp_ = std::make_shared<TimingPass>(sta_,
                                      log_,
@@ -128,6 +130,11 @@ void NesterovPlace::setTimingPassSlackOffset(float slack_offset)
   if (tp_) {
     tp_->setSlackOffset(slack_offset);
   }
+}
+
+void NesterovPlace::setTimingPassStaRunInterval(int interval)
+{
+  timing_gradpass_sta_run_interval = interval;
 }
 
 void NesterovPlace::npUpdatePrevGradient(
@@ -631,7 +638,7 @@ void NesterovPlace::runTimingPass(int iter,
                103,
                "Timing-pass iteration {}",
                ++npVars_.timingDrivenIterCounter);
-    if (npVars_.timingDrivenIterCounter % tp_sta_run_interval == 0) {
+    if (npVars_.timingDrivenIterCounter % timing_gradpass_sta_run_interval == 0) {
       tp_->runSTA();
     }
 
