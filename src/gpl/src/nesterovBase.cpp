@@ -2806,10 +2806,8 @@ void NesterovBase::updateGradientsWithTiming(TimingPass& tp)
 
   for (size_t i = 0; i < nb_gcells_.size(); i++) {
     GCell* gCell = nb_gcells_.at(i);
-    sumGrads[i].x = wireLengthGrads[i].x + densityPenalty_ * densityGrads[i].x
-                    + gCell->getGradientX();
-    sumGrads[i].y = wireLengthGrads[i].y + densityPenalty_ * densityGrads[i].y
-                    + gCell->getGradientY();
+    sumGrads[i].x += gCell->getGradientX();
+    sumGrads[i].y += gCell->getGradientY();
 
     FloatPoint wireLengthPreCondi = nbc_->getWireLengthPreconditioner(gCell);
     FloatPoint densityPrecondi = getDensityPreconditioner(gCell);
