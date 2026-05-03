@@ -249,10 +249,14 @@ void TimingPass::gradientPass(NesterovBaseCommon& nbc,
   // Use max() to consider both min (setup) and max (hold) delay analysis
   const sta::MinMaxAll* delay_min_max = sta::MinMaxAll::max();
 
-  // How many paths to find per path group (max means unlimited)
-  int group_path_count = sta::PathGroup::group_path_count_max;
-  // Limit to top_n worst paths per unique endpoint pin
-  int endpoint_path_count = static_cast<int>(top_n);
+  // HACK: Temporary fix to limit the number of path ends returned by findPathEnds.
+  // This is hacky and will need to be tuned later for optimal timing-driven placement.
+  // TODO: Properly tune group_path_count and endpoint_path_count parameters.
+  // group_path_count: max total path ends per path group (across all endpoints)
+  // endpoint_path_count: max path ends per unique endpoint pin
+  // For now, limit total path ends to top_n (worst paths overall) and 1 per endpoint.
+  int group_path_count = static_cast<int>(top_n);    // Limit TOTAL path ends to top_n
+  int endpoint_path_count = 1; // 1 worst paths per endpoint. TODO: See if adjusting this does anything.
   bool unique_pins = false;        // Don't filter for unique pins
   bool unique_edges = false;       // Don't filter for unique edges
   float slack_min = -sta::INF;        // Capture all paths (no lower bound)
@@ -316,8 +320,8 @@ void TimingPass::gradientPass(NesterovBaseCommon& nbc,
                                               clk_gating_setup,
                                               clk_gating_hold);
    debugPrint(log_, GPL, "timing", 1, "gradientPass: Ran findPathEnds, found {} ends", ends.size());
-   debugPrint(log_, GPL, "timing", 1, "gradientPass: Sleeping for 30 seconds");
-   std::this_thread::sleep_for(30);
+  debugPrint(log_, GPL, "timing", 1, "gradientPass: Ran findPathEnds, found {} ends", ends.size());
+  debugPrint(log_, GPL, "timing", 1, "gradientPass: Ran findPathEnds, found {} ends", ends.size());
 
   // Get the database network adapter for converting between OpenSTA and OpenDB
   // objects
