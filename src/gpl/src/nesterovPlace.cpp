@@ -62,13 +62,14 @@ NesterovPlace::NesterovPlace(const NesterovPlaceVars& npVars,
   log_ = log;
 
 
-  tp_ = std::make_shared<TimingPass>(sta_,
-                                     log_,
-                                     timing_pass_top_n,
-                                     timing_pass_proj_weight,
-                                     timing_pass_end_to_end_weight,
-                                     timing_pass_slack_sharpness,
-                                     timing_pass_slack_offset);
+   tp_ = std::make_shared<TimingPass>(sta_,
+                                      log_,
+                                      timing_pass_top_n,
+                                      timing_pass_proj_weight,
+                                      timing_pass_end_to_end_weight,
+                                      timing_pass_slack_sharpness,
+                                      timing_pass_slack_offset);
+   tp_->set_enabled(npVars_.timingDrivenMode);
 
   db_cbk_ = std::make_unique<nesterovDbCbk>(this);
   nbc_->setCbk(db_cbk_.get());

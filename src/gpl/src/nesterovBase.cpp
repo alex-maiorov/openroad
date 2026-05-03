@@ -2802,7 +2802,7 @@ void NesterovBase::updateGradientsWithTiming(TimingPass& tp)
   std::vector<FloatPoint> densityGrads(nb_gcells_.size());
   std::vector<FloatPoint> sumGrads(nb_gcells_.size());
 
-  updateGradients(sumGrads, wireLengthGrads, densityGrads, 1.0f, 1.0f);
+  updateGradients(sumGrads, wireLengthGrads, densityGrads, wireLengthCoefX_, wireLengthCoefY_);
 
   tp.gradientPass(*nbc_, nbVars_, sumGrads);
 

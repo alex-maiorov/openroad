@@ -117,7 +117,7 @@ class TimingPass : public NesterovPassBase
    void setProjWeight(float weight) { proj_weight = weight; }
    void setEndToEndWeight(float weight) { end_to_end_weight = weight; }
    void setSlackSharpness(float sharpness) { slack_sharpness = sharpness; }
-   void setSlackOffset(float offset) { slack_offset = offset; }
+    void set_enabled(bool enabled) { _enabled = enabled; }
 
  private:
    std::vector<ViolatingPath> getViolatingPaths(int path_end_count,

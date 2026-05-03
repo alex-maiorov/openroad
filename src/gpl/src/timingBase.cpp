@@ -289,11 +289,8 @@ std::vector<ViolatingPath> TimingPass::getViolatingPaths(
 
   // Iterate through each path endpoint found by STA
   for (sta::PathEnd* end : ends) {
-    // Get the endpoint pin of this path (the sink/flop input or output port)
-    const sta::Pin* pin = end->vertex(sta_)->pin();
-    // Slack is negative for violating paths, positive for meeting timing.
-    // We only query paths with slack <= slack_offset (typically <= 0).
-    Slack slack = end->slack(sta_);
+     // Get the endpoint pin of this path (the sink/flop input or output port)
+     Slack slack = end->slack(sta_);
 
     // Skip paths with infinite slack (shouldn't happen with slack_max=0,
     // but guards against edge cases)
@@ -387,10 +384,10 @@ void TimingPass::gradientPass(NesterovBaseCommon& nbc,
   auto min_str = fmt::format("{:.4f}", stats.min_slack);
   auto max_str = fmt::format("{:.4f}", stats.max_slack);
 
-  log_->info(log_, GPL, "timing", 340, "Timing pass run: {} violating paths", count_str);
-  log_->info(log_, GPL, "timing", 341, "avg slack: {}", avg_str);
-  log_->info(log_, GPL, "timing", 342, "min slack: {}", min_str);
-  log_->info(log_, GPL, "timing", 343, "max slack: {}", max_str);
+  log_->info(GPL, 340, "Timing pass run: {} violating paths", count_str);
+  log_->info(GPL, 341, "avg slack: {}", avg_str);
+  log_->info(GPL, 342, "min slack: {}", min_str);
+  log_->info(GPL, 343, "max slack: {}", max_str);
 
 
 
