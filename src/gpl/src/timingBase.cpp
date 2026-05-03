@@ -12,6 +12,7 @@
 #include <vector>
 #include <format>
 #include <string>
+#include <thread>
 
 #include "sta/Mode.hh"
 #include "db_sta/dbNetwork.hh"
@@ -222,12 +223,20 @@ bool TimingBase::executeTimingDriven(bool run_journal_restore)
   return true;
 }
 
-// Fairly obvious what this should do. LLMs were fairly heavily utilized for
-// this, however the code seems sensible.
-std::vector<ViolatingPath> TimingPass::getViolatingPaths(
-    int path_end_count,
-    NesterovBaseCommon& nbc)
+void TimingPass::gradientPass(NesterovBaseCommon& nbc,
+                              NesterovBaseVars& nbv,
+                              std::vector<FloatPoint>& grad)
 {
+  if (!_enabled) {
+    return;
+  }
+
+  debugPrint(log_, GPL, "timing", 1, "gradientPass: top_n={}, slack_offset={}", top_n, slack_offset);
+
+  // ==========================================================================
+  // Section 1: Query STA for violating path ends
+  // ==========================================================================
+  
   // Filter parameters for finding path ends.
   // nullptr means no restriction on that filter dimension.
   sta::ExceptionFrom* from = nullptr;      // No from-pin filter
@@ -243,7 +252,7 @@ std::vector<ViolatingPath> TimingPass::getViolatingPaths(
   // How many paths to find per path group (max means unlimited)
   int group_path_count = sta::PathGroup::group_path_count_max;
   // Limit to top_n worst paths per unique endpoint pin
-  int endpoint_path_count = path_end_count;
+  int endpoint_path_count = static_cast<int>(top_n);
   bool unique_pins = false;        // Don't filter for unique pins
   bool unique_edges = false;       // Don't filter for unique edges
   float slack_min = -sta::INF;        // Capture all paths (no lower bound)
@@ -261,43 +270,31 @@ std::vector<ViolatingPath> TimingPass::getViolatingPaths(
 
    // Query STA for path ends matching our filter criteria
    // This returns paths sorted by slack (most critical first)
-   debugPrint(log_, GPL, "timing", 1, "getViolatingPaths: scenes.size()={}, slack_min={}, slack_max={}, unconstrained={}, setup={}, hold={}, recovery={}, removal={}, clk_gating_setup={}, clk_gating_hold={}",
+   debugPrint(log_, GPL, "timing", 1, "gradientPass: scenes.size()={}, slack_min={}, slack_max={}, unconstrained={}, setup={}, hold={}, recovery={}, removal={}, clk_gating_setup={}, clk_gating_hold={}",
               scenes.size(), slack_min, slack_max, unconstrained, setup, hold, recovery, removal, clk_gating_setup, clk_gating_hold);
    if (!scenes.empty()) {
-     debugPrint(log_, GPL, "timing", 1, "getViolatingPaths: first_scene_name={}", scenes[0]->name());
+     debugPrint(log_, GPL, "timing", 1, "gradientPass: first_scene_name={}", scenes[0]->name());
    } else {
-     debugPrint(log_, GPL, "timing", 1, "getViolatingPaths: scenes is empty");
+     debugPrint(log_, GPL, "timing", 1, "gradientPass: scenes is empty");
    }
    
    if (sta_->cmdScene()) {
-     debugPrint(log_, GPL, "timing", 1, "getViolatingPaths: cmd_scene_name={}", sta_->cmdScene()->name());
+     debugPrint(log_, GPL, "timing", 1, "gradientPass: cmd_scene_name={}", sta_->cmdScene()->name());
      if (sta_->cmdMode()) {
-       debugPrint(log_, GPL, "timing", 1, "getViolatingPaths: cmd_mode_name={}", sta_->cmdMode()->name());
+       debugPrint(log_, GPL, "timing", 1, "gradientPass: cmd_mode_name={}", sta_->cmdMode()->name());
      }
    } else {
-     debugPrint(log_, GPL, "timing", 1, "getViolatingPaths: cmd_scene is nullptr");
+     debugPrint(log_, GPL, "timing", 1, "gradientPass: cmd_scene is nullptr");
    }
 
    // Check if sta_->scenes() has anything
    auto sta_scenes = sta_->scenes();
-   debugPrint(log_, GPL, "timing", 1, "getViolatingPaths: sta_->scenes().size()={}", sta_scenes.size());
+   debugPrint(log_, GPL, "timing", 1, "gradientPass: sta_->scenes().size()={}", sta_scenes.size());
    if (!sta_scenes.empty()) {
-     debugPrint(log_, GPL, "timing", 1, "getViolatingPaths: sta_->scenes()[0].name={}", sta_scenes[0]->name());
+     debugPrint(log_, GPL, "timing", 1, "gradientPass: sta_->scenes()[0].name={}", sta_scenes[0]->name());
    }
 
-   // debugPrint(log_, GPL, "timing", 1, "getViolatingPaths: About to run findPathEnds");
-   // debugPrint(log_, GPL, "timing", 1, "getViolatingPaths: About to run findPathEnds");
-   // debugPrint(log_, GPL, "timing", 1, "getViolatingPaths: About to run findPathEnds");
-   // debugPrint(log_, GPL, "timing", 1, "getViolatingPaths: About to run findPathEnds");
-   // debugPrint(log_, GPL, "timing", 1, "getViolatingPaths: About to run findPathEnds");
-   // debugPrint(log_, GPL, "timing", 1, "getViolatingPaths: About to run findPathEnds");
-   // debugPrint(log_, GPL, "timing", 1, "getViolatingPaths: About to run findPathEnds");
-   // debugPrint(log_, GPL, "timing", 1, "getViolatingPaths: About to run findPathEnds");
-   // debugPrint(log_, GPL, "timing", 1, "getViolatingPaths: About to run findPathEnds");
-   // debugPrint(log_, GPL, "timing", 1, "getViolatingPaths: About to run findPathEnds");
-   debugPrint(log_, GPL, "timing", 1, "getViolatingPaths: About to run findPathEnds");
-   debugPrint(log_, GPL, "timing", 1, "getViolatingPaths: About to run findPathEnds");
-   debugPrint(log_, GPL, "timing", 1, "getViolatingPaths: About to run findPathEnds");
+   debugPrint(log_, GPL, "timing", 1, "gradientPass: About to run findPathEnds");
    sta::PathEndSeq ends = sta_->findPathEnds(from,
                                               thrus,
                                               to,
@@ -318,19 +315,27 @@ std::vector<ViolatingPath> TimingPass::getViolatingPaths(
                                               removal,
                                               clk_gating_setup,
                                               clk_gating_hold);
-   debugPrint(log_, GPL, "timing", 1, "getViolatingPaths: Ran findPathEnds");
-   debugPrint(log_, GPL, "timing", 1, "getViolatingPaths: Ran findPathEnds");
-   debugPrint(log_, GPL, "timing", 1, "getViolatingPaths: Ran findPathEnds");
-   // debugPrint(log_, GPL, "timing", 1, "getViolatingPaths: ends.size()={}", ends.size());
+   debugPrint(log_, GPL, "timing", 1, "gradientPass: Ran findPathEnds, found {} ends", ends.size());
+   debugPrint(log_, GPL, "timing", 1, "gradientPass: Sleeping for 30 seconds");
+   std::this_thread::sleep_for(30);
 
   // Get the database network adapter for converting between OpenSTA and OpenDB
   // objects
   sta::dbNetwork* network = sta_->getDbNetwork();
-  std::vector<ViolatingPath> violating_paths;
+
+  // ==========================================================================
+  // Section 2: Process path ends on the fly and compute gradients
+  // ==========================================================================
+  
+  // Statistics tracking (computed on the fly)
+  size_t path_count = 0;
+  float sum_slack = 0.0f;
+  float min_slack = 0.0f;
+  float max_slack = 0.0f;
+  bool first_valid_path = true;
 
   // Iterate through each path endpoint found by STA
   for (sta::PathEnd* end : ends) {
-     // debugPrint(log_, GPL, "timing", 1, "getViolatingPaths: end slack={}", end->slack(sta_));
      // Get the endpoint pin of this path (the sink/flop input or output port)
      Slack slack = end->slack(sta_);
 
@@ -340,9 +345,17 @@ std::vector<ViolatingPath> TimingPass::getViolatingPaths(
       continue;
     }
 
-    // Create a violating path record for this endpoint
-    ViolatingPath violating_path;
-    violating_path.slack = slack;
+    // Update statistics
+    path_count++;
+    sum_slack += slack;
+    if (first_valid_path) {
+      min_slack = slack;
+      max_slack = slack;
+      first_valid_path = false;
+    } else {
+      if (slack < min_slack) min_slack = slack;
+      if (slack > max_slack) max_slack = slack;
+    }
 
     // Walk backwards through the path from endpoint to source
     // Each Path object represents a timing point in the path
@@ -385,57 +398,7 @@ std::vector<ViolatingPath> TimingPass::getViolatingPaths(
       path = path->prevPath();
     }
 
-    // Store the sequence of GCell indices for this violating path
-    violating_path.gCellIndexSequence = std::move(gCell_indices);
-    violating_paths.push_back(violating_path);
-  }
-
-  return violating_paths;
-}
-
-ViolatingPathStats TimingPass::getViolatingPathStats(std::vector<ViolatingPath>& paths,
-                                                     NesterovBaseCommon& nbc)
-{
-  if (paths.empty()) {
-    return {0, 0.0f, 0.0f, 0.0f};
-  }
-  float sum = 0;
-  float min_s = paths[0].slack;
-  float max_s = paths[0].slack;
-  for (const auto& p : paths) {
-    sum += p.slack;
-    if (p.slack < min_s) min_s = p.slack;
-    if (p.slack > max_s) max_s = p.slack;
-  }
-  return {paths.size(), sum / paths.size(), min_s, max_s};
-}
-
-void TimingPass::gradientPass(NesterovBaseCommon& nbc,
-                               NesterovBaseVars& nbv,
-                               std::vector<FloatPoint>& grad)
-{
-  if (!_enabled) {
-    return;
-  }
-
-  debugPrint(log_, GPL, "timing", 1, "gradientPass: top_n={}, slack_offset={}", top_n, slack_offset);
-  std::vector<ViolatingPath> paths = getViolatingPaths(top_n, nbc);
-
-  auto stats = getViolatingPathStats(paths, nbc);
-  auto count_str = std::to_string(stats.count);
-  auto avg_str = fmt::format("{:.4f}", stats.avg_slack);
-  auto min_str = fmt::format("{:.4f}", stats.min_slack);
-  auto max_str = fmt::format("{:.4f}", stats.max_slack);
-
-  debugPrint(log_, GPL, "timing", 1, "Timing pass run: {} violating paths", count_str);
-  debugPrint(log_, GPL, "timing", 1, "avg slack: {}", avg_str);
-  debugPrint(log_, GPL, "timing", 1, "min slack: {}", min_str);
-  debugPrint(log_, GPL, "timing", 1, "max slack: {}", max_str);
-
-
-
-  for (const auto& path : paths) {
-    const auto& gCell_indices = path.gCellIndexSequence;
+    // Now process this path's gradient contribution immediately
     if (gCell_indices.size() < 2) {
       continue;
     }
@@ -448,7 +411,7 @@ void TimingPass::gradientPass(NesterovBaseCommon& nbc,
     const float end2_x = end2.cx();
     const float end2_y = end2.cy();
 
-    if (std::abs(path.slack) > kMinSlackThreshold) {
+    if (std::abs(slack) > kMinSlackThreshold) {
       continue;
     }
 
@@ -456,7 +419,7 @@ void TimingPass::gradientPass(NesterovBaseCommon& nbc,
     // Negative slack (violation) increases weight; zero slack gives weight =
     // exp(-offset).
     const float slack_weight
-        = exp(-1.0f * slack_sharpness * (path.slack + slack_offset));
+        = exp(-1.0f * slack_sharpness * (slack + slack_offset));
 
     for (size_t i = 0; i < gCell_indices.size(); ++i) {
       const size_t cell_idx = gCell_indices[i];
@@ -493,6 +456,22 @@ void TimingPass::gradientPass(NesterovBaseCommon& nbc,
       grad[cell_idx] = grad[cell_idx] + force;
     }
   }
+
+  // ==========================================================================
+  // Section 3: Report statistics
+  // ==========================================================================
+  
+  float avg_slack = path_count > 0 ? sum_slack / path_count : 0.0f;
+  
+  auto count_str = std::to_string(path_count);
+  auto avg_str = fmt::format("{:.4f}", avg_slack);
+  auto min_str = fmt::format("{:.4f}", min_slack);
+  auto max_str = fmt::format("{:.4f}", max_slack);
+
+  debugPrint(log_, GPL, "timing", 1, "Timing pass run: {} violating paths", count_str);
+  debugPrint(log_, GPL, "timing", 1, "avg slack: {}", avg_str);
+  debugPrint(log_, GPL, "timing", 1, "min slack: {}", min_str);
+  debugPrint(log_, GPL, "timing", 1, "max slack: {}", max_str);
 }
 
 }  // namespace gpl

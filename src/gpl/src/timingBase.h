@@ -73,20 +73,6 @@ class TimingBase
   void initTimingOverflowChk();
 };
 
-struct ViolatingPath
-{
-  std::vector<size_t> gCellIndexSequence;
-  float slack;
-};
-
-struct ViolatingPathStats
-{
-  size_t count;
-  float avg_slack;
-  float min_slack;
-  float max_slack;
-};
-
 class TimingPass : public NesterovPassBase
 {
  public:
@@ -107,11 +93,8 @@ class TimingPass : public NesterovPassBase
   }
 
   void gradientPass(NesterovBaseCommon& nbc,
-                    NesterovBaseVars& nbv,
-                    std::vector<FloatPoint>& grad) override;
-
-  ViolatingPathStats getViolatingPathStats(std::vector<ViolatingPath>& paths,
-                                           NesterovBaseCommon& nbc);
+                     NesterovBaseVars& nbv,
+                     std::vector<FloatPoint>& grad) override;
 
   void setTopN(size_t top_n) { this->top_n = top_n; }
 
@@ -122,9 +105,6 @@ class TimingPass : public NesterovPassBase
   void set_enabled(bool enabled) { _enabled = enabled; }
 
  private:
-  std::vector<ViolatingPath> getViolatingPaths(int path_end_count,
-                                               NesterovBaseCommon& nbc);
-
   bool _enabled = false;
   grt::GlobalRouter* grt_ = nullptr;
   rsz::Resizer* rs_ = nullptr;
