@@ -1064,7 +1064,9 @@ class NesterovBase
                        float wlCoeffX,
                        float wlCoeffY);
 
-  void updateGradientsWithTiming(TimingPass& tp);
+  void updateGradientsWithTiming(TimingPass& tp,
+                                 float wlCoeffX,
+                                 float wlCoeffY);
 
   void nbUpdatePrevGradient(float wlCoeffX, float wlCoeffY);
   void nbUpdateCurGradient(float wlCoeffX, float wlCoeffY);
@@ -1270,6 +1272,8 @@ class NesterovBase
 
   // base_wcof
   float baseWireLengthCoef_ = 0;
+  float wireLengthCoefX_ = 0;
+  float wireLengthCoefY_ = 0;
 
   // phi is described in ePlace paper.
   float sum_overflow_ = 0;

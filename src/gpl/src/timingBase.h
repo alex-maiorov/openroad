@@ -37,40 +37,40 @@ class GNet;
 class TimingBase
 {
  public:
-   TimingBase();
-   TimingBase(std::shared_ptr<NesterovBaseCommon> nbc,
-              grt::GlobalRouter* grt,
-              rsz::Resizer* rs,
-              utl::Logger* log);
+  TimingBase();
+  TimingBase(std::shared_ptr<NesterovBaseCommon> nbc,
+             grt::GlobalRouter* grt,
+             rsz::Resizer* rs,
+             utl::Logger* log);
 
-   // check whether overflow reached the timingOverflow
-   bool isTimingNetWeightOverflow(float overflow);
-   void addTimingNetWeightOverflow(int overflow);
-   void setTimingNetWeightOverflows(const std::vector<int>& overflows);
-   void deleteTimingNetWeightOverflow(int overflow);
-   void clearTimingNetWeightOverflow();
-   size_t getTimingNetWeightOverflowSize() const;
+  // check whether overflow reached the timingOverflow
+  bool isTimingNetWeightOverflow(float overflow);
+  void addTimingNetWeightOverflow(int overflow);
+  void setTimingNetWeightOverflows(const std::vector<int>& overflows);
+  void deleteTimingNetWeightOverflow(int overflow);
+  void clearTimingNetWeightOverflow();
+  size_t getTimingNetWeightOverflowSize() const;
 
-   void setTimingNetWeightMax(float max);
+  void setTimingNetWeightMax(float max);
 
-   grt::GlobalRouter* getGlobalRouter() const { return grt_; }
-   rsz::Resizer* getResizer() const { return rs_; }
+  grt::GlobalRouter* getGlobalRouter() const { return grt_; }
+  rsz::Resizer* getResizer() const { return rs_; }
 
-   // updateNetWeight.
-   // True: successfully reweighted gnets
-   // False: no slacks found
-   bool executeTimingDriven(bool run_journal_restore);
+  // updateNetWeight.
+  // True: successfully reweighted gnets
+  // False: no slacks found
+  bool executeTimingDriven(bool run_journal_restore);
 
  private:
-   grt::GlobalRouter* grt_ = nullptr;
-   rsz::Resizer* rs_ = nullptr;
-   utl::Logger* log_ = nullptr;
-   std::shared_ptr<NesterovBaseCommon> nbc_;
+  grt::GlobalRouter* grt_ = nullptr;
+  rsz::Resizer* rs_ = nullptr;
+  utl::Logger* log_ = nullptr;
+  std::shared_ptr<NesterovBaseCommon> nbc_;
 
-   std::vector<int> timingNetWeightOverflow_;
-   std::vector<int> timingOverflowChk_;
-   float net_weight_max_ = 5;
-   void initTimingOverflowChk();
+  std::vector<int> timingNetWeightOverflow_;
+  std::vector<int> timingOverflowChk_;
+  float net_weight_max_ = 5;
+  void initTimingOverflowChk();
 };
 
 struct ViolatingPath
@@ -79,7 +79,8 @@ struct ViolatingPath
   float slack;
 };
 
-struct ViolatingPathStats {
+struct ViolatingPathStats
+{
   size_t count;
   float avg_slack;
   float min_slack;
@@ -89,53 +90,53 @@ struct ViolatingPathStats {
 class TimingPass : public NesterovPassBase
 {
  public:
-   TimingPass(sta::dbSta* sta,
-              utl::Logger* log,
-              size_t top_n = 10,
-              float proj_weight = 1.0F,
-              float end_to_end_weight = 1.0F,
-              float slack_sharpness = 1.0F,
-              float slack_offset = 0.0F);
+  TimingPass(sta::dbSta* sta,
+             utl::Logger* log,
+             size_t top_n = 10,
+             float proj_weight = 1.0F,
+             float end_to_end_weight = 1.0F,
+             float slack_sharpness = 1.0F,
+             float slack_offset = 0.0F);
 
-   void runSTA()
-   {
-     sta_->updateTiming(false);
-     sta_->ensureLibLinked();
-     debugPrint(log_, GPL, "timing", 1, "STA updated.");
-   }
+  void runSTA()
+  {
+    sta_->updateTiming(false);
+    sta_->ensureLibLinked();
+    debugPrint(log_, GPL, "timing", 1, "STA updated.");
+  }
 
-   void gradientPass(NesterovBaseCommon& nbc,
-                     NesterovBaseVars& nbv,
-                     std::vector<FloatPoint>& grad) override;
+  void gradientPass(NesterovBaseCommon& nbc,
+                    NesterovBaseVars& nbv,
+                    std::vector<FloatPoint>& grad) override;
 
-   ViolatingPathStats getViolatingPathStats(std::vector<ViolatingPath>& paths,
-                                            NesterovBaseCommon& nbc);
+  ViolatingPathStats getViolatingPathStats(std::vector<ViolatingPath>& paths,
+                                           NesterovBaseCommon& nbc);
 
-   void setTopN(size_t top_n) { top_n = top_n; }
+  void setTopN(size_t top_n) { this->top_n = top_n; }
 
-
-   void setProjWeight(float weight) { proj_weight = weight; }
-   void setEndToEndWeight(float weight) { end_to_end_weight = weight; }
-   void setSlackSharpness(float sharpness) { slack_sharpness = sharpness; }
-    void set_enabled(bool enabled) { _enabled = enabled; }
+  void setProjWeight(float weight) { proj_weight = weight; }
+  void setEndToEndWeight(float weight) { end_to_end_weight = weight; }
+  void setSlackSharpness(float sharpness) { slack_sharpness = sharpness; }
+  void setSlackOffset(float offset) { slack_offset = offset; }
+  void set_enabled(bool enabled) { _enabled = enabled; }
 
  private:
-   std::vector<ViolatingPath> getViolatingPaths(int path_end_count,
-                                                NesterovBaseCommon& nbc);
+  std::vector<ViolatingPath> getViolatingPaths(int path_end_count,
+                                               NesterovBaseCommon& nbc);
 
-   bool _enabled = false;
-   grt::GlobalRouter* grt_ = nullptr;
-   rsz::Resizer* rs_ = nullptr;
-   utl::Logger* log_ = nullptr;
-   sta::dbSta* sta_ = nullptr;
+  bool _enabled = false;
+  grt::GlobalRouter* grt_ = nullptr;
+  rsz::Resizer* rs_ = nullptr;
+  utl::Logger* log_ = nullptr;
+  sta::dbSta* sta_ = nullptr;
 
-   size_t top_n = 10;
-   float proj_weight = 1.0F;
-   float end_to_end_weight = 1.0F;
-   float slack_sharpness = 1.0F;
-   float slack_offset = 0.0F;
+  size_t top_n = 10;
+  float proj_weight = 1.0F;
+  float end_to_end_weight = 1.0F;
+  float slack_sharpness = 1.0F;
+  float slack_offset = 0.0F;
 
-   static constexpr float kMinSlackThreshold = 1e-3f;
+  static constexpr float kMinSlackThreshold = 1e-3f;
 };
 
 }  // namespace gpl

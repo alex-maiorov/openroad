@@ -2,8 +2,6 @@
 // Copyright (c) 2018-2025, The OpenROAD Authors
 
 #include "nesterovBase.h"
-#include "timingBase.h"
-#include "timingBase.h"
 
 #include <algorithm>
 #include <cassert>
@@ -27,11 +25,11 @@
 #include "fft.h"
 #include "gpl/Replace.h"
 #include "nesterovPlace.h"
-#include "timingBase.h"
 #include "odb/db.h"
 #include "omp.h"
 #include "placerBase.h"
 #include "point.h"
+#include "timingBase.h"
 #include "utl/Logger.h"
 
 #define REPLACE_SQRT2 1.414213562373095048801L
@@ -2796,13 +2794,15 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
   debugPrint(log_, GPL, "updateGrad", 1, "GradSum: {:g}", gradSum);
 }
 
-void NesterovBase::updateGradientsWithTiming(TimingPass& tp)
+void NesterovBase::updateGradientsWithTiming(TimingPass& tp,
+                                             float wlCoeffX,
+                                             float wlCoeffY)
 {
   std::vector<FloatPoint> wireLengthGrads(nb_gcells_.size());
   std::vector<FloatPoint> densityGrads(nb_gcells_.size());
   std::vector<FloatPoint> sumGrads(nb_gcells_.size());
 
-  updateGradients(sumGrads, wireLengthGrads, densityGrads, wireLengthCoefX_, wireLengthCoefY_);
+  updateGradients(sumGrads, wireLengthGrads, densityGrads, wlCoeffX, wlCoeffY);
 
   tp.gradientPass(*nbc_, nbVars_, sumGrads);
 
