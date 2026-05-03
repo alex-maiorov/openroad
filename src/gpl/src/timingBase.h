@@ -100,7 +100,8 @@ class TimingPass : public NesterovPassBase
 
   void runSTA()
   {
-    sta_->updateTiming(false);
+
+    sta_->updateTiming(true);
     sta_->ensureLibLinked();
     debugPrint(log_, GPL, "timing", 1, "STA updated.");
   }
