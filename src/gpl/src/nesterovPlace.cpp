@@ -627,9 +627,7 @@ void NesterovPlace::runTimingPass(int iter,
     return;
   }
 
-  if (npVars_.timingDrivenMode
-      && tb_->isTimingNetWeightOverflow(average_overflow_unscaled_)
-      && (!is_routability_gpl_iter || !npVars_.routability_driven_mode)) {
+  if (npVars_.timingDrivenMode) {
     updateDb();
 
     log_->info(GPL,
