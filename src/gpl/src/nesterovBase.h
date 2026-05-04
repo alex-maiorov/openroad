@@ -782,9 +782,14 @@ struct NesterovPlaceVars
   bool timingDrivenMode;
   int timingDrivenIterCounter = 0;
   const bool routability_driven_mode;
-  const bool disableRevertIfDiverge;
-
-  bool debug = false;
+   const bool disableRevertIfDiverge;
+   int timing_pass_top_n;
+   float timing_pass_proj_weight;
+   float timing_pass_end_to_end_weight;
+   float timing_pass_slack_sharpness;
+   float timing_pass_slack_offset;
+   int timing_pass_sta_run_interval;
+   bool debug = false;
   int debug_pause_iterations = 10;
   int debug_update_iterations = 10;
   bool debug_draw_bins = true;

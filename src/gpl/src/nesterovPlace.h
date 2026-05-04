@@ -41,22 +41,16 @@ class NesterovPlace
 {
  public:
   NesterovPlace();
-  NesterovPlace(const NesterovPlaceVars& npVars,
-                const std::shared_ptr<PlacerBaseCommon>& pbc,
-                const std::shared_ptr<NesterovBaseCommon>& nbc,
-                std::vector<std::shared_ptr<PlacerBase>>& pbVec,
-                std::vector<std::shared_ptr<NesterovBase>>& nbVec,
-                std::shared_ptr<RouteBase> rb,
-                std::shared_ptr<TimingBase> tb,
-                sta::dbSta* sta,
-                std::unique_ptr<AbstractGraphics> graphics,
-                utl::Logger* log,
-                int timing_pass_top_n = 10,
-                float timing_pass_proj_weight = 1.0F,
-                float timing_pass_end_to_end_weight = 1.0F,
-                 float timing_pass_slack_sharpness = 1.0F,
-                 float timing_pass_slack_offset = 0.0F,
-                 int timing_pass_sta_run_interval = 10);
+   NesterovPlace(const NesterovPlaceVars& npVars,
+                 const std::shared_ptr<PlacerBaseCommon>& pbc,
+                 const std::shared_ptr<NesterovBaseCommon>& nbc,
+                 std::vector<std::shared_ptr<PlacerBase>>& pbVec,
+                 std::vector<std::shared_ptr<NesterovBase>>& nbVec,
+                 std::shared_ptr<RouteBase> rb,
+                 std::shared_ptr<TimingBase> tb,
+                 sta::dbSta* sta,
+                 std::unique_ptr<AbstractGraphics> graphics,
+                 utl::Logger* log);
 
   ~NesterovPlace();
 
@@ -160,7 +154,6 @@ class NesterovPlace
    std::shared_ptr<TimingPass> tp_;
    sta::dbSta* sta_ = nullptr;
    NesterovPlaceVars npVars_;
-   int timing_gradpass_sta_run_interval = 10;
    std::unique_ptr<AbstractGraphics> graphics_;
 
 

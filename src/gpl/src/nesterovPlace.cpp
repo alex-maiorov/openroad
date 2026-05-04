@@ -43,15 +43,8 @@ NesterovPlace::NesterovPlace(const NesterovPlaceVars& npVars,
                              std::shared_ptr<TimingBase> tb,
                              sta::dbSta* sta,
                              std::unique_ptr<gpl::AbstractGraphics> graphics,
-                             utl::Logger* log,
-                             int timing_pass_top_n,
-                             float timing_pass_proj_weight,
-                             float timing_pass_end_to_end_weight,
-                             float timing_pass_slack_sharpness,
-                             float timing_pass_slack_offset,
-                             int timing_pass_sta_run_interval)
-    : npVars_(npVars),
-      timing_gradpass_sta_run_interval(timing_pass_sta_run_interval)
+                             utl::Logger* log)
+    : npVars_(npVars)
 {
   pbc_ = pbc;
   nbc_ = nbc;
@@ -64,11 +57,11 @@ NesterovPlace::NesterovPlace(const NesterovPlaceVars& npVars,
 
   tp_ = std::make_shared<TimingPass>(sta_,
                                      log_,
-                                     timing_pass_top_n,
-                                     timing_pass_proj_weight,
-                                     timing_pass_end_to_end_weight,
-                                     timing_pass_slack_sharpness,
-                                     timing_pass_slack_offset);
+                                     npVars_.timing_pass_top_n,
+                                     npVars_.timing_pass_proj_weight,
+                                     npVars_.timing_pass_end_to_end_weight,
+                                     npVars_.timing_pass_slack_sharpness,
+                                     npVars_.timing_pass_slack_offset);
   tp_->set_enabled(npVars_.timingDrivenMode);
 
   db_cbk_ = std::make_unique<nesterovDbCbk>(this);
@@ -135,7 +128,7 @@ void NesterovPlace::setTimingPassSlackOffset(float slack_offset)
 
 void NesterovPlace::setTimingPassStaRunInterval(int interval)
 {
-  timing_gradpass_sta_run_interval = interval;
+  npVars_.timing_pass_sta_run_interval = interval;
 }
 
 void NesterovPlace::npUpdatePrevGradient(
@@ -634,7 +627,7 @@ void NesterovPlace::runTimingPass(int iter,
                103,
                "Timing-pass iteration {}",
                ++npVars_.timingDrivenIterCounter);
-    if (npVars_.timingDrivenIterCounter % timing_gradpass_sta_run_interval
+    if (npVars_.timingDrivenIterCounter % npVars_.timing_pass_sta_run_interval
         == 0) {
       tp_->runSTA();
     }
@@ -1193,12 +1186,6 @@ int NesterovPlace::doNesterovPlace(int start_iter)
       ++npVars_.maxNesterovIter;
     }
 
-    // runTimingDriven(nesterov_iter,
-    //                 timing_driven_dir,
-    //                 routability_driven_revert_count,
-    //                 timing_driven_count,
-    //                 td_accumulated_delta_area,
-    //                 is_routability_gpl_iter);
 
     // Run the cell-to-cell timing pass
     runTimingPass(nesterov_iter,

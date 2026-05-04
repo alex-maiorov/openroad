@@ -293,21 +293,15 @@ bool Replace::initNesterovPlace(const PlaceOptions& options,
     }
 
      np_ = std::make_unique<NesterovPlace>(npVars,
-                                           pbc_,
-                                           nbc_,
-                                           pbVec_,
-                                           nbVec_,
-                                           rb_,
-                                           tb_,
-                                           sta_,
-                                           graphics_->MakeNew(log_),
-                                           log_,
-                                           options.timingGradPassTopN,
-                                           options.timingGradPassProjWeight,
-                                           options.timingGradPassEndToEndWeight,
-                                           options.timingGradPassSlackSharpness,
-                                           options.timingGradPassSlackOffset,
-                                           options.timingGradPassStaRunInterval);
+                                            pbc_,
+                                            nbc_,
+                                            pbVec_,
+                                            nbVec_,
+                                            rb_,
+                                            tb_,
+                                            sta_,
+                                            graphics_->MakeNew(log_),
+                                            log_);
 
   }
   // Ensure these get set even if np_ already exists.
