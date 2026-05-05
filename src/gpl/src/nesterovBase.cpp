@@ -29,6 +29,7 @@
 #include "omp.h"
 #include "placerBase.h"
 #include "point.h"
+#include "timingBase.h"
 #include "utl/Logger.h"
 
 #define REPLACE_SQRT2 1.414213562373095048801L
@@ -1035,7 +1036,13 @@ NesterovPlaceVars::NesterovPlaceVars(const PlaceOptions& options)
       keepResizeBelowOverflow(options.keepResizeBelowOverflow),
       timingDrivenMode(options.timingDrivenMode),
       routability_driven_mode(options.routabilityDrivenMode),
-      disableRevertIfDiverge(options.disableRevertIfDiverge)
+      disableRevertIfDiverge(options.disableRevertIfDiverge),
+      timing_pass_top_n(options.timingGradPassTopN),
+      timing_pass_proj_weight(options.timingGradPassProjWeight),
+      timing_pass_end_to_end_weight(options.timingGradPassEndToEndWeight),
+      timing_pass_slack_sharpness(options.timingGradPassSlackSharpness),
+      timing_pass_slack_offset(options.timingGradPassSlackOffset),
+      timing_pass_sta_run_interval(options.timingGradPassStaRunInterval)
 {
 }
 

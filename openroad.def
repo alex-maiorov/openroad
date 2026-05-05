@@ -1,0 +1,48 @@
+Bootstrap: localimage
+From: ../../openroad_base.sif
+
+%environment
+    export DEBIAN_FRONTEND=noninteractive
+    export TZ=Europe/Zurich
+    export LANG=C.UTF-8
+    export LC_ALL=C.UTF-8
+    export OPENROAD_EXE=/usr/bin/openroad
+
+%files
+    . /OpenROAD-new
+
+%post
+    # set -e
+
+    # Let us hope that excluding git is not a bad idea.
+    rsync -rluv --checksum --exclude="*.git*" /OpenROAD-new/ /OpenROAD/
+
+    # Build OpenROAD
+    cd /OpenROAD
+
+    if [ -f /opt/rh/gcc-toolset-13/enable ]; then
+        source /opt/rh/gcc-toolset-13/enable
+    fi
+
+    DEPS_ARGS=""
+    if [ -f /etc/openroad_deps_prefixes.txt ]; then
+        DEPS_ARGS=$(cat /etc/openroad_deps_prefixes.txt)
+    fi
+
+    cmake -B build -S . -DCMAKE_BUILD_TYPE=Release $DEPS_ARGS
+    cmake --build build -- -j $(nproc)
+
+    cp /OpenROAD/build/bin/openroad /usr/bin/
+
+    cp /OpenROAD/etc/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+
+    chmod 775 /usr/local/bin/docker-entrypoint.sh
+
+    # Philosophers still ask to this day why we need this, but we do.
+    echo "" > /etc/ld.so.conf.d/99_openroad.conf
+    echo "/opt/or-tools/lib/" >> /etc/ld.so.conf.d/99_openroad.conf
+    ldconfig
+
+%labels
+    Author OpenROAD
+

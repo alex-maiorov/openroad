@@ -43,12 +43,7 @@ NesterovPlace::NesterovPlace(const NesterovPlaceVars& npVars,
                              std::shared_ptr<TimingBase> tb,
                              sta::dbSta* sta,
                              std::unique_ptr<gpl::AbstractGraphics> graphics,
-                             utl::Logger* log,
-                             int timing_pass_top_n,
-                             float timing_pass_proj_weight,
-                             float timing_pass_end_to_end_weight,
-                             float timing_pass_slack_sharpness,
-                             float timing_pass_slack_offset)
+                             utl::Logger* log)
     : npVars_(npVars)
 {
   pbc_ = pbc;
@@ -59,14 +54,13 @@ NesterovPlace::NesterovPlace(const NesterovPlaceVars& npVars,
   tb_ = std::move(tb);
   sta_ = sta;
   log_ = log;
-
   // Initialize timing pass parameters in each NesterovBase object
   for (auto& nb : nbVec_) {
-    nb->setTimingPassTopN(timing_pass_top_n);
-    nb->setTimingPassProjWeight(timing_pass_proj_weight);
-    nb->setTimingPassEndToEndWeight(timing_pass_end_to_end_weight);
-    nb->setTimingPassSlackSharpness(timing_pass_slack_sharpness);
-    nb->setTimingPassSlackOffset(timing_pass_slack_offset);
+    nb->setTimingPassTopN(npVars_.timing_pass_top_n);
+    nb->setTimingPassProjWeight(npVars_.timing_pass_proj_weight);
+    nb->setTimingPassEndToEndWeight(npVars_.timing_pass_end_to_end_weight);
+    nb->setTimingPassSlackSharpness(npVars_.timing_pass_slack_sharpness);
+    nb->setTimingPassSlackOffset(npVars_.timing_pass_slack_offset);
   }
 
   db_cbk_ = std::make_unique<nesterovDbCbk>(this);
@@ -129,6 +123,11 @@ void NesterovPlace::setTimingPassSlackOffset(float slack_offset)
   for (auto& nb : nbVec_) {
     nb->setTimingPassSlackOffset(slack_offset);
   }
+}
+
+void NesterovPlace::setTimingPassStaRunInterval(int interval)
+{
+  npVars_.timing_pass_sta_run_interval = interval;
 }
 
 void NesterovPlace::npUpdatePrevGradient(
@@ -616,10 +615,18 @@ void NesterovPlace::runTimingPass(int iter,
                                    int64_t& td_accumulated_delta_area,
                                    bool is_routability_gpl_iter)
 {
+<<<<<<< HEAD
+=======
+  if (!tp_) {
+    return;
+  }
+
+>>>>>>> origin
   if (npVars_.timingDrivenMode) {
     updateDb();
 
     log_->info(GPL,
+<<<<<<< HEAD
                 103,
                 "Timing-pass iteration {}",
                 ++npVars_.timingDrivenIterCounter);
@@ -631,6 +638,18 @@ void NesterovPlace::runTimingPass(int iter,
         nb->updateSTA();
         nb->queryTimingViolations(*nbc_);
       }
+=======
+               103,
+               "Timing-pass iteration {}",
+               ++npVars_.timingDrivenIterCounter);
+    if (npVars_.timingDrivenIterCounter % npVars_.timing_pass_sta_run_interval
+        == 0) {
+      tp_->runSTA();
+    }
+
+    for (auto& nb : nbVec_) {
+      nb->updateGradientsWithTiming(*tp_, wireLengthCoefX_, wireLengthCoefY_);
+>>>>>>> origin
     }
 
     ++timing_driven_count;
@@ -1183,6 +1202,11 @@ int NesterovPlace::doNesterovPlace(int start_iter)
       ++npVars_.maxNesterovIter;
     }
 
+<<<<<<< HEAD
+=======
+
+    // Run the cell-to-cell timing pass
+>>>>>>> origin
     runTimingPass(nesterov_iter,
                   timing_driven_dir,
                   routability_driven_revert_count,
@@ -1348,7 +1372,7 @@ void NesterovPlace::createCbkGCell(odb::dbInst* db_inst)
     if (!found_nb) {
       log_->warn(
           GPL,
-          8,
+          9,
           "Unable to find NesterovBase for group ({}) to insert instance ({}).",
           group->getName(),
           db_inst->getName());

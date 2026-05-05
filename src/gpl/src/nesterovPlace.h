@@ -39,21 +39,17 @@ class NesterovPlace
 {
  public:
   NesterovPlace();
-  NesterovPlace(const NesterovPlaceVars& npVars,
-                const std::shared_ptr<PlacerBaseCommon>& pbc,
-                const std::shared_ptr<NesterovBaseCommon>& nbc,
-                std::vector<std::shared_ptr<PlacerBase>>& pbVec,
-                std::vector<std::shared_ptr<NesterovBase>>& nbVec,
-                std::shared_ptr<RouteBase> rb,
-                std::shared_ptr<TimingBase> tb,
-                sta::dbSta* sta,
-                std::unique_ptr<AbstractGraphics> graphics,
-                utl::Logger* log,
-                int timing_pass_top_n = 10,
-                float timing_pass_proj_weight = 1.0F,
-                float timing_pass_end_to_end_weight = 1.0F,
-                float timing_pass_slack_sharpness = 1.0F,
-                float timing_pass_slack_offset = 0.0F);
+   NesterovPlace(const NesterovPlaceVars& npVars,
+                 const std::shared_ptr<PlacerBaseCommon>& pbc,
+                 const std::shared_ptr<NesterovBaseCommon>& nbc,
+                 std::vector<std::shared_ptr<PlacerBase>>& pbVec,
+                 std::vector<std::shared_ptr<NesterovBase>>& nbVec,
+                 std::shared_ptr<RouteBase> rb,
+                 std::shared_ptr<TimingBase> tb,
+                 sta::dbSta* sta,
+                 std::unique_ptr<AbstractGraphics> graphics,
+                 utl::Logger* log);
+
   ~NesterovPlace();
 
   // return iteration count
@@ -78,9 +74,10 @@ class NesterovPlace
   void setTimingPassProjWeight(float proj_weight);
   void setTimingPassEndToEndWeight(float end_to_end_weight);
   void setTimingPassSlackSharpness(float slack_sharpness);
-  void setTimingPassSlackOffset(float slack_offset);
+   void setTimingPassSlackOffset(float slack_offset);
+   void setTimingPassStaRunInterval(int interval);
 
-  void npUpdatePrevGradient(const std::shared_ptr<NesterovBase>& nb);
+   void npUpdatePrevGradient(const std::shared_ptr<NesterovBase>& nb);
   void npUpdateCurGradient(const std::shared_ptr<NesterovBase>& nb);
   void npUpdateNextGradient(const std::shared_ptr<NesterovBase>& nb);
 

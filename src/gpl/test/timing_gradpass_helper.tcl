@@ -24,6 +24,9 @@ if { ![info exists ::gpl_timing_gradpass_slack_sharpness] } {
 if { ![info exists ::gpl_timing_gradpass_slack_offset] } {
   set ::gpl_timing_gradpass_slack_offset 0.0
 }
+if { ![info exists ::gpl_timing_gradpass_sta_run_interval] } {
+  set ::gpl_timing_gradpass_sta_run_interval 10
+}
 
 # Get timing gradient pass arguments as a list
 proc get_timing_gradpass_args { } {
@@ -32,7 +35,8 @@ proc get_timing_gradpass_args { } {
     -timing_gradpass_proj_weight $::gpl_timing_gradpass_proj_weight \
     -timing_gradpass_end_to_end_weight $::gpl_timing_gradpass_end_to_end_weight \
     -timing_gradpass_slack_sharpness $::gpl_timing_gradpass_slack_sharpness \
-    -timing_gradpass_slack_offset $::gpl_timing_gradpass_slack_offset]
+    -timing_gradpass_slack_offset $::gpl_timing_gradpass_slack_offset \
+    -timing_gradpass_sta_run_interval $::gpl_timing_gradpass_sta_run_interval]
 }
 
 # Wrapper for global_placement that includes timing gradient pass arguments

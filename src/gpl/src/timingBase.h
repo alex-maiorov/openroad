@@ -9,6 +9,7 @@
 
 #include "db_sta/dbSta.hh"
 #include "sta/Sta.hh"
+#include "utl/Logger.h"
 
 namespace grt {
 class GlobalRouter;
@@ -27,7 +28,7 @@ class Logger;
 }
 
 namespace gpl {
-
+using utl::GPL;
 class NesterovBaseCommon;
 class GNet;
 
@@ -69,5 +70,4 @@ class TimingBase
   float net_weight_max_ = 5;
   void initTimingOverflowChk();
 };
-
 }  // namespace gpl

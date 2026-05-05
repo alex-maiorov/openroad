@@ -60,6 +60,7 @@ set ::gpl_timing_gradpass_proj_weight 1.0
 set ::gpl_timing_gradpass_end_to_end_weight 1.0
 set ::gpl_timing_gradpass_slack_sharpness 1.0
 set ::gpl_timing_gradpass_slack_offset 0.0
+set ::gpl_timing_gradpass_sta_run_interval 10
 
 # Parse timing gradient pass arguments from command line
 proc parse_timing_gradpass_args { cmd_argv } {
@@ -68,6 +69,7 @@ proc parse_timing_gradpass_args { cmd_argv } {
   global ::gpl_timing_gradpass_end_to_end_weight
   global ::gpl_timing_gradpass_slack_sharpness
   global ::gpl_timing_gradpass_slack_offset
+  global ::gpl_timing_gradpass_sta_run_interval
   
   set remaining {}
   set i 0
@@ -110,57 +112,63 @@ proc parse_timing_gradpass_args { cmd_argv } {
           exit 1
         }
       }
-      "-timing_gradpass_slack_offset" {
-        incr i
-        if { $i < [llength $cmd_argv] } {
-          set ::gpl_timing_gradpass_slack_offset [lindex $cmd_argv $i]
-        } else {
-          puts "Error: -timing_gradpass_slack_offset requires a value"
-          exit 1
-        }
-      }
-      "-help" -
-      "-h" {
-        puts {Usage: regression-large [-help] [-timing_gradpass_top_n N]}
-        puts {                  [-timing_gradpass_proj_weight W]}
-        puts {                  [-timing_gradpass_end_to_end_weight W]}
-        puts {                  [-timing_gradpass_slack_sharpness S]}
-        puts {                  [-timing_gradpass_slack_offset O]}
-        puts {                  [test1 [test2...]]}
-        puts {}
-        puts {Timing gradient pass parameters:}
-        puts {  -timing_gradpass_top_n N            : Number of top timing paths (default: 10)}
-        puts {  -timing_gradpass_proj_weight W      : Projection weight (default: 1.0)}
-        puts {  -timing_gradpass_end_to_end_weight W: End-to-end weight (default: 1.0)}
-        puts {  -timing_gradpass_slack_sharpness S  : Slack sharpness (default: 1.0)}
-        puts {  -timing_gradpass_slack_offset O     : Slack offset (default: 0.0)}
-        puts {}
-        puts {Tests are: all, fast, med, slow, or a test group or test name}
-        exit 0
-      }
-      default {
-        lappend remaining $arg
-      }
-    }
-    incr i
-  }
-  return $remaining
+       "-timing_gradpass_slack_offset" {
+         incr i
+         if { $i < [llength $cmd_argv] } {
+           set ::gpl_timing_gradpass_slack_offset [lindex $cmd_argv $i]
+         } else {
+           puts "Error: -timing_gradpass_slack_offset requires a value"
+           exit 1
+         }
+       }
+       "-timing_gradpass_sta_run_interval" {
+         incr i
+         if { $i < [llength $cmd_argv] } {
+           set ::gpl_timing_gradpass_sta_run_interval [lindex $cmd_argv $i]
+         } else {
+           puts "Error: -timing_gradpass_sta_run_interval requires a value"
+           exit 1
+         }
+       }
+         puts {                  [-timing_gradpass_slack_offset O]}
+         puts {                  [test1 [test2...]]}
+         puts {}
+         puts {Timing gradient pass parameters:}
+         puts {  -timing_gradpass_top_n N            : Number of top timing paths (default: 10)}
+         puts {  -timing_gradpass_proj_weight W      : Projection weight (default: 1.0)}
+         puts {  -timing_gradpass_end_to_end_weight W: End-to-end weight (default: 1.0)}
+         puts {  -timing_gradpass_slack_sharpness S  : Slack sharpness (default: 1.0)}
+         puts {  -timing_gradpass_slack_offset O     : Slack offset (default: 0.0)}
+         puts {  -timing_gradpass_sta_run_interval N: STA run interval (default: 10)}
+         puts {}
+         puts {Tests are: all, fast, med, slow, or a test group or test name}
+         exit 0
+       }
+       default {
+         lappend remaining $arg
+       }
+     }
+     incr i
+   }
+   return $remaining
 }
 
 # Get timing gradient pass arguments for global_placement command
 proc get_timing_gradpass_args { } {
-  global ::gpl_timing_gradpass_top_n
-  global ::gpl_timing_gradpass_proj_weight
-  global ::gpl_timing_gradpass_end_to_end_weight
-  global ::gpl_timing_gradpass_slack_sharpness
-  global ::gpl_timing_gradpass_slack_offset
-  
-  return [list \
-    -timing_gradpass_top_n $::gpl_timing_gradpass_top_n \
-    -timing_gradpass_proj_weight $::gpl_timing_gradpass_proj_weight \
-    -timing_gradpass_end_to_end_weight $::gpl_timing_gradpass_end_to_end_weight \
-    -timing_gradpass_slack_sharpness $::gpl_timing_gradpass_slack_sharpness \
-    -timing_gradpass_slack_offset $::gpl_timing_gradpass_slack_offset]
+   global ::gpl_timing_gradpass_top_n
+   global ::gpl_timing_gradpass_proj_weight
+   global ::gpl_timing_gradpass_end_to_end_weight
+   global ::gpl_timing_gradpass_slack_sharpness
+   global ::gpl_timing_gradpass_slack_offset
+   global ::gpl_timing_gradpass_sta_run_interval
+   
+   return [list \
+     -timing_gradpass_top_n $::gpl_timing_gradpass_top_n \
+     -timing_gradpass_proj_weight $::gpl_timing_gradpass_proj_weight \
+     -timing_gradpass_end_to_end_weight $::gpl_timing_gradpass_end_to_end_weight \
+     -timing_gradpass_slack_sharpness $::gpl_timing_gradpass_slack_sharpness \
+     -timing_gradpass_slack_offset $::gpl_timing_gradpass_slack_offset \
+     -timing_gradpass_sta_run_interval $::gpl_timing_gradpass_sta_run_interval]
 }
 
 source [file join $openroad_dir "test" "regression.tcl"]
@@ -176,6 +184,7 @@ puts "  -timing_gradpass_proj_weight = $::gpl_timing_gradpass_proj_weight"
 puts "  -timing_gradpass_end_to_end_weight = $::gpl_timing_gradpass_end_to_end_weight"
 puts "  -timing_gradpass_slack_sharpness = $::gpl_timing_gradpass_slack_sharpness"
 puts "  -timing_gradpass_slack_offset = $::gpl_timing_gradpass_slack_offset"
+puts "  -timing_gradpass_sta_run_interval = $::gpl_timing_gradpass_sta_run_interval"
 puts ""
 
 regression_main
