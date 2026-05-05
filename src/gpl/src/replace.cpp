@@ -259,7 +259,8 @@ bool Replace::initNesterovPlace(const PlaceOptions& options,
         nbVars, pbc_, log_, threads, clusters_);
 
     for (const auto& pb : pbVec_) {
-      nbVec_.push_back(std::make_shared<NesterovBase>(nbVars, pb, nbc_, log_));
+      nbVec_.push_back(
+          std::make_shared<NesterovBase>(nbVars, pb, nbc_, log_, sta_));
     }
   }
 
@@ -292,17 +293,16 @@ bool Replace::initNesterovPlace(const PlaceOptions& options,
       nb->setNpVars(&npVars);
     }
 
-     np_ = std::make_unique<NesterovPlace>(npVars,
-                                            pbc_,
-                                            nbc_,
-                                            pbVec_,
-                                            nbVec_,
-                                            rb_,
-                                            tb_,
-                                            sta_,
-                                            graphics_->MakeNew(log_),
-                                            log_);
-
+    np_ = std::make_unique<NesterovPlace>(npVars,
+                                          pbc_,
+                                          nbc_,
+                                          pbVec_,
+                                          nbVec_,
+                                          rb_,
+                                          tb_,
+                                          sta_,
+                                          graphics_->MakeNew(log_),
+                                          log_);
   }
   // Ensure these get set even if np_ already exists.
   np_->setTargetOverflow(options.overflow);
@@ -319,11 +319,20 @@ int Replace::doNesterovPlace(const int threads,
     return 0;
   }
 
-   log_->info(GPL, 7, "---- Execute Nesterov Global Placement.");
-   if (options.timingDrivenMode) {
-     log_->info(GPL, 8, "Timing driven mode enabled. timing_gradpass parameters: top_n={}, proj_weight={}, end_to_end_weight={}, slack_sharpness={}, slack_offset={}, sta_run_interval={}",
-                options.timingGradPassTopN, options.timingGradPassProjWeight, options.timingGradPassEndToEndWeight, options.timingGradPassSlackSharpness, options.timingGradPassSlackOffset, options.timingGradPassStaRunInterval);
-   }
+  log_->info(GPL, 7, "---- Execute Nesterov Global Placement.");
+  if (options.timingDrivenMode) {
+    log_->info(GPL,
+               8,
+               "Timing driven mode enabled. timing_gradpass parameters: "
+               "top_n={}, proj_weight={}, end_to_end_weight={}, "
+               "slack_sharpness={}, slack_offset={}, sta_run_interval={}",
+               options.timingGradPassTopN,
+               options.timingGradPassProjWeight,
+               options.timingGradPassEndToEndWeight,
+               options.timingGradPassSlackSharpness,
+               options.timingGradPassSlackOffset,
+               options.timingGradPassStaRunInterval);
+  }
 
   if (options.timingDrivenMode) {
     rs_->resizeSlackPreamble();

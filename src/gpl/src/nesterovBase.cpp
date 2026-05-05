@@ -22,6 +22,7 @@
 #include <utility>
 #include <vector>
 
+#include "db_sta/dbNetwork.hh"
 #include "fft.h"
 #include "gpl/Replace.h"
 #include "nesterovPlace.h"
@@ -29,8 +30,6 @@
 #include "omp.h"
 #include "placerBase.h"
 #include "point.h"
-#include "timingBase.h"
-#include "utl/Logger.h"
 #include "sta/Fuzzy.hh"
 #include "sta/MinMax.hh"
 #include "sta/NetworkClass.hh"
@@ -38,7 +37,8 @@
 #include "sta/PathGroup.hh"
 #include "sta/Search.hh"
 #include "sta/Sta.hh"
-#include "db_sta/dbNetwork.hh"
+#include "timingBase.h"
+#include "utl/Logger.h"
 
 #define REPLACE_SQRT2 1.414213562373095048801L
 
@@ -2643,16 +2643,22 @@ void NesterovBase::initDensity1()
   curSLPCoordi_.resize(gCellSize, FloatPoint());
   curSLPWireLengthGrads_.resize(gCellSize, FloatPoint());
   curSLPDensityGrads_.resize(gCellSize, FloatPoint());
+  curSLPTimingGrads_.resize(gCellSize, FloatPoint());
+  curSLPRoutabilityGrads_.resize(gCellSize, FloatPoint());
   curSLPSumGrads_.resize(gCellSize, FloatPoint());
 
   nextSLPCoordi_.resize(gCellSize, FloatPoint());
   nextSLPWireLengthGrads_.resize(gCellSize, FloatPoint());
   nextSLPDensityGrads_.resize(gCellSize, FloatPoint());
+  nextSLPTimingGrads_.resize(gCellSize, FloatPoint());
+  nextSLPRoutabilityGrads_.resize(gCellSize, FloatPoint());
   nextSLPSumGrads_.resize(gCellSize, FloatPoint());
 
   prevSLPCoordi_.resize(gCellSize, FloatPoint());
   prevSLPWireLengthGrads_.resize(gCellSize, FloatPoint());
   prevSLPDensityGrads_.resize(gCellSize, FloatPoint());
+  prevSLPTimingGrads_.resize(gCellSize, FloatPoint());
+  prevSLPRoutabilityGrads_.resize(gCellSize, FloatPoint());
   prevSLPSumGrads_.resize(gCellSize, FloatPoint());
 
   curCoordi_.resize(gCellSize, FloatPoint());
@@ -2773,8 +2779,12 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
 
   float gradSum = 0;
 
-  debugPrint(
-      log_, GPL, "updateGrad", 1, "updateGradients: DensityPenalty: {:g}", densityPenalty_);
+  debugPrint(log_,
+             GPL,
+             "updateGrad",
+             1,
+             "updateGradients: DensityPenalty: {:g}",
+             densityPenalty_);
 
   // First, compute timing gradients using the merged TimingPass functionality
   // This computes gradient contributions from timing violations
@@ -3052,6 +3062,8 @@ void NesterovBase::updateNextIter(const int iter)
   std::swap(prevSLPCoordi_, curSLPCoordi_);
   std::swap(prevSLPWireLengthGrads_, curSLPWireLengthGrads_);
   std::swap(prevSLPDensityGrads_, curSLPDensityGrads_);
+  std::swap(prevSLPTimingGrads_, curSLPTimingGrads_);
+  std::swap(prevSLPRoutabilityGrads_, curSLPRoutabilityGrads_);
   std::swap(prevSLPSumGrads_, curSLPSumGrads_);
 
   // Prevent locked instances from moving
@@ -3061,6 +3073,8 @@ void NesterovBase::updateNextIter(const int iter)
       nextSLPCoordi_[k] = curSLPCoordi_[k];
       nextSLPWireLengthGrads_[k] = curSLPWireLengthGrads_[k];
       nextSLPDensityGrads_[k] = curSLPDensityGrads_[k];
+      nextSLPTimingGrads_[k] = curSLPTimingGrads_[k];
+      nextSLPRoutabilityGrads_[k] = curSLPRoutabilityGrads_[k];
       nextSLPSumGrads_[k] = curSLPSumGrads_[k];
       nextCoordi_[k] = curCoordi_[k];
     }
@@ -3069,6 +3083,8 @@ void NesterovBase::updateNextIter(const int iter)
   std::swap(curSLPCoordi_, nextSLPCoordi_);
   std::swap(curSLPWireLengthGrads_, nextSLPWireLengthGrads_);
   std::swap(curSLPDensityGrads_, nextSLPDensityGrads_);
+  std::swap(curSLPTimingGrads_, nextSLPTimingGrads_);
+  std::swap(curSLPRoutabilityGrads_, nextSLPRoutabilityGrads_);
   std::swap(curSLPSumGrads_, nextSLPSumGrads_);
 
   std::swap(curCoordi_, nextCoordi_);
@@ -3819,16 +3835,22 @@ void NesterovBase::cutFillerCells(int64_t inflation_area)
           .curSLPCoordi = curSLPCoordi_[i],
           .curSLPWireLengthGrads = curSLPWireLengthGrads_[i],
           .curSLPDensityGrads = curSLPDensityGrads_[i],
+          .curSLPTimingGrads = curSLPTimingGrads_[i],
+          .curSLPRoutabilityGrads = curSLPRoutabilityGrads_[i],
           .curSLPSumGrads = curSLPSumGrads_[i],
 
           .nextSLPCoordi = nextSLPCoordi_[i],
           .nextSLPWireLengthGrads = nextSLPWireLengthGrads_[i],
           .nextSLPDensityGrads = nextSLPDensityGrads_[i],
+          .nextSLPTimingGrads = nextSLPTimingGrads_[i],
+          .nextSLPRoutabilityGrads = nextSLPRoutabilityGrads_[i],
           .nextSLPSumGrads = nextSLPSumGrads_[i],
 
           .prevSLPCoordi = prevSLPCoordi_[i],
           .prevSLPWireLengthGrads = prevSLPWireLengthGrads_[i],
           .prevSLPDensityGrads = prevSLPDensityGrads_[i],
+          .prevSLPTimingGrads = prevSLPTimingGrads_[i],
+          .prevSLPRoutabilityGrads = prevSLPRoutabilityGrads_[i],
           .prevSLPSumGrads = prevSLPSumGrads_[i],
 
           .curCoordi = curCoordi_[i],
@@ -3996,16 +4018,22 @@ void NesterovBase::restoreRemovedFillers()
     curSLPCoordi_[idx] = filler.curSLPCoordi;
     curSLPWireLengthGrads_[idx] = filler.curSLPWireLengthGrads;
     curSLPDensityGrads_[idx] = filler.curSLPDensityGrads;
+    curSLPTimingGrads_[idx] = filler.curSLPTimingGrads;
+    curSLPRoutabilityGrads_[idx] = filler.curSLPRoutabilityGrads;
     curSLPSumGrads_[idx] = filler.curSLPSumGrads;
 
     nextSLPCoordi_[idx] = filler.nextSLPCoordi;
     nextSLPWireLengthGrads_[idx] = filler.nextSLPWireLengthGrads;
     nextSLPDensityGrads_[idx] = filler.nextSLPDensityGrads;
+    nextSLPTimingGrads_[idx] = filler.nextSLPTimingGrads;
+    nextSLPRoutabilityGrads_[idx] = filler.nextSLPRoutabilityGrads;
     nextSLPSumGrads_[idx] = filler.nextSLPSumGrads;
 
     prevSLPCoordi_[idx] = filler.prevSLPCoordi;
     prevSLPWireLengthGrads_[idx] = filler.prevSLPWireLengthGrads;
     prevSLPDensityGrads_[idx] = filler.prevSLPDensityGrads;
+    prevSLPTimingGrads_[idx] = filler.prevSLPTimingGrads;
+    prevSLPRoutabilityGrads_[idx] = filler.prevSLPRoutabilityGrads;
     prevSLPSumGrads_[idx] = filler.prevSLPSumGrads;
 
     curCoordi_[idx] = filler.curCoordi;
@@ -4174,14 +4202,20 @@ void NesterovBase::swapAndPopParallelVectors(size_t remove_index,
   swapAndPop(curSLPCoordi_, remove_index, last_index);
   swapAndPop(curSLPWireLengthGrads_, remove_index, last_index);
   swapAndPop(curSLPDensityGrads_, remove_index, last_index);
+  swapAndPop(curSLPTimingGrads_, remove_index, last_index);
+  swapAndPop(curSLPRoutabilityGrads_, remove_index, last_index);
   swapAndPop(curSLPSumGrads_, remove_index, last_index);
   swapAndPop(nextSLPCoordi_, remove_index, last_index);
   swapAndPop(nextSLPWireLengthGrads_, remove_index, last_index);
   swapAndPop(nextSLPDensityGrads_, remove_index, last_index);
+  swapAndPop(nextSLPTimingGrads_, remove_index, last_index);
+  swapAndPop(nextSLPRoutabilityGrads_, remove_index, last_index);
   swapAndPop(nextSLPSumGrads_, remove_index, last_index);
   swapAndPop(prevSLPCoordi_, remove_index, last_index);
   swapAndPop(prevSLPWireLengthGrads_, remove_index, last_index);
   swapAndPop(prevSLPDensityGrads_, remove_index, last_index);
+  swapAndPop(prevSLPTimingGrads_, remove_index, last_index);
+  swapAndPop(prevSLPRoutabilityGrads_, remove_index, last_index);
   swapAndPop(prevSLPSumGrads_, remove_index, last_index);
   swapAndPop(curCoordi_, remove_index, last_index);
   swapAndPop(nextCoordi_, remove_index, last_index);
@@ -4198,14 +4232,20 @@ void NesterovBase::appendParallelVectors()
   curSLPCoordi_.emplace_back();
   curSLPWireLengthGrads_.emplace_back();
   curSLPDensityGrads_.emplace_back();
+  curSLPTimingGrads_.emplace_back();
+  curSLPRoutabilityGrads_.emplace_back();
   curSLPSumGrads_.emplace_back();
   nextSLPCoordi_.emplace_back();
   nextSLPWireLengthGrads_.emplace_back();
   nextSLPDensityGrads_.emplace_back();
+  nextSLPTimingGrads_.emplace_back();
+  nextSLPRoutabilityGrads_.emplace_back();
   nextSLPSumGrads_.emplace_back();
   prevSLPCoordi_.emplace_back();
   prevSLPWireLengthGrads_.emplace_back();
   prevSLPDensityGrads_.emplace_back();
+  prevSLPTimingGrads_.emplace_back();
+  prevSLPRoutabilityGrads_.emplace_back();
   prevSLPSumGrads_.emplace_back();
   curCoordi_.emplace_back();
   nextCoordi_.emplace_back();
@@ -4278,16 +4318,20 @@ void NesterovBase::writeGCellVectorsToCSV(const std::string& filename,
     add_header("curSLPCoordi");
     add_header("curSLPWireLengthGrads");
     add_header("curSLPDensityGrads");
+    add_header("curSLPTimingGrads");
+    add_header("curSLPRoutabilityGrads");
     add_header("curSLPSumGrads");
 
-    add_header("nextSLPCoordi");
     add_header("nextSLPWireLengthGrads");
     add_header("nextSLPDensityGrads");
+    add_header("nextSLPTimingGrads");
+    add_header("nextSLPRoutabilityGrads");
     add_header("nextSLPSumGrads");
 
-    add_header("prevSLPCoordi");
     add_header("prevSLPWireLengthGrads");
     add_header("prevSLPDensityGrads");
+    add_header("prevSLPTimingGrads");
+    add_header("prevSLPRoutabilityGrads");
     add_header("prevSLPSumGrads");
 
     add_header("curCoordi");
@@ -4317,16 +4361,22 @@ void NesterovBase::writeGCellVectorsToCSV(const std::string& filename,
     add_value(curSLPCoordi_);
     add_value(curSLPWireLengthGrads_);
     add_value(curSLPDensityGrads_);
+    add_value(curSLPTimingGrads_);
+    add_value(curSLPRoutabilityGrads_);
     add_value(curSLPSumGrads_);
 
     add_value(nextSLPCoordi_);
     add_value(nextSLPWireLengthGrads_);
     add_value(nextSLPDensityGrads_);
+    add_value(nextSLPTimingGrads_);
+    add_value(nextSLPRoutabilityGrads_);
     add_value(nextSLPSumGrads_);
 
     add_value(prevSLPCoordi_);
     add_value(prevSLPWireLengthGrads_);
     add_value(prevSLPDensityGrads_);
+    add_value(prevSLPTimingGrads_);
+    add_value(prevSLPRoutabilityGrads_);
     add_value(prevSLPSumGrads_);
 
     add_value(curCoordi_);
@@ -4491,6 +4541,7 @@ std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
     int top_n,
     NesterovBaseCommon& nbc)
 {
+  std::vector<ViolatingPath> violating_paths;
   // Filter parameters for finding path ends.
   // nullptr means no restriction on that filter dimension.
   sta::ExceptionFrom* from = nullptr;      // No from-pin filter
@@ -4510,8 +4561,9 @@ std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
   bool unique_edges = false;  // Don't filter for unique edges
   float slack_min = -1e30f;   // Capture all paths (no lower bound)
   float slack_max
-      = nbVars_.timing_pass_slack_offset;  // TODO: Architectural decision: Figure out
-                                    // how to deal with near-violations.
+      = nbVars_
+            .timing_pass_slack_offset;  // TODO: Architectural decision: Figure
+                                        // out how to deal with near-violations.
   bool sort_by_slack = true;  // Sort results by slack (most negative first)
 
   // Empty path_groups means search all path groups (e.g., max, min, etc.)
@@ -4525,7 +4577,17 @@ std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
 
   // Query STA for path ends matching our filter criteria
   // This returns paths sorted by slack (most critical first)
-  debugPrint(log_, GPL, "timing", 1, "gradientPass: About to run findPathEnds");
+  debugPrint(log_,
+             GPL,
+             "timing",
+             1,
+             "gradientPass: About to run findPathEnds with STA of address {}",
+             sta_);
+  if (sta_ == nullptr) {
+    debugPrint(log_, GPL, "timing", 1, "gradientPass: sta_ was null");
+    return violating_paths;
+  }
+
   sta::PathEndSeq ends = sta_->findPathEnds(from,
                                             thrus,
                                             to,
@@ -4546,12 +4608,16 @@ std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
                                             removal,
                                             clk_gating_setup,
                                             clk_gating_hold);
-  debugPrint(log_, GPL, "timing", 1, "gradientPass: Ran findPathEnds, found {} ends", ends.size());
+  debugPrint(log_,
+             GPL,
+             "timing",
+             1,
+             "gradientPass: Ran findPathEnds, found {} ends",
+             ends.size());
 
   // Get the database network adapter for converting between OpenSTA and OpenDB
   // objects
   sta::dbNetwork* network = sta_->getDbNetwork();
-  std::vector<ViolatingPath> violating_paths;
 
   // Iterate through each path endpoint found by STA
   for (sta::PathEnd* end : ends) {
@@ -4625,8 +4691,8 @@ void gpl::NesterovBase::queryTimingViolations(NesterovBaseCommon& nbc)
 }
 
 void gpl::NesterovBase::runTimingPassGradient(NesterovBaseCommon& nbc,
-                                               NesterovBaseVars& nbv,
-                                               std::vector<FloatPoint>& grad)
+                                              NesterovBaseVars& nbv,
+                                              std::vector<FloatPoint>& grad)
 {
   for (const auto& path : violating_paths_) {
     const auto& gCell_indices = path.gCellIndexSequence;
@@ -4634,7 +4700,13 @@ void gpl::NesterovBase::runTimingPassGradient(NesterovBaseCommon& nbc,
       continue;
     }
 
-    debugPrint(log_, GPL, "timing", 1, "runTimingPassGradient: Slack: {}, Path Length: {}", path.slack, gCell_indices.size());
+    debugPrint(log_,
+               GPL,
+               "timing",
+               1,
+               "runTimingPassGradient: Slack: {}, Path Length: {}",
+               path.slack,
+               gCell_indices.size());
 
     GCell& end1 = nbc.getGCell(gCell_indices.front());
     GCell& end2 = nbc.getGCell(gCell_indices.back());
@@ -4651,8 +4723,9 @@ void gpl::NesterovBase::runTimingPassGradient(NesterovBaseCommon& nbc,
     // Weight function: exp(-sharpness * (slack + offset))
     // Negative slack (violation) increases weight; zero slack gives weight =
     // exp(-offset).
-    const float slack_weight = exp(-1.0f * nbv.timing_pass_slack_sharpness
-                                   * (path.slack + nbv.timing_pass_slack_offset));
+    const float slack_weight
+        = exp(-1.0f * nbv.timing_pass_slack_sharpness
+              * (path.slack + nbv.timing_pass_slack_offset));
 
     for (size_t i = 0; i < gCell_indices.size(); ++i) {
       const size_t cell_idx = gCell_indices[i];
@@ -4730,8 +4803,9 @@ FloatPoint gpl::NesterovBase::getTimingGradient(const GCell* gCell) const
     }
 
     // Weight function: exp(-sharpness * (slack + offset))
-    const float slack_weight = exp(-1.0f * nbVars_.timing_pass_slack_sharpness
-                                   * (path.slack + nbVars_.timing_pass_slack_offset));
+    const float slack_weight
+        = exp(-1.0f * nbVars_.timing_pass_slack_sharpness
+              * (path.slack + nbVars_.timing_pass_slack_offset));
 
     const size_t i = std::distance(gCell_indices.begin(), it);
     const bool is_endpoint = (i == 0 || i == gCell_indices.size() - 1);
@@ -4745,7 +4819,8 @@ FloatPoint gpl::NesterovBase::getTimingGradient(const GCell* gCell) const
     if (nbVars_.timing_pass_end_to_end_weight > 0.0f && is_endpoint) {
       const FloatPoint to_end1{end1_x - cell_pos.x, end1_y - cell_pos.y};
       const FloatPoint to_end2{end2_x - cell_pos.x, end2_y - cell_pos.y};
-      const float scaled_force = nbVars_.timing_pass_end_to_end_weight * slack_weight;
+      const float scaled_force
+          = nbVars_.timing_pass_end_to_end_weight * slack_weight;
       timing_gradient = (to_end1 + to_end2) * scaled_force;
     }
 
