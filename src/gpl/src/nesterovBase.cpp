@@ -4550,6 +4550,10 @@ std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
   sta::ExceptionTo* to = nullptr;          // No to-pin filter
   bool unconstrained = false;  // Only report unconstrained endpoints
 
+  sta_->ensureGraph();
+  sta_->searchPreamble();
+  sta_->ensureLevelized();
+
   sta::SceneSeq scenes = sta_->scenes();
   // Use max() to consider both min (setup) and max (hold) delay analysis
   const sta::MinMaxAll* delay_min_max = sta::MinMaxAll::max();
