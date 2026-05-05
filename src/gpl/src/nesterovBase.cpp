@@ -2723,6 +2723,8 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
 
   wireLengthGradSum_ = 0;
   densityGradSum_ = 0;
+  timingGradSum_ = 0;
+  routabilityGradSum_ = 0;
 
   float gradSum = 0;
 
@@ -2731,6 +2733,7 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
 
   // TODO: This OpenMP parallel section is causing non-determinism. Consider
   // revisiting this in the future to restore determinism.
+
   // #pragma omp parallel for num_threads(nbc_->getNumThreads()) reduction(+ :
   // wireLengthGradSum_, densityGradSum_, gradSum)
   for (size_t i = 0; i < nb_gcells_.size(); i++) {
@@ -2738,6 +2741,8 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
     wireLengthGrads[i]
         = nbc_->getWireLengthGradientWA(gCell, wlCoeffX, wlCoeffY);
     densityGrads[i] = getDensityGradient(gCell);
+    timingGrads[i] = getTimingGradient(gCell);
+    routabilityGrads[i] = getRoutabilityGradient(gCell);
 
     // Different compiler has different results on the following formula.
     // e.g. wireLengthGradSum_ += fabs(~~.x) + fabs(~~.y);
@@ -2750,16 +2755,26 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
 
     densityGradSum_ += std::fabs(densityGrads[i].x);
     densityGradSum_ += std::fabs(densityGrads[i].y);
+    timingGradSum_ += std::fabs(timingGrads[i].x);
+    timingGradSum_ += std::fabs(timingGrads[i].y);
+    routabilityGradSum_ += std::fabs(routabilityGrads[i].x);
+    routabilityGradSum_ += std::fabs(routabilityGrads[i].y);
 
-    sumGrads[i].x = wireLengthGrads[i].x + densityPenalty_ * densityGrads[i].x;
-    sumGrads[i].y = wireLengthGrads[i].y + densityPenalty_ * densityGrads[i].y;
+    sumGrads[i].x = wireLengthGrads[i].x + densityPenalty_ * densityGrads[i].x
+                    + timingGrads[i].x + routabilityGrads[i].x;
+    sumGrads[i].y = wireLengthGrads[i].y + densityPenalty_ * densityGrads[i].y
+                    + timingGrads[i].y + routabilityGrads[i].y;
 
     FloatPoint wireLengthPreCondi = nbc_->getWireLengthPreconditioner(gCell);
     FloatPoint densityPrecondi = getDensityPreconditioner(gCell);
+    FloatPoint timingPrecondi = getTimingPreconditioner(gCell);
+    FloatPoint routabilityPrecondi = getRoutabilityPreconditioner(gCell);
 
     FloatPoint sumPrecondi(
-        wireLengthPreCondi.x + (densityPenalty_ * densityPrecondi.x),
-        wireLengthPreCondi.y + (densityPenalty_ * densityPrecondi.y));
+        wireLengthPreCondi.x + (densityPenalty_ * densityPrecondi.x) +
+        timingPrecondi.x + routabilityPrecondi.x,
+        wireLengthPreCondi.y + (densityPenalty_ * densityPrecondi.y) +
+        timingPrecondi.y + routabilityPrecondi.y);
 
     sumPrecondi.x
         = std::max(sumPrecondi.x, NesterovPlaceVars::minPreconditioner);
@@ -2780,6 +2795,10 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
              wireLengthGradSum_);
   debugPrint(
       log_, GPL, "updateGrad", 1, "DensityGradSum: {:g}", densityGradSum_);
+  debugPrint(
+      log_, GPL, "updateGrad", 1, "TimingGradSum: {:g}", timingGradSum_);
+  debugPrint(
+      log_, GPL, "updateGrad", 1, "RoutabilityGradSum: {:g}", routabilityGradSum_);
   debugPrint(log_, GPL, "updateGrad", 1, "GradSum: {:g}", gradSum);
 }
 
@@ -2788,6 +2807,8 @@ void NesterovBase::nbUpdatePrevGradient(float wlCoeffX, float wlCoeffY)
   updateGradients(prevSLPSumGrads_,
                   prevSLPWireLengthGrads_,
                   prevSLPDensityGrads_,
+                  prevSLPTimingGrads_,
+                  prevSLPRoutabilityGrads_,
                   wlCoeffX,
                   wlCoeffY);
 }
@@ -2797,6 +2818,8 @@ void NesterovBase::nbUpdateCurGradient(float wlCoeffX, float wlCoeffY)
   updateGradients(curSLPSumGrads_,
                   curSLPWireLengthGrads_,
                   curSLPDensityGrads_,
+                  curSLPTimingGrads_,
+                  curSLPRoutabilityGrads_,
                   wlCoeffX,
                   wlCoeffY);
 }
@@ -2806,30 +2829,36 @@ void NesterovBase::nbUpdateNextGradient(float wlCoeffX, float wlCoeffY)
   updateGradients(nextSLPSumGrads_,
                   nextSLPWireLengthGrads_,
                   nextSLPDensityGrads_,
+                  nextSLPTimingGrads_,
+                  nextSLPRoutabilityGrads_,
                   wlCoeffX,
                   wlCoeffY);
 }
 
 void NesterovBase::updateSinglePrevGradient(size_t gCellIndex,
-                                            float wlCoeffX,
-                                            float wlCoeffY)
+                                             float wlCoeffX,
+                                             float wlCoeffY)
 {
   updateSingleGradient(gCellIndex,
                        prevSLPSumGrads_,
                        prevSLPWireLengthGrads_,
                        prevSLPDensityGrads_,
+                       prevSLPTimingGrads_,
+                       prevSLPRoutabilityGrads_,
                        wlCoeffX,
                        wlCoeffY);
 }
 
 void NesterovBase::updateSingleCurGradient(size_t gCellIndex,
-                                           float wlCoeffX,
-                                           float wlCoeffY)
+                                            float wlCoeffX,
+                                            float wlCoeffY)
 {
   updateSingleGradient(gCellIndex,
                        curSLPSumGrads_,
                        curSLPWireLengthGrads_,
                        curSLPDensityGrads_,
+                       curSLPTimingGrads_,
+                       curSLPRoutabilityGrads_,
                        wlCoeffX,
                        wlCoeffY);
 }
@@ -2852,6 +2881,8 @@ void NesterovBase::updateSingleGradient(
   if (gCell->isLocked()) {
     wireLengthGrads[gCellIndex] = FloatPoint(0, 0);
     densityGrads[gCellIndex] = FloatPoint(0, 0);
+    timingGrads[gCellIndex] = FloatPoint(0, 0);
+    routabilityGrads[gCellIndex] = FloatPoint(0, 0);
     sumGrads[gCellIndex] = FloatPoint(0, 0);
     return;
   }
@@ -2859,18 +2890,26 @@ void NesterovBase::updateSingleGradient(
   wireLengthGrads[gCellIndex]
       = nbc_->getWireLengthGradientWA(gCell, wlCoeffX, wlCoeffY);
   densityGrads[gCellIndex] = getDensityGradient(gCell);
+  timingGrads[gCellIndex] = getTimingGradient(gCell);
+  routabilityGrads[gCellIndex] = getRoutabilityGradient(gCell);
 
   sumGrads[gCellIndex].x = wireLengthGrads[gCellIndex].x
-                           + densityPenalty_ * densityGrads[gCellIndex].x;
+                           + densityPenalty_ * densityGrads[gCellIndex].x
+                           + timingGrads[gCellIndex].x + routabilityGrads[gCellIndex].x;
   sumGrads[gCellIndex].y = wireLengthGrads[gCellIndex].y
-                           + densityPenalty_ * densityGrads[gCellIndex].y;
+                           + densityPenalty_ * densityGrads[gCellIndex].y
+                           + timingGrads[gCellIndex].y + routabilityGrads[gCellIndex].y;
 
   FloatPoint wireLengthPreCondi = nbc_->getWireLengthPreconditioner(gCell);
   FloatPoint densityPrecondi = getDensityPreconditioner(gCell);
+  FloatPoint timingPrecondi = getTimingPreconditioner(gCell);
+  FloatPoint routabilityPrecondi = getRoutabilityPreconditioner(gCell);
 
   FloatPoint sumPrecondi(
-      wireLengthPreCondi.x + (densityPenalty_ * densityPrecondi.x),
-      wireLengthPreCondi.y + (densityPenalty_ * densityPrecondi.y));
+      wireLengthPreCondi.x + (densityPenalty_ * densityPrecondi.x) +
+      timingPrecondi.x + routabilityPrecondi.x,
+      wireLengthPreCondi.y + (densityPenalty_ * densityPrecondi.y) +
+      timingPrecondi.y + routabilityPrecondi.y);
 
   sumPrecondi.x = std::max(sumPrecondi.x, NesterovPlaceVars::minPreconditioner);
   sumPrecondi.y = std::max(sumPrecondi.y, NesterovPlaceVars::minPreconditioner);
