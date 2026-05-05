@@ -29,6 +29,7 @@
 #include "sta/Sta.hh"
 #include "utl/Logger.h"
 
+
 namespace odb {
 class dbInst;
 class dbITerm;
@@ -750,6 +751,12 @@ inline std::vector<Bin>& BinGrid::getBins()
   return bins_;
 }
 
+struct ViolatingPath
+{
+  std::vector<size_t> gCellIndexSequence;
+  float slack;
+};
+
 struct NesterovBaseVars
 {
   NesterovBaseVars(const PlaceOptions& options);
@@ -1089,9 +1096,6 @@ class NesterovBase
                        float wlCoeffX,
                        float wlCoeffY);
 
-  void updateGradientsWithTiming(TimingPass& tp,
-                                 float wlCoeffX,
-                                 float wlCoeffY);
 
 
   void nbUpdatePrevGradient(float wlCoeffX, float wlCoeffY);
@@ -1484,10 +1488,6 @@ inline constexpr const char* format_label_percent = "{:27} {:10.2f} %";
 inline constexpr const char* format_label_um2_with_delta
     = "{:27} {:10.3f} um^2 ({:+.2f}%)";
 
-struct ViolatingPath
-{
-  std::vector<size_t> gCellIndexSequence;
-  float slack;
-};
+
 
 }  // namespace gpl

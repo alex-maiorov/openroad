@@ -615,18 +615,15 @@ void NesterovPlace::runTimingPass(int iter,
                                    int64_t& td_accumulated_delta_area,
                                    bool is_routability_gpl_iter)
 {
-<<<<<<< HEAD
-=======
+
   if (!tp_) {
     return;
   }
 
->>>>>>> origin
   if (npVars_.timingDrivenMode) {
     updateDb();
 
     log_->info(GPL,
-<<<<<<< HEAD
                 103,
                 "Timing-pass iteration {}",
                 ++npVars_.timingDrivenIterCounter);
@@ -638,18 +635,6 @@ void NesterovPlace::runTimingPass(int iter,
         nb->updateSTA();
         nb->queryTimingViolations(*nbc_);
       }
-=======
-               103,
-               "Timing-pass iteration {}",
-               ++npVars_.timingDrivenIterCounter);
-    if (npVars_.timingDrivenIterCounter % npVars_.timing_pass_sta_run_interval
-        == 0) {
-      tp_->runSTA();
-    }
-
-    for (auto& nb : nbVec_) {
-      nb->updateGradientsWithTiming(*tp_, wireLengthCoefX_, wireLengthCoefY_);
->>>>>>> origin
     }
 
     ++timing_driven_count;
@@ -1202,11 +1187,7 @@ int NesterovPlace::doNesterovPlace(int start_iter)
       ++npVars_.maxNesterovIter;
     }
 
-<<<<<<< HEAD
-=======
 
-    // Run the cell-to-cell timing pass
->>>>>>> origin
     runTimingPass(nesterov_iter,
                   timing_driven_dir,
                   routability_driven_revert_count,
