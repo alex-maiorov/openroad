@@ -13,7 +13,6 @@
 #include "nesterovBase.h"
 #include "odb/dbBlockCallBackObj.h"
 #include "point.h"
-#include "timingBase.h"
 #include "utl/prometheus/gauge.h"
 
 namespace utl {
@@ -35,7 +34,6 @@ class PlacerBaseCommon;
 class Instance;
 class RouteBase;
 class TimingBase;
-class TimingPass;
 
 class NesterovPlace
 {
@@ -154,7 +152,6 @@ class NesterovPlace
   utl::Logger* log_ = nullptr;
   std::shared_ptr<RouteBase> rb_;
   std::shared_ptr<TimingBase> tb_;
-  std::shared_ptr<TimingPass> tp_;
   sta::dbSta* sta_ = nullptr;
   int tp_sta_run_interval = 10;
   NesterovPlaceVars npVars_;

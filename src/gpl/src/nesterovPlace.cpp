@@ -35,20 +35,20 @@ namespace gpl {
 using utl::GPL;
 
 NesterovPlace::NesterovPlace(const NesterovPlaceVars& npVars,
-                             const std::shared_ptr<PlacerBaseCommon>& pbc,
-                             const std::shared_ptr<NesterovBaseCommon>& nbc,
-                             std::vector<std::shared_ptr<PlacerBase>>& pbVec,
-                             std::vector<std::shared_ptr<NesterovBase>>& nbVec,
-                             std::shared_ptr<RouteBase> rb,
-                             std::shared_ptr<TimingBase> tb,
-                             sta::dbSta* sta,
-                             std::unique_ptr<gpl::AbstractGraphics> graphics,
-                             utl::Logger* log,
-                             int timing_pass_top_n,
-                             float timing_pass_proj_weight,
-                             float timing_pass_end_to_end_weight,
-                             float timing_pass_slack_sharpness,
-                             float timing_pass_slack_offset)
+                              const std::shared_ptr<PlacerBaseCommon>& pbc,
+                              const std::shared_ptr<NesterovBaseCommon>& nbc,
+                              std::vector<std::shared_ptr<PlacerBase>>& pbVec,
+                              std::vector<std::shared_ptr<NesterovBase>>& nbVec,
+                              std::shared_ptr<RouteBase> rb,
+                              std::shared_ptr<TimingBase> tb,
+                              sta::dbSta* sta,
+                              std::unique_ptr<gpl::AbstractGraphics> graphics,
+                              utl::Logger* log,
+                              int timing_pass_top_n,
+                              float timing_pass_proj_weight,
+                              float timing_pass_end_to_end_weight,
+                              float timing_pass_slack_sharpness,
+                              float timing_pass_slack_offset)
     : npVars_(npVars)
 {
   pbc_ = pbc;
@@ -60,13 +60,14 @@ NesterovPlace::NesterovPlace(const NesterovPlaceVars& npVars,
   sta_ = sta;
   log_ = log;
 
-  tp_ = std::make_shared<TimingPass>(sta_,
-                                     log_,
-                                     timing_pass_top_n,
-                                     timing_pass_proj_weight,
-                                     timing_pass_end_to_end_weight,
-                                     timing_pass_slack_sharpness,
-                                     timing_pass_slack_offset);
+  // Initialize timing pass parameters in each NesterovBase object
+  for (auto& nb : nbVec_) {
+    nb->setTimingPassTopN(timing_pass_top_n);
+    nb->setTimingPassProjWeight(timing_pass_proj_weight);
+    nb->setTimingPassEndToEndWeight(timing_pass_end_to_end_weight);
+    nb->setTimingPassSlackSharpness(timing_pass_slack_sharpness);
+    nb->setTimingPassSlackOffset(timing_pass_slack_offset);
+  }
 
   db_cbk_ = std::make_unique<nesterovDbCbk>(this);
   nbc_->setCbk(db_cbk_.get());
@@ -97,36 +98,36 @@ NesterovPlace::~NesterovPlace()
 
 void NesterovPlace::setTimingPassTopN(int top_n)
 {
-  if (tp_) {
-    tp_->setTopN(top_n);
+  for (auto& nb : nbVec_) {
+    nb->setTimingPassTopN(top_n);
   }
 }
 
 void NesterovPlace::setTimingPassProjWeight(float proj_weight)
 {
-  if (tp_) {
-    tp_->setProjWeight(proj_weight);
+  for (auto& nb : nbVec_) {
+    nb->setTimingPassProjWeight(proj_weight);
   }
 }
 
 void NesterovPlace::setTimingPassEndToEndWeight(float end_to_end_weight)
 {
-  if (tp_) {
-    tp_->setEndToEndWeight(end_to_end_weight);
+  for (auto& nb : nbVec_) {
+    nb->setTimingPassEndToEndWeight(end_to_end_weight);
   }
 }
 
 void NesterovPlace::setTimingPassSlackSharpness(float slack_sharpness)
 {
-  if (tp_) {
-    tp_->setSlackSharpness(slack_sharpness);
+  for (auto& nb : nbVec_) {
+    nb->setTimingPassSlackSharpness(slack_sharpness);
   }
 }
 
 void NesterovPlace::setTimingPassSlackOffset(float slack_offset)
 {
-  if (tp_) {
-    tp_->setSlackOffset(slack_offset);
+  for (auto& nb : nbVec_) {
+    nb->setTimingPassSlackOffset(slack_offset);
   }
 }
 
@@ -609,16 +610,12 @@ void NesterovPlace::runTimingDriven(int iter,
 }
 
 void NesterovPlace::runTimingPass(int iter,
-                                  const std::string& timing_driven_dir,
-                                  int routability_driven_revert_count,
-                                  int& timing_driven_count,
-                                  int64_t& td_accumulated_delta_area,
-                                  bool is_routability_gpl_iter)
+                                   const std::string& timing_driven_dir,
+                                   int routability_driven_revert_count,
+                                   int& timing_driven_count,
+                                   int64_t& td_accumulated_delta_area,
+                                   bool is_routability_gpl_iter)
 {
-  if (!tp_) {
-    return;
-  }
-
   if (npVars_.timingDrivenMode) {
     updateDb();
 
@@ -630,11 +627,16 @@ void NesterovPlace::runTimingPass(int iter,
                "Timing-pass iteration {}",
                ++npVars_.timingDrivenIterCounter);
     if (npVars_.timingDrivenIterCounter % tp_sta_run_interval == 0) {
-      tp_->runSTA();
+      for (auto& nb : nbVec_) {
+        nb->runSTAPass();
+      }
     }
 
     for (auto& nb : nbVec_) {
-      nb->updateGradientsWithTiming(*tp_);
+      // Get the current gradients and add timing pass gradient
+      // The timing gradient is now computed directly in updateGradients
+      // Just trigger a gradient update which will include timing
+      nb->nbUpdateCurGradient(wireLengthCoefX_, wireLengthCoefY_);
     }
 
     ++timing_driven_count;

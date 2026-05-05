@@ -26,6 +26,9 @@
 #include "point.h"
 #include "routeBase.h"
 #include "utl/Logger.h"
+#include "db_sta/dbSta.hh"
+#include "sta/Sta.hh"
+
 namespace odb {
 class dbInst;
 class dbITerm;
@@ -36,6 +39,11 @@ class dbNet;
 namespace utl {
 class Logger;
 }
+
+namespace sta {
+class Sta;
+class dbSta;
+}  // namespace sta
 
 namespace gpl {
 
@@ -52,7 +60,6 @@ class Net;
 class GPin;
 class FFT;
 class nesterovDbCbk;
-class TimingPass;
 
 class GCell
 {
@@ -951,7 +958,8 @@ class NesterovBase
   NesterovBase(NesterovBaseVars nbVars,
                std::shared_ptr<PlacerBase> pb,
                std::shared_ptr<NesterovBaseCommon> nbc,
-               utl::Logger* log);
+               utl::Logger* log,
+               sta::dbSta* sta = nullptr);
   ~NesterovBase();
 
   GCell& getFillerGCell(size_t index);
@@ -1325,6 +1333,37 @@ class NesterovBase
 
   // Store routability gradients here. Make sure to zero them in the constructor
   std::vector<FloatPoint> routabilityGrads_;
+
+  // TimingPass functionality merged from timingBase.cpp
+  void setTimingPassTopN(size_t top_n) { timing_pass_top_n_ = top_n; }
+  void setTimingPassProjWeight(float weight) { timing_pass_proj_weight_ = weight; }
+  void setTimingPassEndToEndWeight(float weight) { timing_pass_end_to_end_weight_ = weight; }
+  void setTimingPassSlackSharpness(float sharpness) { timing_pass_slack_sharpness_ = sharpness; }
+  void setTimingPassSlackOffset(float offset) { timing_pass_slack_offset_ = offset; }
+
+  void runSTAPass() {
+    if (sta_ != nullptr) {
+      sta_->updateTiming(false);
+      sta_->ensureLibLinked();
+    }
+  }
+
+  void runTimingPassGradient(NesterovBaseCommon& nbc,
+                            NesterovBaseVars& nbv,
+                            std::vector<FloatPoint>& grad);
+
+ private:
+  // TimingPass member variables
+  sta::dbSta* sta_ = nullptr;
+  size_t timing_pass_top_n_ = 10;
+  float timing_pass_proj_weight_ = 1.0F;
+  float timing_pass_end_to_end_weight_ = 1.0F;
+  float timing_pass_slack_sharpness_ = 1.0F;
+  float timing_pass_slack_offset_ = 0.0F;
+  static constexpr float kMinSlackThreshold_ = 1e-3f;
+
+  std::vector<ViolatingPath> getViolatingPaths(int path_end_count,
+                                               NesterovBaseCommon& nbc);
 };
 
 inline std::vector<Bin>& NesterovBase::getBins()
@@ -1413,5 +1452,11 @@ inline constexpr const char* format_label_um2 = "{:27} {:10.3f} um^2";
 inline constexpr const char* format_label_percent = "{:27} {:10.2f} %";
 inline constexpr const char* format_label_um2_with_delta
     = "{:27} {:10.3f} um^2 ({:+.2f}%)";
+
+struct ViolatingPath
+{
+  std::vector<size_t> gCellIndexSequence;
+  float slack;
+};
 
 }  // namespace gpl
