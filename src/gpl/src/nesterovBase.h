@@ -958,6 +958,8 @@ class NesterovBase
 
   float getWireLengthGradSum() const { return wireLengthGradSum_; }
   float getDensityGradSum() const { return densityGradSum_; }
+  float getTimingGradSum() const { return timingGradSum_; }
+  float getRoutabilityGradSum() const { return routabilityGradSum_; }
 
   // update gCells with cx, cy
   void updateGCellCenterLocation(const std::vector<FloatPoint>& coordis);
@@ -1036,6 +1038,14 @@ class NesterovBase
 
   FloatPoint getDensityGradient(const GCell* gCell) const;
 
+  FloatPoint getTimingPreconditioner(const GCell* gCell) const;
+
+  FloatPoint getTimingGradient(const GCell* gCell) const;
+
+  FloatPoint getRoutabilityPreconditioner(const GCell* gCell) const;
+
+  FloatPoint getRoutabilityGradient(const GCell* gCell) const;
+
   // update electrostatic field within Bin
   void updateDensityFieldBin();
 
@@ -1054,6 +1064,8 @@ class NesterovBase
   void updateGradients(std::vector<FloatPoint>& sumGrads,
                        std::vector<FloatPoint>& wireLengthGrads,
                        std::vector<FloatPoint>& densityGrads,
+                       std::vector<FloatPoint>& timingGrads,
+                       std::vector<FloatPoint>& routabilityGrads,
                        float wlCoeffX,
                        float wlCoeffY);
 
@@ -1066,6 +1078,8 @@ class NesterovBase
                             std::vector<FloatPoint>& sumGrads,
                             std::vector<FloatPoint>& wireLengthGrads,
                             std::vector<FloatPoint>& densityGrads,
+                            std::vector<FloatPoint>& timingGrads,
+                            std::vector<FloatPoint>& routabilityGrads,
                             float wlCoeffX,
                             float wlCoeffY);
 
@@ -1181,14 +1195,22 @@ class NesterovBase
     FloatPoint curSLPCoordi;
     FloatPoint curSLPWireLengthGrads;
     FloatPoint curSLPDensityGrads;
+    FloatPoint curSLPTimingGrads;
+    FloatPoint curSLPTimingGrads;
     FloatPoint curSLPSumGrads;
+
     FloatPoint nextSLPCoordi;
     FloatPoint nextSLPWireLengthGrads;
     FloatPoint nextSLPDensityGrads;
+    FloatPoint nextSLPTimingGrads;
+    FloatPoint nextSLPRoutabilityGrads;
     FloatPoint nextSLPSumGrads;
+
     FloatPoint prevSLPCoordi;
     FloatPoint prevSLPWireLengthGrads;
     FloatPoint prevSLPDensityGrads;
+    FloatPoint prevSLPTimingGrads;
+    FloatPoint prevSLPRoutabilityGrads;
     FloatPoint prevSLPSumGrads;
     FloatPoint curCoordi;
     FloatPoint nextCoordi;
@@ -1218,18 +1240,24 @@ class NesterovBase
   std::vector<FloatPoint> curSLPCoordi_;
   std::vector<FloatPoint> curSLPWireLengthGrads_;
   std::vector<FloatPoint> curSLPDensityGrads_;
+  std::vector<FloatPoint> curSLPTimingGrads_;
+  std::vector<FloatPoint> curSLPRoutabilityGrads_;
   std::vector<FloatPoint> curSLPSumGrads_;
 
   // y0_st, y0_dst, y0_wdst, y0_pdst
   std::vector<FloatPoint> nextSLPCoordi_;
   std::vector<FloatPoint> nextSLPWireLengthGrads_;
   std::vector<FloatPoint> nextSLPDensityGrads_;
+  std::vector<FloatPoint> nextSLPTimingGrads_;
+  std::vector<FloatPoint> nextSLPRoutabilityGrads_;
   std::vector<FloatPoint> nextSLPSumGrads_;
 
   // z_st, z_dst, z_wdst, z_pdst
   std::vector<FloatPoint> prevSLPCoordi_;
   std::vector<FloatPoint> prevSLPWireLengthGrads_;
   std::vector<FloatPoint> prevSLPDensityGrads_;
+  std::vector<FloatPoint> prevSLPTimingGrads_;
+  std::vector<FloatPoint> prevSLPRoutabilityGrads_;
   std::vector<FloatPoint> prevSLPSumGrads_;
 
   // x_st and x0_st
@@ -1255,6 +1283,8 @@ class NesterovBase
 
   float wireLengthGradSum_ = 0;
   float densityGradSum_ = 0;
+  float timingGradSum_ = 0;
+  float routabilityGradSum_ = 0;
 
   // opt_phi_cof
   float densityPenalty_ = 0;

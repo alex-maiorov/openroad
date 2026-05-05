@@ -2536,6 +2536,28 @@ FloatPoint NesterovBase::getDensityGradient(const GCell* gCell) const
   return electroForce;
 }
 
+FloatPoint NesterovBase::getTimingPreconditioner(const GCell* gCell) const
+{
+  // FIXME: think about this
+  return FloatPoint(1,1);
+}
+
+FloatPoint NesterovBase::getTimingGradient(const GCell* gCell) const
+{
+  do_timing_stuff();
+}
+
+FloatPoint NesterovBase::getRoutabilityPreconditioner(const GCell* gCell) const
+{
+  // FIXME: think about this
+  return FloatPoint(1,1);
+}
+
+FloatPoint NesterovBase::getRoutabilityGradient(const GCell* gCell) const
+{
+  do_timing_stuff();
+}
+
 // Density field calls
 void NesterovBase::updateDensityFieldBin()
 {
@@ -2689,6 +2711,8 @@ float NesterovBase::getStepLength(
 void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
                                    std::vector<FloatPoint>& wireLengthGrads,
                                    std::vector<FloatPoint>& densityGrads,
+                                   std::vector<FloatPoint>& timingGrads,
+                                   std::vector<FloatPoint>& routabilityGrads,
                                    float wlCoeffX,
                                    float wlCoeffY)
 {
@@ -2815,6 +2839,8 @@ void NesterovBase::updateSingleGradient(
     std::vector<FloatPoint>& sumGrads,
     std::vector<FloatPoint>& wireLengthGrads,
     std::vector<FloatPoint>& densityGrads,
+    std::vector<FloatPoint>& timingGrads,
+    std::vector<FloatPoint>& routabilityGrads,
     float wlCoeffX,
     float wlCoeffY)
 {

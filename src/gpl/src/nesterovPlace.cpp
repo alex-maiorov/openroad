@@ -1221,6 +1221,7 @@ void NesterovPlace::updateDb()
 
 // divergence detection on
 // Wirelength / density gradient calculation
+// FIXME: add the timing and routability stuff
 void NesterovPlace::checkInvalidValues(float wireLengthGradSum,
                                        float densityGradSum)
 {
