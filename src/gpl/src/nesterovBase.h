@@ -1192,6 +1192,24 @@ class NesterovBase
 
   odb::dbGroup* getGroup() const { return pb_->getGroup(); }
 
+  void updateSTA()
+  {
+    if (sta_ != nullptr) {
+      sta_->updateTiming(false);
+      sta_->ensureLibLinked();
+    }
+  }
+
+  void runTimingPassGradient(NesterovBaseCommon& nbc,
+                             NesterovBaseVars& nbv,
+                             std::vector<FloatPoint>& grad);
+
+  // Query STA for violating paths and store them in violating_paths_
+  void queryTimingViolations(NesterovBaseCommon& nbc);
+
+  std::vector<ViolatingPath> getViolatingPaths(int top_n,
+                                               NesterovBaseCommon& nbc);
+
  private:
   NesterovBaseVars nbVars_;
   std::shared_ptr<PlacerBase> pb_;
@@ -1352,17 +1370,7 @@ class NesterovBase
   // Store routability gradients here. Make sure to zero them in the constructor
   std::vector<FloatPoint> routabilityGrads_;
 
-  void updateSTA()
-  {
-    if (sta_ != nullptr) {
-      sta_->updateTiming(false);
-      sta_->ensureLibLinked();
-    }
-  }
 
-  void runTimingPassGradient(NesterovBaseCommon& nbc,
-                             NesterovBaseVars& nbv,
-                             std::vector<FloatPoint>& grad);
 
  private:
   // TimingPass member variables - now in nbVars_
@@ -1372,11 +1380,7 @@ class NesterovBase
   // Store violating paths queried from STA (queried once per iteration)
   std::vector<ViolatingPath> violating_paths_;
 
-  // Query STA for violating paths and store them in violating_paths_
-  void queryTimingViolations(NesterovBaseCommon& nbc);
 
-  std::vector<ViolatingPath> getViolatingPaths(int path_end_count,
-                                               NesterovBaseCommon& nbc);
 };
 
 inline std::vector<Bin>& NesterovBase::getBins()
