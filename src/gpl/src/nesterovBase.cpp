@@ -4860,7 +4860,7 @@ void NesterovBase::updateSTA()
 {
   if (sta_ != nullptr) {
     debugPrint(log_, GPL, "timing", 1, "Updated STA");
-    sta_->updateTiming(false);
+    sta_->updateTiming(true);
     sta_->ensureLibLinked();
   }
 }
