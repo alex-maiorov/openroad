@@ -2774,7 +2774,7 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
   float gradSum = 0;
 
   debugPrint(
-      log_, GPL, "updateGrad", 1, "DensityPenalty: {:g}", densityPenalty_);
+      log_, GPL, "updateGrad", 1, "updateGradients: DensityPenalty: {:g}", densityPenalty_);
 
   // First, compute timing gradients using the merged TimingPass functionality
   // This computes gradient contributions from timing violations
@@ -4634,6 +4634,8 @@ void gpl::NesterovBase::runTimingPassGradient(NesterovBaseCommon& nbc,
       continue;
     }
 
+    debugPrint(log_, GPL, "timing", 1, "runTimingPassGradient: Slack: {}, Path Length: {}", path.slack, gCell_indices.size());
+
     GCell& end1 = nbc.getGCell(gCell_indices.front());
     GCell& end2 = nbc.getGCell(gCell_indices.back());
 
@@ -4642,9 +4644,9 @@ void gpl::NesterovBase::runTimingPassGradient(NesterovBaseCommon& nbc,
     const float end2_x = end2.cx();
     const float end2_y = end2.cy();
 
-    if (std::abs(path.slack) > kMinSlackThreshold_) {
-      continue;
-    }
+    // if (std::abs(path.slack) > kMinSlackThreshold_) {
+    //   continue;
+    // }
 
     // Weight function: exp(-sharpness * (slack + offset))
     // Negative slack (violation) increases weight; zero slack gives weight =
