@@ -806,6 +806,7 @@ struct NesterovPlaceVars
   const bool routability_driven_mode;
    const bool disableRevertIfDiverge;
    bool debug = false;
+   int timingGradPassStaRunInterval;
   int debug_pause_iterations = 10;
   int debug_update_iterations = 10;
   bool debug_draw_bins = true;
@@ -1192,13 +1193,7 @@ class NesterovBase
 
   odb::dbGroup* getGroup() const { return pb_->getGroup(); }
 
-  void updateSTA()
-  {
-    if (sta_ != nullptr) {
-      sta_->updateTiming(false);
-      sta_->ensureLibLinked();
-    }
-  }
+  void updateSTA();
 
   void runTimingPassGradient(NesterovBaseCommon& nbc,
                              NesterovBaseVars& nbv,

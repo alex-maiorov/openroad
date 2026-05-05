@@ -143,7 +143,7 @@ class NesterovPlace
   std::shared_ptr<RouteBase> rb_;
   std::shared_ptr<TimingBase> tb_;
   sta::dbSta* sta_ = nullptr;
-  int tp_sta_run_interval = 10;
+
   NesterovPlaceVars npVars_;
   std::unique_ptr<AbstractGraphics> graphics_;
 

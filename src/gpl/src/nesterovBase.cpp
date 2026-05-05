@@ -1050,7 +1050,8 @@ NesterovPlaceVars::NesterovPlaceVars(const PlaceOptions& options)
       keepResizeBelowOverflow(options.keepResizeBelowOverflow),
       timingDrivenMode(options.timingDrivenMode),
       routability_driven_mode(options.routabilityDrivenMode),
-      disableRevertIfDiverge(options.disableRevertIfDiverge)
+       disableRevertIfDiverge(options.disableRevertIfDiverge),
+       timingGradPassStaRunInterval(options.timingGradPassStaRunInterval)
 {
 }
 
@@ -4549,7 +4550,7 @@ std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
   sta::ExceptionTo* to = nullptr;          // No to-pin filter
   bool unconstrained = false;  // Only report unconstrained endpoints
 
-  sta::SceneSeq scenes;
+  sta::SceneSeq scenes = sta_->scenes();
   // Use max() to consider both min (setup) and max (hold) delay analysis
   const sta::MinMaxAll* delay_min_max = sta::MinMaxAll::max();
 
@@ -4581,8 +4582,7 @@ std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
              GPL,
              "timing",
              1,
-             "gradientPass: About to run findPathEnds with STA of address {}",
-             sta_);
+             "gradientPass: About to run findPathEnds");
   if (sta_ == nullptr) {
     debugPrint(log_, GPL, "timing", 1, "gradientPass: sta_ was null");
     return violating_paths;
@@ -4612,18 +4612,25 @@ std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
              GPL,
              "timing",
              1,
-             "gradientPass: Ran findPathEnds, found {} ends",
+             "gradientPass: Ran findPathEnds, found {} ends.",
              ends.size());
+
 
   // Get the database network adapter for converting between OpenSTA and OpenDB
   // objects
   sta::dbNetwork* network = sta_->getDbNetwork();
 
   // Iterate through each path endpoint found by STA
+  sta::Slack wns = 0.0;
+  sta::Slack tns = 0.0;
   for (sta::PathEnd* end : ends) {
     // Slack is negative for violating paths, positive for meeting timing.
     // We only query paths with slack <= slack_offset (typically <= 0).
     sta::Slack slack = end->slack(sta_);
+    tns = tns + slack;
+    if(slack < wns){
+      wns = slack;
+    }
 
     // Skip paths with infinite slack (shouldn't happen with slack_max=0,
     // but guards against edge cases)
@@ -4680,6 +4687,12 @@ std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
     violating_path.gCellIndexSequence = std::move(gCell_indices);
     violating_paths.push_back(violating_path);
   }
+  debugPrint(log_,
+             GPL,
+             "timing",
+             1,
+             "TNS: {}, WNS: {}",
+             tns, wns);
 
   return violating_paths;
 }
@@ -4703,7 +4716,7 @@ void gpl::NesterovBase::runTimingPassGradient(NesterovBaseCommon& nbc,
     debugPrint(log_,
                GPL,
                "timing",
-               1,
+               2,
                "runTimingPassGradient: Slack: {}, Path Length: {}",
                path.slack,
                gCell_indices.size());
@@ -4843,4 +4856,12 @@ FloatPoint gpl::NesterovBase::getTimingGradient(const GCell* gCell) const
   return timing_gradient;
 }
 
+void NesterovBase::updateSTA()
+{
+  if (sta_ != nullptr) {
+    debugPrint(log_, GPL, "timing", 1, "Updated STA");
+    sta_->updateTiming(false);
+    sta_->ensureLibLinked();
+  }
+}
 }  // namespace gpl
