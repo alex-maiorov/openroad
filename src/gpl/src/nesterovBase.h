@@ -771,6 +771,14 @@ struct NesterovBaseVars
   const float minPhiCoef;
   float maxPhiCoef;  // may be updated after initialization
 
+  // Timing gradient pass parameters
+  const int timing_pass_top_n;
+  const float timing_pass_proj_weight;
+  const float timing_pass_end_to_end_weight;
+  const float timing_pass_slack_sharpness;
+  const float timing_pass_slack_offset;
+  const int timing_pass_sta_run_interval;
+
   static constexpr float minWireLengthForceBar = -300;
 };
 
@@ -797,12 +805,6 @@ struct NesterovPlaceVars
   int timingDrivenIterCounter = 0;
   const bool routability_driven_mode;
    const bool disableRevertIfDiverge;
-   int timing_pass_top_n;
-   float timing_pass_proj_weight;
-   float timing_pass_end_to_end_weight;
-   float timing_pass_slack_sharpness;
-   float timing_pass_slack_offset;
-   int timing_pass_sta_run_interval;
    bool debug = false;
   int debug_pause_iterations = 10;
   int debug_update_iterations = 10;
@@ -1350,25 +1352,6 @@ class NesterovBase
   // Store routability gradients here. Make sure to zero them in the constructor
   std::vector<FloatPoint> routabilityGrads_;
 
-  // TimingPass functionality merged from timingBase.cpp
-  void setTimingPassTopN(size_t top_n) { timing_pass_top_n_ = top_n; }
-  void setTimingPassProjWeight(float weight)
-  {
-    timing_pass_proj_weight_ = weight;
-  }
-  void setTimingPassEndToEndWeight(float weight)
-  {
-    timing_pass_end_to_end_weight_ = weight;
-  }
-  void setTimingPassSlackSharpness(float sharpness)
-  {
-    timing_pass_slack_sharpness_ = sharpness;
-  }
-  void setTimingPassSlackOffset(float offset)
-  {
-    timing_pass_slack_offset_ = offset;
-  }
-
   void updateSTA()
   {
     if (sta_ != nullptr) {
@@ -1382,13 +1365,8 @@ class NesterovBase
                              std::vector<FloatPoint>& grad);
 
  private:
-  // TimingPass member variables
+  // TimingPass member variables - now in nbVars_
   sta::dbSta* sta_ = nullptr;
-  size_t timing_pass_top_n_ = 10;
-  float timing_pass_proj_weight_ = 1.0F;
-  float timing_pass_end_to_end_weight_ = 1.0F;
-  float timing_pass_slack_sharpness_ = 1.0F;
-  float timing_pass_slack_offset_ = 0.0F;
   static constexpr float kMinSlackThreshold_ = 1e-3f;
 
   // Store violating paths queried from STA (queried once per iteration)

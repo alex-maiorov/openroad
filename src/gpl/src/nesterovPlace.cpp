@@ -35,15 +35,15 @@ namespace gpl {
 using utl::GPL;
 
 NesterovPlace::NesterovPlace(const NesterovPlaceVars& npVars,
-                             const std::shared_ptr<PlacerBaseCommon>& pbc,
-                             const std::shared_ptr<NesterovBaseCommon>& nbc,
-                             std::vector<std::shared_ptr<PlacerBase>>& pbVec,
-                             std::vector<std::shared_ptr<NesterovBase>>& nbVec,
-                             std::shared_ptr<RouteBase> rb,
-                             std::shared_ptr<TimingBase> tb,
-                             sta::dbSta* sta,
-                             std::unique_ptr<gpl::AbstractGraphics> graphics,
-                             utl::Logger* log)
+                              const std::shared_ptr<PlacerBaseCommon>& pbc,
+                              const std::shared_ptr<NesterovBaseCommon>& nbc,
+                              std::vector<std::shared_ptr<PlacerBase>>& pbVec,
+                              std::vector<std::shared_ptr<NesterovBase>>& nbVec,
+                              std::shared_ptr<RouteBase> rb,
+                              std::shared_ptr<TimingBase> tb,
+                              sta::dbSta* sta,
+                              std::unique_ptr<gpl::AbstractGraphics> graphics,
+                              utl::Logger* log)
     : npVars_(npVars)
 {
   pbc_ = pbc;
@@ -54,14 +54,8 @@ NesterovPlace::NesterovPlace(const NesterovPlaceVars& npVars,
   tb_ = std::move(tb);
   sta_ = sta;
   log_ = log;
-  // Initialize timing pass parameters in each NesterovBase object
-  for (auto& nb : nbVec_) {
-    nb->setTimingPassTopN(npVars_.timing_pass_top_n);
-    nb->setTimingPassProjWeight(npVars_.timing_pass_proj_weight);
-    nb->setTimingPassEndToEndWeight(npVars_.timing_pass_end_to_end_weight);
-    nb->setTimingPassSlackSharpness(npVars_.timing_pass_slack_sharpness);
-    nb->setTimingPassSlackOffset(npVars_.timing_pass_slack_offset);
-  }
+  // Timing pass parameters are now in NesterovBaseVars (nbVars_)
+  // which is passed during NesterovBase initialization
 
   db_cbk_ = std::make_unique<nesterovDbCbk>(this);
   nbc_->setCbk(db_cbk_.get());
@@ -88,46 +82,6 @@ NesterovPlace::NesterovPlace(const NesterovPlaceVars& npVars,
 NesterovPlace::~NesterovPlace()
 {
   reset();
-}
-
-void NesterovPlace::setTimingPassTopN(int top_n)
-{
-  for (auto& nb : nbVec_) {
-    nb->setTimingPassTopN(top_n);
-  }
-}
-
-void NesterovPlace::setTimingPassProjWeight(float proj_weight)
-{
-  for (auto& nb : nbVec_) {
-    nb->setTimingPassProjWeight(proj_weight);
-  }
-}
-
-void NesterovPlace::setTimingPassEndToEndWeight(float end_to_end_weight)
-{
-  for (auto& nb : nbVec_) {
-    nb->setTimingPassEndToEndWeight(end_to_end_weight);
-  }
-}
-
-void NesterovPlace::setTimingPassSlackSharpness(float slack_sharpness)
-{
-  for (auto& nb : nbVec_) {
-    nb->setTimingPassSlackSharpness(slack_sharpness);
-  }
-}
-
-void NesterovPlace::setTimingPassSlackOffset(float slack_offset)
-{
-  for (auto& nb : nbVec_) {
-    nb->setTimingPassSlackOffset(slack_offset);
-  }
-}
-
-void NesterovPlace::setTimingPassStaRunInterval(int interval)
-{
-  npVars_.timing_pass_sta_run_interval = interval;
 }
 
 void NesterovPlace::npUpdatePrevGradient(
@@ -615,10 +569,6 @@ void NesterovPlace::runTimingPass(int iter,
                                    int64_t& td_accumulated_delta_area,
                                    bool is_routability_gpl_iter)
 {
-
-  if (!tp_) {
-    return;
-  }
 
   if (npVars_.timingDrivenMode) {
     updateDb();

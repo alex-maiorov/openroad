@@ -70,13 +70,6 @@ class NesterovPlace
   void setTargetOverflow(float overflow) { npVars_.targetOverflow = overflow; }
   void setMaxIters(int limit) { npVars_.maxNesterovIter = limit; }
 
-  void setTimingPassTopN(int top_n);
-  void setTimingPassProjWeight(float proj_weight);
-  void setTimingPassEndToEndWeight(float end_to_end_weight);
-  void setTimingPassSlackSharpness(float slack_sharpness);
-   void setTimingPassSlackOffset(float slack_offset);
-   void setTimingPassStaRunInterval(int interval);
-
    void npUpdatePrevGradient(const std::shared_ptr<NesterovBase>& nb);
   void npUpdateCurGradient(const std::shared_ptr<NesterovBase>& nb);
   void npUpdateNextGradient(const std::shared_ptr<NesterovBase>& nb);
