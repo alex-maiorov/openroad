@@ -7,12 +7,20 @@
 #include <memory>
 #include <vector>
 
+#include "db_sta/dbSta.hh"
+#include "nesterovPass.h"
+#include "sta/Sta.hh"
+
 namespace grt {
 class GlobalRouter;
 }
 
 namespace rsz {
 class Resizer;
+}
+
+namespace sta {
+class Sta;
 }
 
 namespace utl {
@@ -22,6 +30,7 @@ class Logger;
 namespace gpl {
 
 class NesterovBaseCommon;
+class NesterovPassBase;
 class GNet;
 
 class TimingBase
@@ -43,6 +52,9 @@ class TimingBase
 
   void setTimingNetWeightMax(float max);
 
+  grt::GlobalRouter* getGlobalRouter() const { return grt_; }
+  rsz::Resizer* getResizer() const { return rs_; }
+
   // updateNetWeight.
   // True: successfully reweighted gnets
   // False: no slacks found
@@ -58,6 +70,57 @@ class TimingBase
   std::vector<int> timingOverflowChk_;
   float net_weight_max_ = 5;
   void initTimingOverflowChk();
+};
+
+struct ViolatingPath
+{
+  std::vector<size_t> gCellIndexSequence;
+  float slack;
+};
+
+class TimingPass : public NesterovPassBase
+{
+ public:
+  TimingPass(sta::dbSta* sta,
+             utl::Logger* log,
+             size_t top_n = 10,
+             float proj_weight = 1.0F,
+             float end_to_end_weight = 1.0F,
+             float slack_sharpness = 1.0F,
+             float slack_offset = 0.0F);
+
+  void runSTA()
+  {
+    sta_->updateTiming(false);
+    sta_->ensureLibLinked();
+  }
+  void gradientPass(NesterovBaseCommon& nbc,
+                    NesterovBaseVars& nbv,
+                    std::vector<FloatPoint>& grad) override;
+
+  void setTopN(size_t top_n) { top_n = top_n; }
+  void setProjWeight(float weight) { proj_weight = weight; }
+  void setEndToEndWeight(float weight) { end_to_end_weight = weight; }
+  void setSlackSharpness(float sharpness) { slack_sharpness = sharpness; }
+  void setSlackOffset(float offset) { slack_offset = offset; }
+
+ private:
+  std::vector<ViolatingPath> getViolatingPaths(int path_end_count,
+                                               NesterovBaseCommon& nbc);
+
+  bool _enabled = false;
+  grt::GlobalRouter* grt_ = nullptr;
+  rsz::Resizer* rs_ = nullptr;
+  utl::Logger* log_ = nullptr;
+  sta::dbSta* sta_ = nullptr;
+
+  size_t top_n = 10;
+  float proj_weight = 1.0F;
+  float end_to_end_weight = 1.0F;
+  float slack_sharpness = 1.0F;
+  float slack_offset = 0.0F;
+
+  static constexpr float kMinSlackThreshold = 1e-3f;
 };
 
 }  // namespace gpl
