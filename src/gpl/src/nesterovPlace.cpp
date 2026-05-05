@@ -619,9 +619,7 @@ void NesterovPlace::runTimingPass(int iter,
     return;
   }
 
-  if (npVars_.timingDrivenMode
-      && tb_->isTimingNetWeightOverflow(average_overflow_unscaled_)
-      && (!is_routability_gpl_iter || !npVars_.routability_driven_mode)) {
+  if (npVars_.timingDrivenMode) {
     updateDb();
 
     bool virtual_td_iter
@@ -1189,14 +1187,7 @@ int NesterovPlace::doNesterovPlace(int start_iter)
       ++npVars_.maxNesterovIter;
     }
 
-    // runTimingDriven(nesterov_iter,
-    //                 timing_driven_dir,
-    //                 routability_driven_revert_count,
-    //                 timing_driven_count,
-    //                 td_accumulated_delta_area,
-    //                 is_routability_gpl_iter);
 
-    // Run the cell-to-cell timing pass
     runTimingPass(nesterov_iter,
                   timing_driven_dir,
                   routability_driven_revert_count,

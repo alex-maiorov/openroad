@@ -1076,8 +1076,6 @@ class NesterovBase
                        float wlCoeffX,
                        float wlCoeffY);
 
-  void updateGradientsWithTiming(TimingPass& tp);
-
   void nbUpdatePrevGradient(float wlCoeffX, float wlCoeffY);
   void nbUpdateCurGradient(float wlCoeffX, float wlCoeffY);
   void nbUpdateNextGradient(float wlCoeffX, float wlCoeffY);
@@ -1205,7 +1203,7 @@ class NesterovBase
     FloatPoint curSLPWireLengthGrads;
     FloatPoint curSLPDensityGrads;
     FloatPoint curSLPTimingGrads;
-    FloatPoint curSLPTimingGrads;
+    FloatPoint curSLPRoutabilityGrads;
     FloatPoint curSLPSumGrads;
 
     FloatPoint nextSLPCoordi;
@@ -1321,6 +1319,12 @@ class NesterovBase
   bool reprint_iter_header_ = false;
 
   void initFillerGCells();
+
+  // Store timing gradients here. Make sure to zero them in the constructor
+  std::vector<FloatPoint> timingGrads_;
+
+  // Store routability gradients here. Make sure to zero them in the constructor
+  std::vector<FloatPoint> routabilityGrads_;
 };
 
 inline std::vector<Bin>& NesterovBase::getBins()
