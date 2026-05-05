@@ -301,12 +301,7 @@ bool Replace::initNesterovPlace(const PlaceOptions& options,
                                           tb_,
                                           sta_,
                                           graphics_->MakeNew(log_),
-                                          log_,
-                                          options.timingGradPassTopN,
-                                          options.timingGradPassProjWeight,
-                                          options.timingGradPassEndToEndWeight,
-                                          options.timingGradPassSlackSharpness,
-                                          options.timingGradPassSlackOffset);
+                                          log_);
   }
   // Ensure these get set even if np_ already exists.
   np_->setTargetOverflow(options.overflow);
