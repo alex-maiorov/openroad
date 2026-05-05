@@ -1035,12 +1035,7 @@ NesterovPlaceVars::NesterovPlaceVars(const PlaceOptions& options)
       keepResizeBelowOverflow(options.keepResizeBelowOverflow),
       timingDrivenMode(options.timingDrivenMode),
       routability_driven_mode(options.routabilityDrivenMode),
-      disableRevertIfDiverge(options.disableRevertIfDiverge),
-      timing_pass_top_n(options.timingGradPassTopN),
-      timing_pass_proj_weight(options.timingGradPassProjWeight),
-      timing_pass_end_to_end_weight(options.timingGradPassEndToEndWeight),
-      timing_pass_slack_sharpness(options.timingGradPassSlackSharpness),
-      timing_pass_slack_offset(options.timingGradPassSlackOffset)
+      disableRevertIfDiverge(options.disableRevertIfDiverge)
 {
 }
 
@@ -2769,7 +2764,7 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
   // First, compute timing gradients using the merged TimingPass functionality
   // This computes gradient contributions from timing violations
   if (sta_ != nullptr) {
-    runTimingPassGradient(*nbc_, timingGrads);
+    runTimingPassGradient(*nbc_, nbVars_, timingGrads);
   } else {
     // No STA available, zero out timing grads
     std::fill(timingGrads.begin(), timingGrads.end(), FloatPoint(0, 0));
@@ -4501,9 +4496,8 @@ std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
   bool unique_edges = false;  // Don't filter for unique edges
   float slack_min = -1e30f;   // Capture all paths (no lower bound)
   float slack_max
-      = npVars_->timing_pass_slack_offset;  // TODO: Architectural decision:
-                                            // Figure out how to deal with
-                                            // near-violations.
+      = timing_pass_slack_offset_;  // TODO: Architectural decision: Figure out
+                                    // how to deal with near-violations.
   bool sort_by_slack = true;  // Sort results by slack (most negative first)
 
   // Empty path_groups means search all path groups (e.g., max, min, etc.)
@@ -4613,14 +4607,13 @@ std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
 void gpl::NesterovBase::queryTimingViolations(NesterovBaseCommon& nbc)
 {
   // Query STA for violating paths and store them
-  violating_paths_ = getViolatingPaths(npVars_->timing_pass_top_n, nbc);
+  violating_paths_ = getViolatingPaths(timing_pass_top_n_, nbc);
 }
 
 void gpl::NesterovBase::runTimingPassGradient(NesterovBaseCommon& nbc,
+                                              NesterovBaseVars& nbv,
                                               std::vector<FloatPoint>& grad)
 {
-  // Use stored violating paths (queried once per iteration via
-  // queryTimingViolations)
   for (const auto& path : violating_paths_) {
     const auto& gCell_indices = path.gCellIndexSequence;
     if (gCell_indices.size() < 2) {
@@ -4642,9 +4635,8 @@ void gpl::NesterovBase::runTimingPassGradient(NesterovBaseCommon& nbc,
     // Weight function: exp(-sharpness * (slack + offset))
     // Negative slack (violation) increases weight; zero slack gives weight =
     // exp(-offset).
-    const float slack_weight
-        = exp(-1.0f * npVars_->timing_pass_slack_sharpness
-              * (path.slack + npVars_->timing_pass_slack_offset));
+    const float slack_weight = exp(-1.0f * timing_pass_slack_sharpness_
+                                   * (path.slack + timing_pass_slack_offset_));
 
     for (size_t i = 0; i < gCell_indices.size(); ++i) {
       const size_t cell_idx = gCell_indices[i];
@@ -4659,16 +4651,16 @@ void gpl::NesterovBase::runTimingPassGradient(NesterovBaseCommon& nbc,
 
       // Endpoint attraction force calc
       const bool is_endpoint = (i == 0 || i == gCell_indices.size() - 1);
-      if (npVars_->timing_pass_end_to_end_weight > 0.0f && is_endpoint) {
+      if (timing_pass_end_to_end_weight_ > 0.0f && is_endpoint) {
         const FloatPoint to_end1{end1_x - cell_pos.x, end1_y - cell_pos.y};
         const FloatPoint to_end2{end2_x - cell_pos.x, end2_y - cell_pos.y};
         const float scaled_force
-            = npVars_->timing_pass_end_to_end_weight * slack_weight;
+            = timing_pass_end_to_end_weight_ * slack_weight;
         force = (to_end1 + to_end2) * scaled_force;
       }
 
       // Projection force calc
-      if (npVars_->timing_pass_proj_weight > 0.0f && gCell_indices.size() > 2
+      if (timing_pass_proj_weight_ > 0.0f && gCell_indices.size() > 2
           && !is_endpoint) {
         const FloatPoint proj_from_end1
             = proj_vector(cell_pos, end1_pos, end2_pos);
@@ -4677,7 +4669,7 @@ void gpl::NesterovBase::runTimingPassGradient(NesterovBaseCommon& nbc,
         const float dist_sq = from_cell_to_proj.x * from_cell_to_proj.x
                               + from_cell_to_proj.y * from_cell_to_proj.y;
         const float proj_scaled_force
-            = npVars_->timing_pass_proj_weight * slack_weight * dist_sq;
+            = timing_pass_proj_weight_ * slack_weight * dist_sq;
         force = force + (from_cell_to_proj * proj_scaled_force);
       }
 
@@ -4722,9 +4714,8 @@ FloatPoint gpl::NesterovBase::getTimingGradient(const GCell* gCell) const
     }
 
     // Weight function: exp(-sharpness * (slack + offset))
-    const float slack_weight
-        = exp(-1.0f * npVars_->timing_pass_slack_sharpness
-              * (path.slack + npVars_->timing_pass_slack_offset));
+    const float slack_weight = exp(-1.0f * timing_pass_slack_sharpness_
+                                   * (path.slack + timing_pass_slack_offset_));
 
     const size_t i = std::distance(gCell_indices.begin(), it);
     const bool is_endpoint = (i == 0 || i == gCell_indices.size() - 1);
@@ -4735,16 +4726,15 @@ FloatPoint gpl::NesterovBase::getTimingGradient(const GCell* gCell) const
     const FloatPoint end2_pos{end2_x, end2_y};
 
     // Endpoint attraction force calc
-    if (npVars_->timing_pass_end_to_end_weight > 0.0f && is_endpoint) {
+    if (timing_pass_end_to_end_weight_ > 0.0f && is_endpoint) {
       const FloatPoint to_end1{end1_x - cell_pos.x, end1_y - cell_pos.y};
       const FloatPoint to_end2{end2_x - cell_pos.x, end2_y - cell_pos.y};
-      const float scaled_force
-          = npVars_->timing_pass_end_to_end_weight * slack_weight;
+      const float scaled_force = timing_pass_end_to_end_weight_ * slack_weight;
       timing_gradient = (to_end1 + to_end2) * scaled_force;
     }
 
     // Projection force calc
-    if (npVars_->timing_pass_proj_weight > 0.0f && gCell_indices.size() > 2
+    if (timing_pass_proj_weight_ > 0.0f && gCell_indices.size() > 2
         && !is_endpoint) {
       const FloatPoint proj_from_end1
           = proj_vector(cell_pos, end1_pos, end2_pos);
@@ -4753,7 +4743,7 @@ FloatPoint gpl::NesterovBase::getTimingGradient(const GCell* gCell) const
       const float dist_sq = from_cell_to_proj.x * from_cell_to_proj.x
                             + from_cell_to_proj.y * from_cell_to_proj.y;
       const float proj_scaled_force
-          = npVars_->timing_pass_proj_weight * slack_weight * dist_sq;
+          = timing_pass_proj_weight_ * slack_weight * dist_sq;
       timing_gradient
           = timing_gradient + (from_cell_to_proj * proj_scaled_force);
     }
