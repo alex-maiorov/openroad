@@ -1922,8 +1922,7 @@ NesterovBase::NesterovBase(
     std::shared_ptr<NesterovBaseCommon> nbc,
     utl::Logger* log,
     sta::dbSta* sta)
-    : nbVars_(nbVars),
-      sta_(sta)
+    : nbVars_(nbVars), sta_(sta)
 {
   pb_ = std::move(pb);
   nbc_ = std::move(nbc);
@@ -2575,13 +2574,13 @@ FloatPoint NesterovBase::getDensityGradient(const GCell* gCell) const
 FloatPoint NesterovBase::getTimingPreconditioner(const GCell* gCell) const
 {
   // FIXME: think about this
-  return FloatPoint(1,1);
+  return FloatPoint(1, 1);
 }
 
 FloatPoint NesterovBase::getRoutabilityPreconditioner(const GCell* gCell) const
 {
   // FIXME: think about this
-  return FloatPoint(1,1);
+  return FloatPoint(1, 1);
 }
 
 FloatPoint NesterovBase::getRoutabilityGradient(const GCell* gCell) const
@@ -2811,10 +2810,10 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
     FloatPoint routabilityPrecondi = getRoutabilityPreconditioner(gCell);
 
     FloatPoint sumPrecondi(
-        wireLengthPreCondi.x + (densityPenalty_ * densityPrecondi.x) +
-        timingPrecondi.x + routabilityPrecondi.x,
-        wireLengthPreCondi.y + (densityPenalty_ * densityPrecondi.y) +
-        timingPrecondi.y + routabilityPrecondi.y);
+        wireLengthPreCondi.x + (densityPenalty_ * densityPrecondi.x)
+            + timingPrecondi.x + routabilityPrecondi.x,
+        wireLengthPreCondi.y + (densityPenalty_ * densityPrecondi.y)
+            + timingPrecondi.y + routabilityPrecondi.y);
 
     sumPrecondi.x
         = std::max(sumPrecondi.x, NesterovPlaceVars::minPreconditioner);
@@ -2835,10 +2834,13 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
              wireLengthGradSum_);
   debugPrint(
       log_, GPL, "updateGrad", 1, "DensityGradSum: {:g}", densityGradSum_);
-  debugPrint(
-      log_, GPL, "updateGrad", 1, "TimingGradSum: {:g}", timingGradSum_);
-  debugPrint(
-      log_, GPL, "updateGrad", 1, "RoutabilityGradSum: {:g}", routabilityGradSum_);
+  debugPrint(log_, GPL, "updateGrad", 1, "TimingGradSum: {:g}", timingGradSum_);
+  debugPrint(log_,
+             GPL,
+             "updateGrad",
+             1,
+             "RoutabilityGradSum: {:g}",
+             routabilityGradSum_);
   debugPrint(log_, GPL, "updateGrad", 1, "GradSum: {:g}", gradSum);
 }
 
@@ -2876,8 +2878,8 @@ void NesterovBase::nbUpdateNextGradient(float wlCoeffX, float wlCoeffY)
 }
 
 void NesterovBase::updateSinglePrevGradient(size_t gCellIndex,
-                                             float wlCoeffX,
-                                             float wlCoeffY)
+                                            float wlCoeffX,
+                                            float wlCoeffY)
 {
   updateSingleGradient(gCellIndex,
                        prevSLPSumGrads_,
@@ -2890,8 +2892,8 @@ void NesterovBase::updateSinglePrevGradient(size_t gCellIndex,
 }
 
 void NesterovBase::updateSingleCurGradient(size_t gCellIndex,
-                                            float wlCoeffX,
-                                            float wlCoeffY)
+                                           float wlCoeffX,
+                                           float wlCoeffY)
 {
   updateSingleGradient(gCellIndex,
                        curSLPSumGrads_,
@@ -2935,10 +2937,12 @@ void NesterovBase::updateSingleGradient(
 
   sumGrads[gCellIndex].x = wireLengthGrads[gCellIndex].x
                            + densityPenalty_ * densityGrads[gCellIndex].x
-                           + timingGrads[gCellIndex].x + routabilityGrads[gCellIndex].x;
+                           + timingGrads[gCellIndex].x
+                           + routabilityGrads[gCellIndex].x;
   sumGrads[gCellIndex].y = wireLengthGrads[gCellIndex].y
                            + densityPenalty_ * densityGrads[gCellIndex].y
-                           + timingGrads[gCellIndex].y + routabilityGrads[gCellIndex].y;
+                           + timingGrads[gCellIndex].y
+                           + routabilityGrads[gCellIndex].y;
 
   FloatPoint wireLengthPreCond = nbc_->getWireLengthPreconditioner(gCell);
   FloatPoint densityPrecondi = getDensityPreconditioner(gCell);
@@ -2946,51 +2950,10 @@ void NesterovBase::updateSingleGradient(
   FloatPoint routabilityPrecondi = getRoutabilityPreconditioner(gCell);
 
   FloatPoint sumPrecondi(
-      wireLengthPreCond.x + (densityPenalty_ * densityPrecondi.x) +
-          timingPrecondi.x + routabilityPrecondi.x,
-      wireLengthPreCond.y + (densityPenalty_ * densityPrecondi.y) +
-          timingPrecondi.y + routabilityPrecondi.y);
-
-  sumPrecondi.x = std::max(sumPrecondi.x, NesterovPlaceVars::minPreconditioner);
-  sumPrecondi.y = std::max(sumPrecondi.y, NesterovPlaceVars::minPreconditioner);
-
-  sumGrads[gCellIndex].x /= sumPrecondi.x;
-  sumGrads[gCellIndex].y /= sumPrecondi.y;
-}
-
-  GCell* gCell = nb_gcells_.at(gCellIndex);
-  if (gCell->isLocked()) {
-    wireLengthGrads[gCellIndex] = FloatPoint(0, 0);
-    densityGrads[gCellIndex] = FloatPoint(0, 0);
-    timingGrads[gCellIndex] = FloatPoint(0, 0);
-    routabilityGrads[gCellIndex] = FloatPoint(0, 0);
-    sumGrads[gCellIndex] = FloatPoint(0, 0);
-    return;
-  }
-
-  wireLengthGrads[gCellIndex]
-      = nbc_->getWireLengthGradientWA(gCell, wlCoeffX, wlCoeffY);
-  densityGrads[gCellIndex] = getDensityGradient(gCell);
-  timingGrads[gCellIndex] = getTimingGradient(gCell);
-  routabilityGrads[gCellIndex] = getRoutabilityGradient(gCell);
-
-  sumGrads[gCellIndex].x = wireLengthGrads[gCellIndex].x
-                           + densityPenalty_ * densityGrads[gCellIndex].x
-                           + timingGrads[gCellIndex].x + routabilityGrads[gCellIndex].x;
-  sumGrads[gCellIndex].y = wireLengthGrads[gCellIndex].y
-                           + densityPenalty_ * densityGrads[gCellIndex].y
-                           + timingGrads[gCellIndex].y + routabilityGrads[gCellIndex].y;
-
-  FloatPoint wireLengthPreCondi = nbc_->getWireLengthPreconditioner(gCell);
-  FloatPoint densityPrecondi = getDensityPreconditioner(gCell);
-  FloatPoint timingPrecondi = getTimingPreconditioner(gCell);
-  FloatPoint routabilityPrecondi = getRoutabilityPreconditioner(gCell);
-
-  FloatPoint sumPrecondi(
-      wireLengthPreCondi.x + (densityPenalty_ * densityPrecondi.x) +
-      timingPrecondi.x + routabilityPrecondi.x,
-      wireLengthPreCondi.y + (densityPenalty_ * densityPrecondi.y) +
-      timingPrecondi.y + routabilityPrecondi.y);
+      wireLengthPreCond.x + (densityPenalty_ * densityPrecondi.x)
+          + timingPrecondi.x + routabilityPrecondi.x,
+      wireLengthPreCond.y + (densityPenalty_ * densityPrecondi.y)
+          + timingPrecondi.y + routabilityPrecondi.y);
 
   sumPrecondi.x = std::max(sumPrecondi.x, NesterovPlaceVars::minPreconditioner);
   sumPrecondi.y = std::max(sumPrecondi.y, NesterovPlaceVars::minPreconditioner);
@@ -4529,10 +4492,11 @@ std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
   int group_path_count = sta::PathGroup::group_path_count_max;
   // Limit to top_n worst paths per unique endpoint pin
   int endpoint_path_count = path_end_count;
-  bool unique_pins = false;        // Don't filter for unique pins
-  bool unique_edges = false;       // Don't filter for unique edges
-  float slack_min = -1e30f;        // Capture all paths (no lower bound)
-  float slack_max = timing_pass_slack_offset_;  // TODO: Architectural decision: Figure out
+  bool unique_pins = false;   // Don't filter for unique pins
+  bool unique_edges = false;  // Don't filter for unique edges
+  float slack_min = -1e30f;   // Capture all paths (no lower bound)
+  float slack_max
+      = timing_pass_slack_offset_;  // TODO: Architectural decision: Figure out
                                     // how to deal with near-violations.
   bool sort_by_slack = true;  // Sort results by slack (most negative first)
 
@@ -4548,25 +4512,25 @@ std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
   // Query STA for path ends matching our filter criteria
   // This returns paths sorted by slack (most critical first)
   sta::PathEndSeq ends = sta_->findPathEnds(from,
-                                             thrus,
-                                             to,
-                                             unconstrained,
-                                             scenes,
-                                             delay_min_max,
-                                             group_path_count,
-                                             endpoint_path_count,
-                                             unique_pins,
-                                             unique_edges,
-                                             slack_min,
-                                             slack_max,
-                                             sort_by_slack,
-                                             path_groups,
-                                             setup,
-                                             hold,
-                                             recovery,
-                                             removal,
-                                             clk_gating_setup,
-                                             clk_gating_hold);
+                                            thrus,
+                                            to,
+                                            unconstrained,
+                                            scenes,
+                                            delay_min_max,
+                                            group_path_count,
+                                            endpoint_path_count,
+                                            unique_pins,
+                                            unique_edges,
+                                            slack_min,
+                                            slack_max,
+                                            sort_by_slack,
+                                            path_groups,
+                                            setup,
+                                            hold,
+                                            recovery,
+                                            removal,
+                                            clk_gating_setup,
+                                            clk_gating_hold);
 
   // Get the database network adapter for converting between OpenSTA and OpenDB
   // objects
@@ -4640,13 +4604,17 @@ std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
   return violating_paths;
 }
 
-void gpl::NesterovBase::runTimingPassGradient(NesterovBaseCommon& nbc,
-                                               NesterovBaseVars& nbv,
-                                               std::vector<FloatPoint>& grad)
+void gpl::NesterovBase::queryTimingViolations(NesterovBaseCommon& nbc)
 {
-  std::vector<ViolatingPath> paths = getViolatingPaths(timing_pass_top_n_, nbc);
+  // Query STA for violating paths and store them
+  violating_paths_ = getViolatingPaths(timing_pass_top_n_, nbc);
+}
 
-  for (const auto& path : paths) {
+void gpl::NesterovBase::runTimingPassGradient(NesterovBaseCommon& nbc,
+                                              NesterovBaseVars& nbv,
+                                              std::vector<FloatPoint>& grad)
+{
+  for (const auto& path : violating_paths_) {
     const auto& gCell_indices = path.gCellIndexSequence;
     if (gCell_indices.size() < 2) {
       continue;
@@ -4667,15 +4635,15 @@ void gpl::NesterovBase::runTimingPassGradient(NesterovBaseCommon& nbc,
     // Weight function: exp(-sharpness * (slack + offset))
     // Negative slack (violation) increases weight; zero slack gives weight =
     // exp(-offset).
-    const float slack_weight
-        = exp(-1.0f * timing_pass_slack_sharpness_ * (path.slack + timing_pass_slack_offset_));
+    const float slack_weight = exp(-1.0f * timing_pass_slack_sharpness_
+                                   * (path.slack + timing_pass_slack_offset_));
 
     for (size_t i = 0; i < gCell_indices.size(); ++i) {
       const size_t cell_idx = gCell_indices[i];
       GCell& cell = nbc.getGCell(cell_idx);
 
       const FloatPoint cell_pos{static_cast<float>(cell.cx()),
-                               static_cast<float>(cell.cy())};
+                                static_cast<float>(cell.cy())};
       const FloatPoint end1_pos{end1_x, end1_y};
       const FloatPoint end2_pos{end2_x, end2_y};
 
@@ -4686,25 +4654,102 @@ void gpl::NesterovBase::runTimingPassGradient(NesterovBaseCommon& nbc,
       if (timing_pass_end_to_end_weight_ > 0.0f && is_endpoint) {
         const FloatPoint to_end1{end1_x - cell_pos.x, end1_y - cell_pos.y};
         const FloatPoint to_end2{end2_x - cell_pos.x, end2_y - cell_pos.y};
-        const float scaled_force = timing_pass_end_to_end_weight_ * slack_weight;
+        const float scaled_force
+            = timing_pass_end_to_end_weight_ * slack_weight;
         force = (to_end1 + to_end2) * scaled_force;
       }
 
       // Projection force calc
-      if (timing_pass_proj_weight_ > 0.0f && gCell_indices.size() > 2 && !is_endpoint) {
+      if (timing_pass_proj_weight_ > 0.0f && gCell_indices.size() > 2
+          && !is_endpoint) {
         const FloatPoint proj_from_end1
             = proj_vector(cell_pos, end1_pos, end2_pos);
         const FloatPoint from_cell_to_proj
             = proj_from_end1 + (end1_pos - cell_pos);
         const float dist_sq = from_cell_to_proj.x * from_cell_to_proj.x
                               + from_cell_to_proj.y * from_cell_to_proj.y;
-        const float proj_scaled_force = timing_pass_proj_weight_ * slack_weight * dist_sq;
+        const float proj_scaled_force
+            = timing_pass_proj_weight_ * slack_weight * dist_sq;
         force = force + (from_cell_to_proj * proj_scaled_force);
       }
 
       grad[cell_idx] = grad[cell_idx] + force;
     }
   }
+}
+
+FloatPoint gpl::NesterovBase::getTimingGradient(const GCell* gCell) const
+{
+  FloatPoint timing_gradient(0.0f, 0.0f);
+
+  if (gCell == nullptr || sta_ == nullptr) {
+    return timing_gradient;
+  }
+
+  const size_t target_index = nbc_->getGCellIndex(gCell);
+
+  for (const auto& path : violating_paths_) {
+    const auto& gCell_indices = path.gCellIndexSequence;
+    if (gCell_indices.size() < 2) {
+      continue;
+    }
+
+    // Check if this GCell is in the violating path
+    auto it
+        = std::find(gCell_indices.begin(), gCell_indices.end(), target_index);
+    if (it == gCell_indices.end()) {
+      continue;
+    }
+
+    GCell& end1 = nbc_->getGCell(gCell_indices.front());
+    GCell& end2 = nbc_->getGCell(gCell_indices.back());
+
+    const float end1_x = end1.cx();
+    const float end1_y = end1.cy();
+    const float end2_x = end2.cx();
+    const float end2_y = end2.cy();
+
+    if (std::abs(path.slack) > kMinSlackThreshold_) {
+      continue;
+    }
+
+    // Weight function: exp(-sharpness * (slack + offset))
+    const float slack_weight = exp(-1.0f * timing_pass_slack_sharpness_
+                                   * (path.slack + timing_pass_slack_offset_));
+
+    const size_t i = std::distance(gCell_indices.begin(), it);
+    const bool is_endpoint = (i == 0 || i == gCell_indices.size() - 1);
+
+    const FloatPoint cell_pos{static_cast<float>(gCell->cx()),
+                              static_cast<float>(gCell->cy())};
+    const FloatPoint end1_pos{end1_x, end1_y};
+    const FloatPoint end2_pos{end2_x, end2_y};
+
+    // Endpoint attraction force calc
+    if (timing_pass_end_to_end_weight_ > 0.0f && is_endpoint) {
+      const FloatPoint to_end1{end1_x - cell_pos.x, end1_y - cell_pos.y};
+      const FloatPoint to_end2{end2_x - cell_pos.x, end2_y - cell_pos.y};
+      const float scaled_force = timing_pass_end_to_end_weight_ * slack_weight;
+      timing_gradient = (to_end1 + to_end2) * scaled_force;
+    }
+
+    // Projection force calc
+    if (timing_pass_proj_weight_ > 0.0f && gCell_indices.size() > 2
+        && !is_endpoint) {
+      const FloatPoint proj_from_end1
+          = proj_vector(cell_pos, end1_pos, end2_pos);
+      const FloatPoint from_cell_to_proj
+          = proj_from_end1 + (end1_pos - cell_pos);
+      const float dist_sq = from_cell_to_proj.x * from_cell_to_proj.x
+                            + from_cell_to_proj.y * from_cell_to_proj.y;
+      const float proj_scaled_force
+          = timing_pass_proj_weight_ * slack_weight * dist_sq;
+      timing_gradient
+          = timing_gradient + (from_cell_to_proj * proj_scaled_force);
+    }
+  }
+
+  return timing_gradient;
 }
 
 }  // namespace gpl

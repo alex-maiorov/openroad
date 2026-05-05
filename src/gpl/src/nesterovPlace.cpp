@@ -35,20 +35,20 @@ namespace gpl {
 using utl::GPL;
 
 NesterovPlace::NesterovPlace(const NesterovPlaceVars& npVars,
-                              const std::shared_ptr<PlacerBaseCommon>& pbc,
-                              const std::shared_ptr<NesterovBaseCommon>& nbc,
-                              std::vector<std::shared_ptr<PlacerBase>>& pbVec,
-                              std::vector<std::shared_ptr<NesterovBase>>& nbVec,
-                              std::shared_ptr<RouteBase> rb,
-                              std::shared_ptr<TimingBase> tb,
-                              sta::dbSta* sta,
-                              std::unique_ptr<gpl::AbstractGraphics> graphics,
-                              utl::Logger* log,
-                              int timing_pass_top_n,
-                              float timing_pass_proj_weight,
-                              float timing_pass_end_to_end_weight,
-                              float timing_pass_slack_sharpness,
-                              float timing_pass_slack_offset)
+                             const std::shared_ptr<PlacerBaseCommon>& pbc,
+                             const std::shared_ptr<NesterovBaseCommon>& nbc,
+                             std::vector<std::shared_ptr<PlacerBase>>& pbVec,
+                             std::vector<std::shared_ptr<NesterovBase>>& nbVec,
+                             std::shared_ptr<RouteBase> rb,
+                             std::shared_ptr<TimingBase> tb,
+                             sta::dbSta* sta,
+                             std::unique_ptr<gpl::AbstractGraphics> graphics,
+                             utl::Logger* log,
+                             int timing_pass_top_n,
+                             float timing_pass_proj_weight,
+                             float timing_pass_end_to_end_weight,
+                             float timing_pass_slack_sharpness,
+                             float timing_pass_slack_offset)
     : npVars_(npVars)
 {
   pbc_ = pbc;
@@ -619,24 +619,18 @@ void NesterovPlace::runTimingPass(int iter,
   if (npVars_.timingDrivenMode) {
     updateDb();
 
-    bool virtual_td_iter
-        = (average_overflow_unscaled_ > npVars_.keepResizeBelowOverflow);
-
     log_->info(GPL,
-               103,
-               "Timing-pass iteration {}",
-               ++npVars_.timingDrivenIterCounter);
+                103,
+                "Timing-pass iteration {}",
+                ++npVars_.timingDrivenIterCounter);
+
+    // Query STA and store violating paths for later gradient computation
+    // This is called once per tp_sta_run_interval iterations
     if (npVars_.timingDrivenIterCounter % tp_sta_run_interval == 0) {
       for (auto& nb : nbVec_) {
-        nb->runSTAPass();
+        nb->updateSTA();
+        nb->queryTimingViolations(*nbc_);
       }
-    }
-
-    for (auto& nb : nbVec_) {
-      // Get the current gradients and add timing pass gradient
-      // The timing gradient is now computed directly in updateGradients
-      // Just trigger a gradient update which will include timing
-      nb->nbUpdateCurGradient(wireLengthCoefX_, wireLengthCoefY_);
     }
 
     ++timing_driven_count;
@@ -1188,7 +1182,6 @@ int NesterovPlace::doNesterovPlace(int start_iter)
       ++routability_gpl_iter_count_;
       ++npVars_.maxNesterovIter;
     }
-
 
     runTimingPass(nesterov_iter,
                   timing_driven_dir,

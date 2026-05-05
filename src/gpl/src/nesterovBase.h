@@ -20,14 +20,14 @@
 #include <vector>
 
 #include "boost/unordered/unordered_flat_map.hpp"
+#include "db_sta/dbSta.hh"
 #include "gpl/Replace.h"
 #include "odb/db.h"
 #include "placerBase.h"
 #include "point.h"
 #include "routeBase.h"
-#include "utl/Logger.h"
-#include "db_sta/dbSta.hh"
 #include "sta/Sta.hh"
+#include "utl/Logger.h"
 
 namespace odb {
 class dbInst;
@@ -1336,12 +1336,25 @@ class NesterovBase
 
   // TimingPass functionality merged from timingBase.cpp
   void setTimingPassTopN(size_t top_n) { timing_pass_top_n_ = top_n; }
-  void setTimingPassProjWeight(float weight) { timing_pass_proj_weight_ = weight; }
-  void setTimingPassEndToEndWeight(float weight) { timing_pass_end_to_end_weight_ = weight; }
-  void setTimingPassSlackSharpness(float sharpness) { timing_pass_slack_sharpness_ = sharpness; }
-  void setTimingPassSlackOffset(float offset) { timing_pass_slack_offset_ = offset; }
+  void setTimingPassProjWeight(float weight)
+  {
+    timing_pass_proj_weight_ = weight;
+  }
+  void setTimingPassEndToEndWeight(float weight)
+  {
+    timing_pass_end_to_end_weight_ = weight;
+  }
+  void setTimingPassSlackSharpness(float sharpness)
+  {
+    timing_pass_slack_sharpness_ = sharpness;
+  }
+  void setTimingPassSlackOffset(float offset)
+  {
+    timing_pass_slack_offset_ = offset;
+  }
 
-  void runSTAPass() {
+  void updateSTA()
+  {
     if (sta_ != nullptr) {
       sta_->updateTiming(false);
       sta_->ensureLibLinked();
@@ -1349,8 +1362,8 @@ class NesterovBase
   }
 
   void runTimingPassGradient(NesterovBaseCommon& nbc,
-                            NesterovBaseVars& nbv,
-                            std::vector<FloatPoint>& grad);
+                             NesterovBaseVars& nbv,
+                             std::vector<FloatPoint>& grad);
 
  private:
   // TimingPass member variables
@@ -1361,6 +1374,12 @@ class NesterovBase
   float timing_pass_slack_sharpness_ = 1.0F;
   float timing_pass_slack_offset_ = 0.0F;
   static constexpr float kMinSlackThreshold_ = 1e-3f;
+
+  // Store violating paths queried from STA (queried once per iteration)
+  std::vector<ViolatingPath> violating_paths_;
+
+  // Query STA for violating paths and store them in violating_paths_
+  void queryTimingViolations(NesterovBaseCommon& nbc);
 
   std::vector<ViolatingPath> getViolatingPaths(int path_end_count,
                                                NesterovBaseCommon& nbc);
