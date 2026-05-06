@@ -2789,11 +2789,9 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
 
   // First, compute timing gradients using the merged TimingPass functionality
   // This computes gradient contributions from timing violations
+  std::fill(timingGrads.begin(), timingGrads.end(), FloatPoint(0, 0));
   if (sta_ != nullptr) {
     runTimingPassGradient(*nbc_, nbVars_, timingGrads);
-  } else {
-    // No STA available, zero out timing grads
-    std::fill(timingGrads.begin(), timingGrads.end(), FloatPoint(0, 0));
   }
 
   // TODO: This OpenMP parallel section is causing non-determinism. Consider
