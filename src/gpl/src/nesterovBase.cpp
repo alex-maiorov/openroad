@@ -1939,7 +1939,7 @@ NesterovBase::NesterovBase(
     utl::Logger* log,
     rsz::Resizer* resizer,
     sta::dbSta* sta)
-    : nbVars_(nbVars), sta_(sta), rsz_(resizer)
+    : nbVars_(nbVars), rsz_(resizer), sta_(sta)
 {
   pb_ = std::move(pb);
   nbc_ = std::move(nbc);
@@ -4861,11 +4861,19 @@ FloatPoint gpl::NesterovBase::getTimingGradient(const GCell* gCell) const
 
 void NesterovBase::updateSTA()
 {
-  if (sta_ != nullptr) {
+  bool run_journal_restore = true;
+  if (sta_ != nullptr && rsz_ != nullptr) {
     debugPrint(log_, GPL, "timing", 1, "Updated STA");
     sta_->updateTiming(true);
     sta_->ensureLibLinked();
-    rsz_->findResizeSlacks(true);
+    rsz_->findResizeSlacks(run_journal_restore);
+
+    if (!run_journal_restore) {
+      nbc_->fixPointers();
+    }
+  }
+  else{
+    debugPrint(log_, GPL, "timing", 1, "Could not update STA, rsz or sta were null");
   }
 }
 }  // namespace gpl
