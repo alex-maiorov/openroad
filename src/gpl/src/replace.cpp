@@ -258,10 +258,10 @@ bool Replace::initNesterovPlace(const PlaceOptions& options,
     nbc_ = std::make_shared<NesterovBaseCommon>(
         nbVars, pbc_, log_, threads, clusters_);
 
-    for (const auto& pb : pbVec_) {
-      nbVec_.push_back(
-          std::make_shared<NesterovBase>(nbVars, pb, nbc_, log_, sta_));
-    }
+     for (const auto& pb : pbVec_) {
+       nbVec_.push_back(
+           std::make_shared<NesterovBase>(nbVars, pb, nbc_, log_, rs_, sta_));
+     }
   }
 
   if (!rb_) {

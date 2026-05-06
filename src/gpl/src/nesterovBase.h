@@ -28,6 +28,7 @@
 #include "routeBase.h"
 #include "sta/Sta.hh"
 #include "utl/Logger.h"
+#include "rsz/Resizer.hh"
 
 
 namespace odb {
@@ -45,6 +46,10 @@ namespace sta {
 class Sta;
 class dbSta;
 }  // namespace sta
+
+namespace rsz {
+  class Resizer;
+}  // namespace rsz
 
 namespace gpl {
 
@@ -970,11 +975,12 @@ class NesterovBaseCommon
 class NesterovBase
 {
  public:
-  NesterovBase(NesterovBaseVars nbVars,
-               std::shared_ptr<PlacerBase> pb,
-               std::shared_ptr<NesterovBaseCommon> nbc,
-               utl::Logger* log,
-               sta::dbSta* sta = nullptr);
+   NesterovBase(NesterovBaseVars nbVars,
+                std::shared_ptr<PlacerBase> pb,
+                std::shared_ptr<NesterovBaseCommon> nbc,
+                utl::Logger* log,
+                rsz::Resizer* resizer,
+                sta::dbSta* sta = nullptr);
   ~NesterovBase();
 
   GCell& getFillerGCell(size_t index);
@@ -1206,12 +1212,13 @@ class NesterovBase
                                                NesterovBaseCommon& nbc);
 
  private:
-  NesterovBaseVars nbVars_;
-  std::shared_ptr<PlacerBase> pb_;
-  std::shared_ptr<NesterovBaseCommon> nbc_;
-  utl::Logger* log_ = nullptr;
+   NesterovBaseVars nbVars_;
+   std::shared_ptr<PlacerBase> pb_;
+   std::shared_ptr<NesterovBaseCommon> nbc_;
+   utl::Logger* log_ = nullptr;
+   rsz::Resizer* rsz_ = nullptr;
 
-  BinGrid bg_;
+   BinGrid bg_;
   std::unique_ptr<FFT> fft_;
 
   int fillerDx_ = 0;

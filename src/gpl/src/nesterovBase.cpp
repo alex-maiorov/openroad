@@ -1937,8 +1937,9 @@ NesterovBase::NesterovBase(
     // NOLINTNEXTLINE(performance-unnecessary-value-param)
     std::shared_ptr<NesterovBaseCommon> nbc,
     utl::Logger* log,
+    rsz::Resizer* resizer,
     sta::dbSta* sta)
-    : nbVars_(nbVars), sta_(sta)
+    : nbVars_(nbVars), sta_(sta), rsz_(resizer)
 {
   pb_ = std::move(pb);
   nbc_ = std::move(nbc);
@@ -4864,6 +4865,7 @@ void NesterovBase::updateSTA()
     debugPrint(log_, GPL, "timing", 1, "Updated STA");
     sta_->updateTiming(true);
     sta_->ensureLibLinked();
+    rsz_->findResizeSlacks(true);
   }
 }
 }  // namespace gpl
