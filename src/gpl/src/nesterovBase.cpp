@@ -4920,9 +4920,11 @@ void NesterovBase::updateSTA()
     sta_->ensureLibLinked();
     rsz_->findResizeSlacks(run_journal_restore);
 
-    if (!run_journal_restore) {
-      nbc_->fixPointers();
-    }
+    // if (!run_journal_restore) {
+    //   nbc_->fixPointers();
+    // }
+
+    nbc_->fixPointers();
   }
   else{
     debugPrint(log_, GPL, "timing", 1, "Could not update STA, rsz or sta were null");
