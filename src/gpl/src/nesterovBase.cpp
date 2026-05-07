@@ -1097,9 +1097,10 @@ NesterovBaseVars::NesterovBaseVars(const PlaceOptions& options)
       timing_pass_top_n(options.timingGradPassTopN),
       timing_pass_proj_weight(options.timingGradPassProjWeight),
       timing_pass_end_to_end_weight(options.timingGradPassEndToEndWeight),
-      timing_pass_slack_sharpness(options.timingGradPassSlackSharpness),
-      timing_pass_slack_offset(options.timingGradPassSlackOffset),
-      timing_pass_sta_run_interval(options.timingGradPassStaRunInterval)
+       timing_pass_slack_sharpness(options.timingGradPassSlackSharpness),
+       timing_pass_slack_offset(options.timingGradPassSlackOffset),
+       timing_pass_slack_upper(options.timingGradPassSlackUpper),
+       timing_pass_sta_run_interval(options.timingGradPassStaRunInterval)
 {
 }
 
@@ -4616,10 +4617,7 @@ std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
   bool unique_pins = false;   // Don't filter for unique pins
   bool unique_edges = false;  // Don't filter for unique edges
   float slack_min = -1e30f;   // Capture all paths (no lower bound)
-  float slack_max
-      = nbVars_
-            .timing_pass_slack_offset;  // TODO: Architectural decision: Figure
-                                        // out how to deal with near-violations.
+  float slack_max = nbVars_.timing_pass_slack_upper;
   bool sort_by_slack = true;  // Sort results by slack (most negative first)
 
   // Empty path_groups means search all path groups (e.g., max, min, etc.)
@@ -4676,14 +4674,15 @@ std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
   sta::dbNetwork* network = sta_->getDbNetwork();
 
   // Iterate through each path endpoint found by STA
+  const sta::Slack zero_slack = 0.0;
   sta::Slack wns = 0.0;
   sta::Slack tns = 0.0;
   for (sta::PathEnd* end : ends) {
     // Slack is negative for violating paths, positive for meeting timing.
-    // We only query paths with slack <= slack_offset (typically <= 0).
+    // We only query paths with slack <= slack_upper (typically <= 0).
     sta::Slack slack = end->slack(sta_);
-    tns = tns + slack;
-    if(slack < wns){
+    tns = tns + std::max(slack, zero_slack);
+    if(std::max(slack, zero_slack) < wns){
       wns = slack;
     }
 

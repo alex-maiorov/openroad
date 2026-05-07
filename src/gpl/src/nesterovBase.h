@@ -781,7 +781,8 @@ struct NesterovBaseVars
   const float timing_pass_proj_weight;
   const float timing_pass_end_to_end_weight;
   const float timing_pass_slack_sharpness;
-  const float timing_pass_slack_offset;
+   const float timing_pass_slack_offset;
+   const float timing_pass_slack_upper;
   const int timing_pass_sta_run_interval;
 
   static constexpr float minWireLengthForceBar = -300;
