@@ -2858,7 +2858,7 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
   // First, compute timing gradients using the merged TimingPass functionality
   // This computes gradient contributions from timing violations
   std::fill(timingGrads.begin(), timingGrads.end(), FloatPoint(0, 0));
-  if (sta_ != nullptr) {
+  if (sta_ != nullptr && npVars_->timingDrivenMode) {
     runTimingPassGradient(*nbc_, nbVars_, timingGrads);
   }
 
@@ -4677,11 +4677,13 @@ std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
   const sta::Slack zero_slack = 0.0;
   sta::Slack wns = 0.0;
   sta::Slack tns = 0.0;
+  sta::Slack asl = 0.0;
   for (sta::PathEnd* end : ends) {
     // Slack is negative for violating paths, positive for meeting timing.
     // We only query paths with slack <= slack_upper (typically <= 0).
     sta::Slack slack = end->slack(sta_);
     tns = tns + std::max(slack, zero_slack);
+    asl = asl + (slack / ends.size());
     if(std::max(slack, zero_slack) < wns){
       wns = slack;
     }
@@ -4745,8 +4747,8 @@ std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
              GPL,
              "timing",
              1,
-             "TNS: {}, WNS: {}",
-             tns, wns);
+             "TNS: {}, WNS: {}, ASL: {}",
+             tns, wns, asl);
 
   return violating_paths;
 }
@@ -4761,6 +4763,8 @@ void gpl::NesterovBase::runTimingPassGradient(NesterovBaseCommon& nbc,
                                               NesterovBaseVars& nbv,
                                               std::vector<FloatPoint>& grad)
 {
+  int inf_cnt = 0;
+  int nan_cnt = 0;
   for (const auto& path : violating_paths_) {
     const auto& gCell_indices = path.gCellIndexSequence;
     if (gCell_indices.size() < 2) {
@@ -4829,14 +4833,31 @@ void gpl::NesterovBase::runTimingPassGradient(NesterovBaseCommon& nbc,
         force = force + (from_cell_to_proj * proj_scaled_force);
       }
 
+      if(std::isnan(force.x) || std::isnan(force.y)){
+        nan_cnt++;
+        continue;
+      }
+      if(std::isinf(force.x) || std::isinf(force.y)){
+        inf_cnt++;
+        continue;
+      }
+
       grad[cell_idx] = grad[cell_idx] + force;
     }
   }
+  if(nan_cnt != 0 || inf_cnt != 0){
+    log_->warn(GPL, 350, "runTimingPassGradient: Skipped {} Gradient Updates due to {} NaNs and {} Infs", nan_cnt + inf_cnt, nan_cnt, inf_cnt);
+  }
+
 }
 
 FloatPoint gpl::NesterovBase::getTimingGradient(const GCell* gCell) const
 {
   FloatPoint timing_gradient(0.0f, 0.0f);
+
+  if(!npVars_->timingDrivenMode){
+    return timing_gradient;
+  }
 
   if (gCell == nullptr || sta_ == nullptr) {
     return timing_gradient;
@@ -4912,18 +4933,39 @@ FloatPoint gpl::NesterovBase::getTimingGradient(const GCell* gCell) const
 
 void NesterovBase::updateSTA()
 {
+  // if (sta_ != nullptr) {
+  //   debugPrint(log_, GPL, "timing", 1, "Updated STA");
+  //
+  //   // Step 1: ensure the timing graph is levelized (like Resizer::init())
+  //   sta_->ensureLevelized();
+  //
+  //   // Step 2: ensure clock networks for all modes (like Resizer::resizePreamble())
+  //   for (auto* mode : sta_->modes()) {
+  //     sta_->ensureClkNetwork(mode);
+  //   }
+  //
+  //   // Step 3: full STA timing update: compute delays and arrivals
+  //   // (internally calls searchPreamble -> findDelays -> findAllArrivals)
+  //   sta_->updateTiming(true);
+  //
+  //   // Step 4: ensure libraries are linked
+  //   sta_->ensureLibLinked();
+  //
+  //   // Note: unlike the previous version that called rsz_->findResizeSlacks(),
+  //   // we no longer run repair design / rebuffer / journal restore.
+  //   // Those were netlist-modifying operations that required nbc_->fixPointers()
+  //   // to re-sync GPL storage after journal restore. Since we are only updating
+  //   // STA state without touching the netlist, fixPointers() is not needed.
+  // } else {
+  //   debugPrint(
+  //       log_, GPL, "timing", 1, "Could not update STA, sta was null");
+  // }
+
   bool run_journal_restore = true;
   if (sta_ != nullptr && rsz_ != nullptr) {
-    debugPrint(log_, GPL, "timing", 1, "Updated STA");
-    sta_->updateTiming(true);
-    sta_->ensureLibLinked();
     rsz_->findResizeSlacks(run_journal_restore);
-
-    // if (!run_journal_restore) {
-    //   nbc_->fixPointers();
-    // }
-
     nbc_->fixPointers();
+
   }
   else{
     debugPrint(log_, GPL, "timing", 1, "Could not update STA, rsz or sta were null");

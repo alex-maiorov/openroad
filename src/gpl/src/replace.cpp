@@ -325,12 +325,13 @@ int Replace::doNesterovPlace(const int threads,
                8,
                "Timing driven mode enabled. timing_gradpass parameters: "
                "top_n={}, proj_weight={}, end_to_end_weight={}, "
-               "slack_sharpness={}, slack_offset={}, sta_run_interval={}",
+               "slack_sharpness={}, slack_offset={}, slack_upper={}, sta_run_interval={}",
                options.timingGradPassTopN,
                options.timingGradPassProjWeight,
                options.timingGradPassEndToEndWeight,
                options.timingGradPassSlackSharpness,
                options.timingGradPassSlackOffset,
+               options.timingGradPassSlackUpper,
                options.timingGradPassStaRunInterval);
   }
 
