@@ -101,6 +101,7 @@ struct PlaceOptions
    float timingGradPassSlackOffset = 0.0F;
    float timingGradPassSlackUpper = 0.0F;
    int timingGradPassStaRunInterval = 10;
+   int timingGradPassFirstIter = 0;
 
 
   void skipIo();

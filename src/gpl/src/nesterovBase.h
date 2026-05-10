@@ -783,7 +783,8 @@ struct NesterovBaseVars
   const float timing_pass_slack_sharpness;
    const float timing_pass_slack_offset;
    const float timing_pass_slack_upper;
-  const int timing_pass_sta_run_interval;
+   const int timing_pass_sta_run_interval;
+   const int timing_pass_first_iter;
 
   static constexpr float minWireLengthForceBar = -300;
 };
@@ -813,6 +814,7 @@ struct NesterovPlaceVars
    const bool disableRevertIfDiverge;
    bool debug = false;
    int timingGradPassStaRunInterval;
+   int timingGradPassFirstIter;
   int debug_pause_iterations = 10;
   int debug_update_iterations = 10;
   bool debug_draw_bins = true;

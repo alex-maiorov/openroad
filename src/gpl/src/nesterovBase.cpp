@@ -1100,7 +1100,8 @@ NesterovBaseVars::NesterovBaseVars(const PlaceOptions& options)
        timing_pass_slack_sharpness(options.timingGradPassSlackSharpness),
        timing_pass_slack_offset(options.timingGradPassSlackOffset),
        timing_pass_slack_upper(options.timingGradPassSlackUpper),
-       timing_pass_sta_run_interval(options.timingGradPassStaRunInterval)
+        timing_pass_sta_run_interval(options.timingGradPassStaRunInterval),
+        timing_pass_first_iter(options.timingGradPassFirstIter)
 {
 }
 
@@ -1118,7 +1119,8 @@ NesterovPlaceVars::NesterovPlaceVars(const PlaceOptions& options)
       timingDrivenMode(options.timingDrivenMode),
       routability_driven_mode(options.routabilityDrivenMode),
        disableRevertIfDiverge(options.disableRevertIfDiverge),
-       timingGradPassStaRunInterval(options.timingGradPassStaRunInterval)
+        timingGradPassStaRunInterval(options.timingGradPassStaRunInterval),
+        timingGradPassFirstIter(options.timingGradPassFirstIter)
 {
 }
 
@@ -4682,9 +4684,9 @@ std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
     // Slack is negative for violating paths, positive for meeting timing.
     // We only query paths with slack <= slack_upper (typically <= 0).
     sta::Slack slack = end->slack(sta_);
-    tns = tns + std::max(slack, zero_slack);
+    tns = tns + std::min(slack, zero_slack);
     asl = asl + (slack / ends.size());
-    if(std::max(slack, zero_slack) < wns){
+    if(std::min(slack, zero_slack) < wns){
       wns = slack;
     }
 

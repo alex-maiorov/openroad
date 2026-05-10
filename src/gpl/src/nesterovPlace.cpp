@@ -580,7 +580,8 @@ void NesterovPlace::runTimingPass(int iter,
 
     // Query STA and store violating paths for later gradient computation
     // This is called once per tp_sta_run_interval iterations
-    if (npVars_.timingDrivenIterCounter % npVars_.timingGradPassStaRunInterval == 0) {
+    if (iter >= npVars_.timingGradPassFirstIter &&
+        ((iter - npVars_.timingGradPassFirstIter) % npVars_.timingGradPassStaRunInterval) == 0) {
       for (auto& nb : nbVec_) {
         nb->updateSTA();
         nb->queryTimingViolations(*nbc_);

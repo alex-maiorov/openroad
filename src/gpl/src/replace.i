@@ -80,8 +80,9 @@ static gpl::PlaceOptions getOptions(
    checkKey(
        keys, "-timing_gradpass_slack_sharpness", options.timingGradPassSlackSharpness);
    checkKey(keys, "-timing_gradpass_slack_offset", options.timingGradPassSlackOffset);
-   checkKey(keys, "-timing_gradpass_slack_upper", options.timingGradPassSlackUpper);
-   checkKey(keys, "-timing_gradpass_sta_run_interval", options.timingGradPassStaRunInterval);
+    checkKey(keys, "-timing_gradpass_slack_upper", options.timingGradPassSlackUpper);
+    checkKey(keys, "-timing_gradpass_sta_run_interval", options.timingGradPassStaRunInterval);
+    checkKey(keys, "-timing_gradpass_first_iter", options.timingGradPassFirstIter);
 
 
   if (auto it = keys.find("-density"); it != keys.end()) {
