@@ -573,22 +573,26 @@ void NesterovPlace::runTimingPass(int iter,
   if (npVars_.timingDrivenMode) {
     updateDb();
 
-    log_->info(GPL,
-                103,
-                "Timing-pass iteration {}",
-                ++npVars_.timingDrivenIterCounter);
+
 
     // Query STA and store violating paths for later gradient computation
     // This is called once per tp_sta_run_interval iterations
     if (iter >= npVars_.timingGradPassFirstIter &&
         ((iter - npVars_.timingGradPassFirstIter) % npVars_.timingGradPassStaRunInterval) == 0) {
+      log_->info(GPL,
+                 103,
+                 "Timing-pass iteration {}",
+                 ++npVars_.timingDrivenIterCounter);
       for (auto& nb : nbVec_) {
         nb->updateSTA();
+        updateDb();
         nb->queryTimingViolations(*nbc_);
       }
+      ++timing_driven_count;
     }
 
-    ++timing_driven_count;
+
+    updateDb();
   }
 }
 

@@ -2869,6 +2869,14 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
 
   // #pragma omp parallel for num_threads(nbc_->getNumThreads()) reduction(+ :
   // wireLengthGradSum_, densityGradSum_, gradSum)
+
+
+  // FIXME: Systematize this warning, this is hacky
+  int num_nonzero_tim = 0;
+  float mean_wl_where_timing_nz = 0.0;
+  float mean_tim_where_timing_nz = 0.0;
+  const float timing_to_wirelength_warning_thresh = 5.0;
+
   for (size_t i = 0; i < nb_gcells_.size(); i++) {
     GCell* gCell = nb_gcells_.at(i);
     wireLengthGrads[i]
@@ -2917,7 +2925,38 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
     sumGrads[i].x /= sumPrecondi.x;
     sumGrads[i].y /= sumPrecondi.y;
 
+
+    //FIXME: Get rid of this later, expensive and only for debug
+    if(std::abs(timingGrads[i].x) > 0.0 || std::abs(timingGrads[i].y) > 0.0){
+      float tim_mag = std::sqrt(std::pow(timingGrads[i].x, 2) + std::pow(timingGrads[i].y, 2));
+      float wl_mag  = std::sqrt(std::pow(wireLengthGrads[i].x, 2) + std::pow(wireLengthGrads[i].y, 2));
+
+      num_nonzero_tim++;
+      mean_wl_where_timing_nz += wl_mag;
+      mean_tim_where_timing_nz += tim_mag;
+    }
+
     gradSum += std::fabs(sumGrads[i].x) + std::fabs(sumGrads[i].y);
+  }
+  mean_wl_where_timing_nz /= num_nonzero_tim;
+  mean_tim_where_timing_nz /= num_nonzero_tim;
+
+  float tim_wl_ratio = mean_tim_where_timing_nz / mean_wl_where_timing_nz;
+
+  if(tim_wl_ratio >= timing_to_wirelength_warning_thresh){
+    log_->warn(GPL,
+               353,
+               "Mean timing to Wirelength Ratio exceeded warning threshold({}>={})",
+               tim_wl_ratio,
+               timing_to_wirelength_warning_thresh);
+  }
+  else{
+    debugPrint(log_,
+               GPL,
+               "updateGrad",
+               1,
+               "tim_wl_ratio: {}",
+               tim_wl_ratio);
   }
 
   debugPrint(log_,
@@ -4935,35 +4974,8 @@ FloatPoint gpl::NesterovBase::getTimingGradient(const GCell* gCell) const
 
 void NesterovBase::updateSTA()
 {
-  // if (sta_ != nullptr) {
-  //   debugPrint(log_, GPL, "timing", 1, "Updated STA");
-  //
-  //   // Step 1: ensure the timing graph is levelized (like Resizer::init())
-  //   sta_->ensureLevelized();
-  //
-  //   // Step 2: ensure clock networks for all modes (like Resizer::resizePreamble())
-  //   for (auto* mode : sta_->modes()) {
-  //     sta_->ensureClkNetwork(mode);
-  //   }
-  //
-  //   // Step 3: full STA timing update: compute delays and arrivals
-  //   // (internally calls searchPreamble -> findDelays -> findAllArrivals)
-  //   sta_->updateTiming(true);
-  //
-  //   // Step 4: ensure libraries are linked
-  //   sta_->ensureLibLinked();
-  //
-  //   // Note: unlike the previous version that called rsz_->findResizeSlacks(),
-  //   // we no longer run repair design / rebuffer / journal restore.
-  //   // Those were netlist-modifying operations that required nbc_->fixPointers()
-  //   // to re-sync GPL storage after journal restore. Since we are only updating
-  //   // STA state without touching the netlist, fixPointers() is not needed.
-  // } else {
-  //   debugPrint(
-  //       log_, GPL, "timing", 1, "Could not update STA, sta was null");
-  // }
 
-  bool run_journal_restore = true;
+  bool run_journal_restore = false;
   if (sta_ != nullptr && rsz_ != nullptr) {
     rsz_->findResizeSlacks(run_journal_restore);
     nbc_->fixPointers();
