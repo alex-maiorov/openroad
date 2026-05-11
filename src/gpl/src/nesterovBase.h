@@ -26,10 +26,9 @@
 #include "placerBase.h"
 #include "point.h"
 #include "routeBase.h"
+#include "rsz/Resizer.hh"
 #include "sta/Sta.hh"
 #include "utl/Logger.h"
-#include "rsz/Resizer.hh"
-
 
 namespace odb {
 class dbInst;
@@ -48,7 +47,7 @@ class dbSta;
 }  // namespace sta
 
 namespace rsz {
-  class Resizer;
+class Resizer;
 }  // namespace rsz
 
 namespace gpl {
@@ -781,10 +780,10 @@ struct NesterovBaseVars
   const float timing_pass_proj_weight;
   const float timing_pass_end_to_end_weight;
   const float timing_pass_slack_sharpness;
-   const float timing_pass_slack_offset;
-   const float timing_pass_slack_upper;
-   const int timing_pass_sta_run_interval;
-   const int timing_pass_first_iter;
+  const float timing_pass_slack_offset;
+  const float timing_pass_slack_upper;
+  const int timing_pass_sta_run_interval;
+  const int timing_pass_first_iter;
 
   static constexpr float minWireLengthForceBar = -300;
 };
@@ -811,10 +810,10 @@ struct NesterovPlaceVars
   bool timingDrivenMode;
   int timingDrivenIterCounter = 0;
   const bool routability_driven_mode;
-   const bool disableRevertIfDiverge;
-   bool debug = false;
-   int timingGradPassStaRunInterval;
-   int timingGradPassFirstIter;
+  const bool disableRevertIfDiverge;
+  bool debug = false;
+  int timingGradPassStaRunInterval;
+  int timingGradPassFirstIter;
   int debug_pause_iterations = 10;
   int debug_update_iterations = 10;
   bool debug_draw_bins = true;
@@ -978,12 +977,12 @@ class NesterovBaseCommon
 class NesterovBase
 {
  public:
-   NesterovBase(NesterovBaseVars nbVars,
-                std::shared_ptr<PlacerBase> pb,
-                std::shared_ptr<NesterovBaseCommon> nbc,
-                utl::Logger* log,
-                rsz::Resizer* resizer,
-                sta::dbSta* sta = nullptr);
+  NesterovBase(NesterovBaseVars nbVars,
+               std::shared_ptr<PlacerBase> pb,
+               std::shared_ptr<NesterovBaseCommon> nbc,
+               utl::Logger* log,
+               rsz::Resizer* resizer,
+               sta::dbSta* sta = nullptr);
   ~NesterovBase();
 
   GCell& getFillerGCell(size_t index);
@@ -1108,8 +1107,6 @@ class NesterovBase
                        float wlCoeffX,
                        float wlCoeffY);
 
-
-
   void nbUpdatePrevGradient(float wlCoeffX, float wlCoeffY);
   void nbUpdateCurGradient(float wlCoeffX, float wlCoeffY);
   void nbUpdateNextGradient(float wlCoeffX, float wlCoeffY);
@@ -1211,17 +1208,23 @@ class NesterovBase
   // Query STA for violating paths and store them in violating_paths_
   void queryTimingViolations(NesterovBaseCommon& nbc);
 
+  // Access the already-stored violating paths (no STA query).
+  const std::vector<ViolatingPath>& getViolatingPathsStored() const
+  {
+    return violating_paths_;
+  }
+
   std::vector<ViolatingPath> getViolatingPaths(int top_n,
                                                NesterovBaseCommon& nbc);
 
  private:
-   NesterovBaseVars nbVars_;
-   std::shared_ptr<PlacerBase> pb_;
-   std::shared_ptr<NesterovBaseCommon> nbc_;
-   utl::Logger* log_ = nullptr;
-   rsz::Resizer* rsz_ = nullptr;
+  NesterovBaseVars nbVars_;
+  std::shared_ptr<PlacerBase> pb_;
+  std::shared_ptr<NesterovBaseCommon> nbc_;
+  utl::Logger* log_ = nullptr;
+  rsz::Resizer* rsz_ = nullptr;
 
-   BinGrid bg_;
+  BinGrid bg_;
   std::unique_ptr<FFT> fft_;
 
   int fillerDx_ = 0;
@@ -1378,17 +1381,14 @@ class NesterovBase
   // Helper to compute the timing gradient force for a cell on a violating path.
   // Performs the mathematical gradient calculation (endpoint attraction and
   // projection force) without NaN/Inf checks (caller handles those).
-  FloatPoint calculateTimingGradientValue(
-      const FloatPoint& cell_pos,
-      const FloatPoint& end1_pos,
-      const FloatPoint& end2_pos,
-      float slack_weight,
-      float end_to_end_weight,
-      float proj_weight,
-      size_t path_length,
-      bool is_endpoint) const;
-
-
+  FloatPoint calculateTimingGradientValue(const FloatPoint& cell_pos,
+                                          const FloatPoint& end1_pos,
+                                          const FloatPoint& end2_pos,
+                                          float slack_weight,
+                                          float end_to_end_weight,
+                                          float proj_weight,
+                                          size_t path_length,
+                                          bool is_endpoint) const;
 
  private:
   // TimingPass member variables - now in nbVars_
@@ -1397,8 +1397,6 @@ class NesterovBase
 
   // Store violating paths queried from STA (queried once per iteration)
   std::vector<ViolatingPath> violating_paths_;
-
-
 };
 
 inline std::vector<Bin>& NesterovBase::getBins()
@@ -1487,7 +1485,5 @@ inline constexpr const char* format_label_um2 = "{:27} {:10.3f} um^2";
 inline constexpr const char* format_label_percent = "{:27} {:10.2f} %";
 inline constexpr const char* format_label_um2_with_delta
     = "{:27} {:10.3f} um^2 ({:+.2f}%)";
-
-
 
 }  // namespace gpl

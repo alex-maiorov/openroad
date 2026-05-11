@@ -4974,7 +4974,7 @@ FloatPoint gpl::NesterovBase::getTimingGradient(const GCell* gCell) const
 void NesterovBase::updateSTA()
 {
 
-  bool run_journal_restore = false;
+  bool run_journal_restore = true;
   if (sta_ != nullptr && rsz_ != nullptr) {
     rsz_->findResizeSlacks(run_journal_restore);
     nbc_->fixPointers();
