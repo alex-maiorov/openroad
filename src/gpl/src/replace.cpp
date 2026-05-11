@@ -33,9 +33,10 @@ using utl::GPL;
 Replace::Replace(odb::dbDatabase* odb,
                  sta::dbSta* sta,
                  rsz::Resizer* resizer,
+                 est::EstimateParasitics* est,
                  grt::GlobalRouter* router,
                  utl::Logger* logger)
-    : db_(odb), sta_(sta), rs_(resizer), fr_(router), log_(logger)
+    : db_(odb), sta_(sta), rs_(resizer), est_(est), fr_(router), log_(logger)
 {
   graphics_ = std::make_unique<GraphicsNone>();
 }
@@ -260,7 +261,7 @@ bool Replace::initNesterovPlace(const PlaceOptions& options,
 
      for (const auto& pb : pbVec_) {
        nbVec_.push_back(
-           std::make_shared<NesterovBase>(nbVars, pb, nbc_, log_, rs_, sta_));
+           std::make_shared<NesterovBase>(nbVars, pb, nbc_, log_, est_, sta_));
      }
   }
 

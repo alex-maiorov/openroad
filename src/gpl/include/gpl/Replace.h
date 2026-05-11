@@ -16,6 +16,10 @@ namespace sta {
 class dbSta;
 }
 
+namespace est {
+class EstimateParasitics;
+}
+
 namespace grt {
 class GlobalRouter;
 }
@@ -115,6 +119,7 @@ class Replace
   Replace(odb::dbDatabase* odb,
           sta::dbSta* sta,
           rsz::Resizer* resizer,
+          est::EstimateParasitics* est,
           grt::GlobalRouter* router,
           utl::Logger* logger);
 
@@ -162,6 +167,7 @@ class Replace
   odb::dbDatabase* db_ = nullptr;
   sta::dbSta* sta_ = nullptr;
   rsz::Resizer* rs_ = nullptr;
+  est::EstimateParasitics* est_ = nullptr;
   grt::GlobalRouter* fr_ = nullptr;
   utl::Logger* log_ = nullptr;
 

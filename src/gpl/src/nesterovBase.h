@@ -26,7 +26,7 @@
 #include "placerBase.h"
 #include "point.h"
 #include "routeBase.h"
-#include "rsz/Resizer.hh"
+#include "est/EstimateParasitics.h"
 #include "sta/Sta.hh"
 #include "utl/Logger.h"
 
@@ -45,10 +45,6 @@ namespace sta {
 class Sta;
 class dbSta;
 }  // namespace sta
-
-namespace rsz {
-class Resizer;
-}  // namespace rsz
 
 namespace gpl {
 
@@ -981,7 +977,7 @@ class NesterovBase
                std::shared_ptr<PlacerBase> pb,
                std::shared_ptr<NesterovBaseCommon> nbc,
                utl::Logger* log,
-               rsz::Resizer* resizer,
+               est::EstimateParasitics* est,
                sta::dbSta* sta = nullptr);
   ~NesterovBase();
 
@@ -1222,7 +1218,7 @@ class NesterovBase
   std::shared_ptr<PlacerBase> pb_;
   std::shared_ptr<NesterovBaseCommon> nbc_;
   utl::Logger* log_ = nullptr;
-  rsz::Resizer* rsz_ = nullptr;
+  est::EstimateParasitics* est_ = nullptr;
 
   BinGrid bg_;
   std::unique_ptr<FFT> fft_;

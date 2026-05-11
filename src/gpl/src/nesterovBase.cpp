@@ -2006,9 +2006,9 @@ NesterovBase::NesterovBase(
     // NOLINTNEXTLINE(performance-unnecessary-value-param)
     std::shared_ptr<NesterovBaseCommon> nbc,
     utl::Logger* log,
-    rsz::Resizer* resizer,
+    est::EstimateParasitics* est,
     sta::dbSta* sta)
-    : nbVars_(nbVars), rsz_(resizer), sta_(sta)
+    : nbVars_(nbVars), est_(est), sta_(sta)
 {
   pb_ = std::move(pb);
   nbc_ = std::move(nbc);
@@ -4973,15 +4973,18 @@ FloatPoint gpl::NesterovBase::getTimingGradient(const GCell* gCell) const
 
 void NesterovBase::updateSTA()
 {
-
-  bool run_journal_restore = true;
-  if (sta_ != nullptr && rsz_ != nullptr) {
-    rsz_->findResizeSlacks(run_journal_restore);
-    nbc_->fixPointers();
-
+  if (sta_ != nullptr && est_ != nullptr) {
+    // Determine parasitics source based on whether global routes exist
+    est::ParasiticsSrc parasitics_src = est::ParasiticsSrc::kPlacement;
+    grt::GlobalRouter* global_router = est_->getGlobalRouter();
+    if (global_router != nullptr && global_router->haveRoutes()) {
+      parasitics_src = est::ParasiticsSrc::kGlobalRouting;
+    }
+    // Estimate parasitics directly without using the resizer
+    est_->estimateParasitics(parasitics_src);
   }
   else{
-    debugPrint(log_, GPL, "timing", 1, "Could not update STA, rsz or sta were null");
+    debugPrint(log_, GPL, "timing", 1, "Could not update STA, est or sta were null");
   }
 }
 }  // namespace gpl
