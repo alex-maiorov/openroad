@@ -1375,6 +1375,19 @@ class NesterovBase
   // Store routability gradients here. Make sure to zero them in the constructor
   std::vector<FloatPoint> routabilityGrads_;
 
+  // Helper to compute the timing gradient force for a cell on a violating path.
+  // Performs the mathematical gradient calculation (endpoint attraction and
+  // projection force) without NaN/Inf checks (caller handles those).
+  FloatPoint calculateTimingGradientValue(
+      const FloatPoint& cell_pos,
+      const FloatPoint& end1_pos,
+      const FloatPoint& end2_pos,
+      float slack_weight,
+      float end_to_end_weight,
+      float proj_weight,
+      size_t path_length,
+      bool is_endpoint) const;
+
 
 
  private:

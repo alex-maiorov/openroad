@@ -4848,31 +4848,13 @@ void gpl::NesterovBase::runTimingPassGradient(NesterovBaseCommon& nbc,
       const FloatPoint end1_pos{end1_x, end1_y};
       const FloatPoint end2_pos{end2_x, end2_y};
 
-      FloatPoint force(0.0f, 0.0f);
-
-      // Endpoint attraction force calc
       const bool is_endpoint = (i == 0 || i == gCell_indices.size() - 1);
-      if (nbv.timing_pass_end_to_end_weight > 0.0f && is_endpoint) {
-        const FloatPoint to_end1{end1_x - cell_pos.x, end1_y - cell_pos.y};
-        const FloatPoint to_end2{end2_x - cell_pos.x, end2_y - cell_pos.y};
-        const float scaled_force
-            = nbv.timing_pass_end_to_end_weight * slack_weight;
-        force = (to_end1 + to_end2) * scaled_force;
-      }
 
-      // Projection force calc
-      if (nbv.timing_pass_proj_weight > 0.0f && gCell_indices.size() > 2
-          && !is_endpoint) {
-        const FloatPoint proj_from_end1
-            = proj_vector(cell_pos, end1_pos, end2_pos);
-        const FloatPoint from_cell_to_proj
-            = proj_from_end1 + (end1_pos - cell_pos);
-        const float dist_sq = from_cell_to_proj.x * from_cell_to_proj.x
-                              + from_cell_to_proj.y * from_cell_to_proj.y;
-        const float proj_scaled_force
-            = nbv.timing_pass_proj_weight * slack_weight * dist_sq;
-        force = force + (from_cell_to_proj * proj_scaled_force);
-      }
+      FloatPoint force = calculateTimingGradientValue(
+          cell_pos, end1_pos, end2_pos, slack_weight,
+          nbv.timing_pass_end_to_end_weight,
+          nbv.timing_pass_proj_weight,
+          gCell_indices.size(), is_endpoint);
 
       if(std::isnan(force.x) || std::isnan(force.y)){
         nan_cnt++;
@@ -4890,6 +4872,41 @@ void gpl::NesterovBase::runTimingPassGradient(NesterovBaseCommon& nbc,
     log_->warn(GPL, 350, "runTimingPassGradient: Skipped {} Gradient Updates due to {} NaNs and {} Infs", nan_cnt + inf_cnt, nan_cnt, inf_cnt);
   }
 
+}
+
+FloatPoint gpl::NesterovBase::calculateTimingGradientValue(
+    const FloatPoint& cell_pos,
+    const FloatPoint& end1_pos,
+    const FloatPoint& end2_pos,
+    float slack_weight,
+    float end_to_end_weight,
+    float proj_weight,
+    size_t path_length,
+    bool is_endpoint) const
+{
+  FloatPoint force(0.0f, 0.0f);
+
+  // Endpoint attraction force calc
+  if (end_to_end_weight > 0.0f && is_endpoint) {
+    const FloatPoint to_end1{end1_pos.x - cell_pos.x, end1_pos.y - cell_pos.y};
+    const FloatPoint to_end2{end2_pos.x - cell_pos.x, end2_pos.y - cell_pos.y};
+    const float scaled_force = end_to_end_weight * slack_weight;
+    force = (to_end1 + to_end2) * scaled_force;
+  }
+
+  // Projection force calc
+  if (proj_weight > 0.0f && path_length > 2 && !is_endpoint) {
+    const FloatPoint proj_from_end1
+        = proj_vector(cell_pos, end1_pos, end2_pos);
+    const FloatPoint from_cell_to_proj
+        = proj_from_end1 + (end1_pos - cell_pos);
+    const float dist_sq = from_cell_to_proj.x * from_cell_to_proj.x
+                          + from_cell_to_proj.y * from_cell_to_proj.y;
+    const float proj_scaled_force = proj_weight * slack_weight * dist_sq;
+    force = force + (from_cell_to_proj * proj_scaled_force);
+  }
+
+  return force;
 }
 
 FloatPoint gpl::NesterovBase::getTimingGradient(const GCell* gCell) const
@@ -4944,29 +4961,11 @@ FloatPoint gpl::NesterovBase::getTimingGradient(const GCell* gCell) const
     const FloatPoint end1_pos{end1_x, end1_y};
     const FloatPoint end2_pos{end2_x, end2_y};
 
-    // Endpoint attraction force calc
-    if (nbVars_.timing_pass_end_to_end_weight > 0.0f && is_endpoint) {
-      const FloatPoint to_end1{end1_x - cell_pos.x, end1_y - cell_pos.y};
-      const FloatPoint to_end2{end2_x - cell_pos.x, end2_y - cell_pos.y};
-      const float scaled_force
-          = nbVars_.timing_pass_end_to_end_weight * slack_weight;
-      timing_gradient = (to_end1 + to_end2) * scaled_force;
-    }
-
-    // Projection force calc
-    if (nbVars_.timing_pass_proj_weight > 0.0f && gCell_indices.size() > 2
-        && !is_endpoint) {
-      const FloatPoint proj_from_end1
-          = proj_vector(cell_pos, end1_pos, end2_pos);
-      const FloatPoint from_cell_to_proj
-          = proj_from_end1 + (end1_pos - cell_pos);
-      const float dist_sq = from_cell_to_proj.x * from_cell_to_proj.x
-                            + from_cell_to_proj.y * from_cell_to_proj.y;
-      const float proj_scaled_force
-          = nbVars_.timing_pass_proj_weight * slack_weight * dist_sq;
-      timing_gradient
-          = timing_gradient + (from_cell_to_proj * proj_scaled_force);
-    }
+    timing_gradient = timing_gradient + calculateTimingGradientValue(
+        cell_pos, end1_pos, end2_pos, slack_weight,
+        nbVars_.timing_pass_end_to_end_weight,
+        nbVars_.timing_pass_proj_weight,
+        gCell_indices.size(), is_endpoint);
   }
 
   return timing_gradient;
