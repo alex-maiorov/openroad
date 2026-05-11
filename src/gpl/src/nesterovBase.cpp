@@ -4854,7 +4854,7 @@ void gpl::NesterovBase::runTimingPassGradient(NesterovBaseCommon& nbc,
           cell_pos, end1_pos, end2_pos, slack_weight,
           nbv.timing_pass_end_to_end_weight,
           nbv.timing_pass_proj_weight,
-          gCell_indices.size(), is_endpoint);
+          gCell_indices.size(), is_endpoint, i);
 
       if(std::isnan(force.x) || std::isnan(force.y)){
         nan_cnt++;
@@ -4874,7 +4874,7 @@ void gpl::NesterovBase::runTimingPassGradient(NesterovBaseCommon& nbc,
 
 }
 
-FloatPoint gpl::NesterovBase::calculateTimingGradientValue(
+FloatPoint NesterovBase::calculateTimingGradientValue(
     const FloatPoint& cell_pos,
     const FloatPoint& end1_pos,
     const FloatPoint& end2_pos,
@@ -4882,12 +4882,14 @@ FloatPoint gpl::NesterovBase::calculateTimingGradientValue(
     float end_to_end_weight,
     float proj_weight,
     size_t path_length,
-    bool is_endpoint) const
+    bool is_endpoint,
+    size_t cell_index) const
 {
   FloatPoint force(0.0f, 0.0f);
 
   // Endpoint attraction force calc
   if (end_to_end_weight > 0.0f && is_endpoint) {
+    // FIXME: This relies on the fact that a - a = 0
     const FloatPoint to_end1{end1_pos.x - cell_pos.x, end1_pos.y - cell_pos.y};
     const FloatPoint to_end2{end2_pos.x - cell_pos.x, end2_pos.y - cell_pos.y};
     const float scaled_force = end_to_end_weight * slack_weight;
@@ -4896,20 +4898,28 @@ FloatPoint gpl::NesterovBase::calculateTimingGradientValue(
 
   // Projection force calc
   if (proj_weight > 0.0f && path_length > 2 && !is_endpoint) {
-    const FloatPoint proj_from_end1
-        = proj_vector(cell_pos, end1_pos, end2_pos);
-    const FloatPoint from_cell_to_proj
-        = proj_from_end1 + (end1_pos - cell_pos);
-    const float dist_sq = from_cell_to_proj.x * from_cell_to_proj.x
-                          + from_cell_to_proj.y * from_cell_to_proj.y;
-    const float proj_scaled_force = proj_weight * slack_weight * dist_sq;
-    force = force + (from_cell_to_proj * proj_scaled_force);
+    const FloatPoint e1_to_e2_vec{end2_pos.x - end1_pos.x, end2_pos.y - end1_pos.y};
+    float position_scaling_factor = float(cell_index) / float(path_length);
+    FloatPoint point_to_attract_cell_to = end1_pos + (e1_to_e2_vec * position_scaling_factor); // TODO: Not sure if it will be obvious what this does
+    force = FloatPoint(point_to_attract_cell_to - cell_pos) * float(proj_weight * slack_weight); // FIXME: maybe normalize this
+
+
+
+    // Old calculation was a bit silly due to not accounting for intermediate cells not actually being in-between endpoints, so it has been replaced
+    // const FloatPoint proj_from_end1
+    //     = proj_vector(cell_pos, end1_pos, end2_pos);
+    // const FloatPoint from_cell_to_proj
+    //     = proj_from_end1 + (end1_pos - cell_pos);
+    // const float dist_sq = from_cell_to_proj.x * from_cell_to_proj.x
+    //                       + from_cell_to_proj.y * from_cell_to_proj.y;
+    // const float proj_scaled_force = proj_weight * slack_weight * dist_sq;
+    // force = force + (from_cell_to_proj * proj_scaled_force);
   }
 
   return force;
 }
 
-FloatPoint gpl::NesterovBase::getTimingGradient(const GCell* gCell) const
+FloatPoint NesterovBase::getTimingGradient(const GCell* gCell) const
 {
   FloatPoint timing_gradient(0.0f, 0.0f);
 
@@ -4965,7 +4975,7 @@ FloatPoint gpl::NesterovBase::getTimingGradient(const GCell* gCell) const
         cell_pos, end1_pos, end2_pos, slack_weight,
         nbVars_.timing_pass_end_to_end_weight,
         nbVars_.timing_pass_proj_weight,
-        gCell_indices.size(), is_endpoint);
+        gCell_indices.size(), is_endpoint, i);
   }
 
   return timing_gradient;

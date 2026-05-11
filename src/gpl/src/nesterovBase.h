@@ -1384,7 +1384,8 @@ class NesterovBase
                                           float end_to_end_weight,
                                           float proj_weight,
                                           size_t path_length,
-                                          bool is_endpoint) const;
+                                          bool is_endpoint,
+                                          size_t cell_index) const;
 
  private:
   // TimingPass member variables - now in nbVars_
