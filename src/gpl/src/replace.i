@@ -88,6 +88,7 @@ static gpl::PlaceOptions getOptions(
     checkKey(keys, "-routability_gradpass_range", options.routabilityGradPassRange);
     checkKey(keys, "-routability_gradpass_offset", options.routabilityGradPassOffset);
     checkKey(keys, "-routability_gradpass_first_iter", options.routabilityGradPassFirstIter);
+    checkKey(keys, "-routability_gradpass_run_interval", options.routabilityGradPassRunInterval);
     checkFlag(flags, "-routability_gradpass_use_grt", options.routabilityGradPassUseGrt);
 
   if (auto it = keys.find("-density"); it != keys.end()) {

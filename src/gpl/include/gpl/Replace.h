@@ -113,6 +113,7 @@ struct PlaceOptions
    float routabilityGradPassRange = 1.0F;
    float routabilityGradPassOffset = 0.0F;
    int routabilityGradPassFirstIter = 0;
+   int routabilityGradPassRunInterval = 10;
    bool routabilityGradPassUseGrt = false;
 
   void skipIo();

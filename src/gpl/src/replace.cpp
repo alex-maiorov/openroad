@@ -344,12 +344,14 @@ int Replace::doNesterovPlace(const int threads,
   log_->info(GPL,
              355,
              "Routability gradient pass parameters: "
-             "sharpness={}, weight={}, range={}, offset={}, first_iter={}, use_grt={}",
+             "sharpness={}, weight={}, range={}, offset={}, "
+             "first_iter={}, run_interval={}, use_grt={}",
              options.routabilityGradPassSharpness,
              options.routabilityGradPassWeight,
              options.routabilityGradPassRange,
              options.routabilityGradPassOffset,
              options.routabilityGradPassFirstIter,
+             options.routabilityGradPassRunInterval,
              options.routabilityGradPassUseGrt);
 
   auto start = std::chrono::high_resolution_clock::now();

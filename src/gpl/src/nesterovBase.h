@@ -787,6 +787,7 @@ struct NesterovBaseVars
   const float routability_pass_range;
   const float routability_pass_offset;
   const int routability_pass_first_iter;
+  const int routability_pass_run_interval;
   const bool routability_pass_use_grt;
 
   static constexpr float minWireLengthForceBar = -300;
@@ -819,6 +820,7 @@ struct NesterovPlaceVars
   int timingGradPassStaRunInterval;
   int timingGradPassFirstIter;
   int routabilityGradPassFirstIter;
+  int routabilityGradPassRunInterval;
   int debug_pause_iterations = 10;
   int debug_update_iterations = 10;
   bool debug_draw_bins = true;

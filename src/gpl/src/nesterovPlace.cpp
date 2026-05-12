@@ -862,6 +862,12 @@ void NesterovPlace::runAllRoutabilityGradients(
     const std::string& routability_driven_dir,
     int routability_driven_revert_count)
 {
+  // Gate on routability-driven mode (matching the timing pattern where
+  // runTimingPass is gated on npVars_.timingDrivenMode).
+  if (!npVars_.routability_driven_mode) {
+    return;
+  }
+
   // Self-gating: runRoutabilityGradient inside each NesterovBase checks
   // routability_pass_weight > 0.0f and iter >= routability_pass_first_iter.
   // If no NB has the gradient feature active, this is a no-op per NB.

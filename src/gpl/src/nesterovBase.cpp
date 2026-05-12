@@ -1110,6 +1110,7 @@ NesterovBaseVars::NesterovBaseVars(const PlaceOptions& options)
         routability_pass_range(options.routabilityGradPassRange),
         routability_pass_offset(options.routabilityGradPassOffset),
         routability_pass_first_iter(options.routabilityGradPassFirstIter),
+        routability_pass_run_interval(options.routabilityGradPassRunInterval),
         routability_pass_use_grt(options.routabilityGradPassUseGrt)
 {
 }
@@ -1130,7 +1131,8 @@ NesterovPlaceVars::NesterovPlaceVars(const PlaceOptions& options)
        disableRevertIfDiverge(options.disableRevertIfDiverge),
         timingGradPassStaRunInterval(options.timingGradPassStaRunInterval),
         timingGradPassFirstIter(options.timingGradPassFirstIter),
-        routabilityGradPassFirstIter(options.routabilityGradPassFirstIter)
+        routabilityGradPassFirstIter(options.routabilityGradPassFirstIter),
+        routabilityGradPassRunInterval(options.routabilityGradPassRunInterval)
 {
 }
 
@@ -2685,11 +2687,24 @@ void NesterovBase::runRoutabilityGradient(NesterovBaseVars& nbv)
   if (est_ == nullptr) {
     return;
   }
+  if (npVars_ == nullptr || !npVars_->routability_driven_mode) {
+    return;
+  }
   if (nbv.routability_pass_weight <= 0.0f) {
     return;
   }
   if (iter_ < nbv.routability_pass_first_iter) {
     return;
+  }
+
+  // Congestion estimation (RUDY/GRT) is expensive — only refresh every
+  // run_interval iterations.  Between refreshes, getRoutabilityGradient()
+  // continues to read the cached tile congestion data.
+  if (nbv.routability_pass_run_interval > 0) {
+    const int offset = iter_ - nbv.routability_pass_first_iter;
+    if (offset % nbv.routability_pass_run_interval != 0) {
+      return;
+    }
   }
 
   grt::GlobalRouter* grouter = est_->getGlobalRouter();
@@ -3053,10 +3068,9 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
     runTimingPassGradient(*nbc_, nbVars_, timingGrads);
   }
 
-  // Populate routability tile congestion data for gradient computation.
-  // This is used by getRoutabilityGradient() in the main loop below.
-  // (Self-gating: runRoutabilityGradient checks weight/iter internally.)
-  runRoutabilityGradient(nbVars_);
+  // NOTE: Routability tile congestion data is refreshed periodically by
+  // runAllRoutabilityGradients() in the outer NesterovPlace loop, so the
+  // per-cell gradient calculation below reads already-cached data.
 
   // TODO: This OpenMP parallel section is causing non-determinism. Consider
   // revisiting this in the future to restore determinism.

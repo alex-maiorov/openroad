@@ -51,6 +51,7 @@ sta::define_cmd_args "global_placement" {\
      [-routability_gradpass_range routability_gradpass_range]\
      [-routability_gradpass_offset routability_gradpass_offset]\
      [-routability_gradpass_first_iter routability_gradpass_first_iter]\
+     [-routability_gradpass_run_interval routability_gradpass_run_interval]\
      [-routability_gradpass_use_grt]
 }
 
@@ -84,7 +85,8 @@ proc global_placement { args } {
         -routability_gradpass_weight \
         -routability_gradpass_range \
         -routability_gradpass_offset \
-        -routability_gradpass_first_iter} \
+        -routability_gradpass_first_iter \
+        -routability_gradpass_run_interval} \
      flags {-skip_initial_place \
 
       -force_center_initial_place \
