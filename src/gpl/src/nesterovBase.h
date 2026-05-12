@@ -1217,7 +1217,7 @@ class NesterovBase
 
   // Populate routability tile congestion data for gradient computation.
   // Uses RUDY or GRT depending on nbv.routability_pass_use_grt.
-   void runRoutabilityGradient(NesterovBaseVars& nbv);
+   void runRoutabilityGradient();
    std::optional<float> getTileCongestion(int tile_x, int tile_y) const;
    std::pair<int, int> getTileCoordsFromCellCoords(int cell_x, int cell_y) const;
    std::pair<int, int> getCellCoordsFromTileCoords(int tile_x, int tile_y) const;

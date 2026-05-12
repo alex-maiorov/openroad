@@ -2681,7 +2681,7 @@ FloatPoint NesterovBase::getRoutabilityPreconditioner(const GCell* gCell) const
   return FloatPoint(1, 1);
 }
 
-void NesterovBase::runRoutabilityGradient(NesterovBaseVars& nbv)
+void NesterovBase::runRoutabilityGradient()
 {
   // Self-gating: only run when gradient-based routability is active
   if (est_ == nullptr) {
@@ -2690,19 +2690,19 @@ void NesterovBase::runRoutabilityGradient(NesterovBaseVars& nbv)
   if (npVars_ == nullptr || !npVars_->routability_driven_mode) {
     return;
   }
-  if (nbv.routability_pass_weight <= 0.0f) {
+  if (nbVars_.routability_pass_weight <= 0.0f) {
     return;
   }
-  if (iter_ < nbv.routability_pass_first_iter) {
+  if (iter_ < nbVars_.routability_pass_first_iter) {
     return;
   }
 
   // Congestion estimation (RUDY/GRT) is expensive — only refresh every
   // run_interval iterations.  Between refreshes, getRoutabilityGradient()
   // continues to read the cached tile congestion data.
-  if (nbv.routability_pass_run_interval > 0) {
-    const int offset = iter_ - nbv.routability_pass_first_iter;
-    if (offset % nbv.routability_pass_run_interval != 0) {
+  if (nbVars_.routability_pass_run_interval > 0) {
+    const int offset = iter_ - nbVars_.routability_pass_first_iter;
+    if (offset % nbVars_.routability_pass_run_interval != 0) {
       return;
     }
   }
@@ -2715,7 +2715,7 @@ void NesterovBase::runRoutabilityGradient(NesterovBaseVars& nbv)
   // Clear previous congestion data
   routability_tile_congestion_.clear();
 
-  if (!nbv.routability_pass_use_grt) {
+  if (!nbVars_.routability_pass_use_grt) {
     // === RUDY mode ===
     // Use the GRT RUDY estimator to populate per-tile congestion
     grt::Rudy* rudy = grouter->getRudy();
@@ -2905,15 +2905,22 @@ FloatPoint NesterovBase::getRoutabilityGradient(const GCell* gCell) const
   // TODO: This shouldn't overpower more important things, and there is no way to set that right now.
   // WARNING: Keep in mind that the basis direction for this is FROM THE TILE TO THE CELL, so that positive values push the cell away from the congested zones
 
-
+  // FIXME: The first iter + 1 is paranoia to avoid this messing up the solution. Probably worth doing this whole orechstration differently honestly.
+  if(!npVars_->routability_driven_mode ||
+    iter_ < (nbVars_.routability_pass_first_iter + 1) ||
+    routability_tile_size_ == 0)
+  {
+    return FloatPoint(0.0f, 0.0f);
+  }
   // TODO: Figure out if this is wise
   int cell_tile_x = (gCell->cx() - routability_grid_lx_) / routability_tile_size_;
   int cell_tile_y = (gCell->cy() - routability_grid_ly_) / routability_tile_size_;
   cell_tile_x = std::clamp(cell_tile_x, 0, routability_tile_cnt_x_ - 1);
   cell_tile_y = std::clamp(cell_tile_y, 0, routability_tile_cnt_y_ - 1);
 
-  // FIXME: possibly suceptible to roundoff problems, but I am not 100% sure. Theoretically, the range should be significantly larger than
+  // Not sure if this will be suceptible to round-to-zero problems or other issues
   int tile_range = nbVars_.routability_pass_range / routability_tile_size_;
+
   int upper_x =  std::clamp(cell_tile_x, cell_tile_x + tile_range, routability_tile_cnt_x_ - 1);
   int upper_y =  std::clamp(cell_tile_y, cell_tile_y + tile_range, routability_tile_cnt_x_ - 1);
   int lower_x =  std::clamp(cell_tile_x, cell_tile_x - tile_range, routability_tile_cnt_x_ - 1);

@@ -925,7 +925,7 @@ void NesterovPlace::runAllRoutabilityGradients(
   // This populates the tile congestion map that getRoutabilityGradient()
   // reads inside updateGradients(). Each NB self-gates on weight/iter.
   for (auto& nb : nbVec_) {
-    nb->runRoutabilityGradient(nb->getNbVars());
+    nb->runRoutabilityGradient();
   }
 
   if (graphics_ && graphics_->enabled()) {
