@@ -2955,8 +2955,8 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
                GPL,
                "updateGrad",
                1,
-               "tim_wl_ratio: {}",
-               tim_wl_ratio);
+               "tim_wl_ratio: {}, total nonzero: {}",
+               tim_wl_ratio, num_nonzero_tim);
   }
 
   debugPrint(log_,
@@ -4892,8 +4892,8 @@ FloatPoint NesterovBase::calculateTimingGradientValue(
     // FIXME: This relies on the fact that a - a = 0
     const FloatPoint to_end1{end1_pos.x - cell_pos.x, end1_pos.y - cell_pos.y};
     const FloatPoint to_end2{end2_pos.x - cell_pos.x, end2_pos.y - cell_pos.y};
-    const float scaled_force = end_to_end_weight * slack_weight;
-    force = (to_end1 + to_end2) * scaled_force;
+    const float force_weight = end_to_end_weight * slack_weight;
+    force = (to_end1 + to_end2) * force_weight;
   }
 
   // Projection force calc
@@ -4971,11 +4971,57 @@ FloatPoint NesterovBase::getTimingGradient(const GCell* gCell) const
     const FloatPoint end1_pos{end1_x, end1_y};
     const FloatPoint end2_pos{end2_x, end2_y};
 
-    timing_gradient = timing_gradient + calculateTimingGradientValue(
+    FloatPoint timing_gradient_new = calculateTimingGradientValue(
         cell_pos, end1_pos, end2_pos, slack_weight,
         nbVars_.timing_pass_end_to_end_weight,
         nbVars_.timing_pass_proj_weight,
         gCell_indices.size(), is_endpoint, i);
+
+    if(std::isnan(timing_gradient.x) || std::isnan(timing_gradient.y)){
+      log_->warn(GPL, 351, "getTimingGradient: NaN value detected\n"
+      "  Cell Position:       ({}, {})\n"
+      "  End1 Position:       ({}, {})\n"
+      "  End2 Position:       ({}, {})\n"
+      "  Slack Weight:        {}\n"
+      "  End-to-End Weight:   {}\n"
+      "  Proj Weight:         {}\n"
+      "  Path Length:         {}\n"
+      "  Is Endpoint:         {}\n"
+      "  Index in Path:       {}\n",
+      cell_pos.x, cell_pos.y,
+      end1_pos.x, end1_pos.y,
+      end2_pos.x, end2_pos.y,
+      slack_weight,
+      nbVars_.timing_pass_end_to_end_weight,
+      nbVars_.timing_pass_proj_weight,
+      gCell_indices.size(),
+                  is_endpoint,
+                  i);
+      continue;
+    }
+    if(std::isinf(timing_gradient.x) || std::isinf(timing_gradient.y)){
+      log_->warn(GPL, 352, "getTimingGradient: Inf value detected\n"
+      "  Cell Position:       ({}, {})\n"
+      "  End1 Position:       ({}, {})\n"
+      "  End2 Position:       ({}, {})\n"
+      "  Slack Weight:        {}\n"
+      "  End-to-End Weight:   {}\n"
+      "  Proj Weight:         {}\n"
+      "  Path Length:         {}\n"
+      "  Is Endpoint:         {}\n"
+      "  Index in Path:       {}\n",
+      cell_pos.x, cell_pos.y,
+      end1_pos.x, end1_pos.y,
+      end2_pos.x, end2_pos.y,
+      slack_weight,
+      nbVars_.timing_pass_end_to_end_weight,
+      nbVars_.timing_pass_proj_weight,
+      gCell_indices.size(),
+                  is_endpoint,
+                  i);
+      continue;
+    }
+    timing_gradient = timing_gradient + timing_gradient_new;
   }
 
   return timing_gradient;
