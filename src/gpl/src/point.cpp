@@ -9,6 +9,14 @@ FloatPoint::FloatPoint(float x, float y) : x(x), y(y)
 {
 }
 
+FloatPoint::FloatPoint(int x, int y) : x(static_cast<float>(x)), y(static_cast<float>(y))
+{
+}
+
+FloatPoint::FloatPoint(std::pair<int, int> coords) : x(static_cast<float>(coords.first)), y(static_cast<float>(coords.second))
+{
+}
+
 FloatPoint FloatPoint::operator+(const FloatPoint& other) const
 {
   return FloatPoint(this->x + other.x, this->y + other.y);
@@ -22,6 +30,16 @@ FloatPoint FloatPoint::operator-(const FloatPoint& other) const
 FloatPoint FloatPoint::operator*(const float& w) const
 {
   return FloatPoint(this->x * w, this->y * w);
+}
+
+float FloatPoint::distance(const FloatPoint& other) const
+{
+  return std::sqrt(std::pow(this->x - other.x, 2) + std::pow(this->y - other.y, 2));
+}
+
+float FloatPoint::magnitude() const
+{
+  return std::sqrt(this->x * this->x + this->y * this->y);
 }
 
 float floatPointDotProduct(FloatPoint a, FloatPoint b)

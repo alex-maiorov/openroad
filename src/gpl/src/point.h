@@ -3,6 +3,7 @@
 
 #pragma once
 #include <cmath>
+#include <utility>
 
 namespace gpl {
 
@@ -12,11 +13,15 @@ class FloatPoint
   float x = 0;
   float y = 0;
   FloatPoint() = default;
-  FloatPoint(float x, float y);
+   FloatPoint(float x, float y);
+   FloatPoint(int x, int y);
+   FloatPoint(std::pair<int, int> coords);
 
   FloatPoint operator+(const FloatPoint& other) const;
   FloatPoint operator-(const FloatPoint& other) const;
-  FloatPoint operator*(const float& w) const;
+   FloatPoint operator*(const float& w) const;
+   float distance(const FloatPoint& other) const;
+   float magnitude() const;
 };
 
 float floatPointDotProduct(FloatPoint a, FloatPoint b);

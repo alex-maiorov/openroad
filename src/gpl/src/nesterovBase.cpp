@@ -1593,7 +1593,7 @@ FloatPoint NesterovBaseCommon::getWireLengthGradientPinWA(const GPin* gPin,
 FloatPoint NesterovBaseCommon::getWireLengthPreconditioner(
     const GCell* gCell) const
 {
-  return FloatPoint(gCell->gPins().size(), gCell->gPins().size());
+  return FloatPoint(1.0f, 1.0f);
 }
 
 void NesterovBaseCommon::updateDbGCells()
@@ -2899,23 +2899,25 @@ FloatPoint NesterovBase::getRoutabilityGradient(const GCell* gCell) const
   //   routability_pass_offset     - offset applied before sharpness
   //
 
+
   // Algorithm: For each routability congestion zone, the formula should be weight * distance_squared * (exp(sharpness * (congestion - offset)) - 1).
   // The exponential component should yield a result where faraway stuff is irrelevant, but nearby low congestion will pull on the cell.
   // TODO: This shouldn't overpower more important things, and there is no way to set that right now.
+  // WARNING: Keep in mind that the basis direction for this is FROM THE TILE TO THE CELL, so that positive values push the cell away from the congested zones
 
-  int cell_tile_x = (gCell->cx() - routability_grid_lx_) / routability_tile_size_;
-  int cell_tile_y = (gCell->cy() - routability_grid_ly_) / routability_tile_size_;
 
   // TODO: Figure out if this is wise
-  cell_tile_x = std::clamp(tile_x, 0, routability_tile_cnt_x_ - 1);
-  cell_tile_y = std::clamp(tile_y, 0, routability_tile_cnt_y_ - 1);
+  int cell_tile_x = (gCell->cx() - routability_grid_lx_) / routability_tile_size_;
+  int cell_tile_y = (gCell->cy() - routability_grid_ly_) / routability_tile_size_;
+  cell_tile_x = std::clamp(cell_tile_x, 0, routability_tile_cnt_x_ - 1);
+  cell_tile_y = std::clamp(cell_tile_y, 0, routability_tile_cnt_y_ - 1);
 
   // FIXME: possibly suceptible to roundoff problems, but I am not 100% sure. Theoretically, the range should be significantly larger than
-  int tile_range = routability_pass_range / routability_tile_size_;
-  int upper_x =  std::clamp(tile_x, cell_tile_x + tile_range, routability_tile_cnt_x_ - 1);
-  int upper_y =  std::clamp(tile_x, cell_tile_y + tile_range, routability_tile_cnt_x_ - 1);
-  int lower_x =  std::clamp(tile_x, cell_tile_x - tile_range, routability_tile_cnt_x_ - 1);
-  int lower_y =  std::clamp(tile_x, cell_tile_y - tile_range, routability_tile_cnt_x_ - 1);
+  int tile_range = nbVars_.routability_pass_range / routability_tile_size_;
+  int upper_x =  std::clamp(cell_tile_x, cell_tile_x + tile_range, routability_tile_cnt_x_ - 1);
+  int upper_y =  std::clamp(cell_tile_y, cell_tile_y + tile_range, routability_tile_cnt_x_ - 1);
+  int lower_x =  std::clamp(cell_tile_x, cell_tile_x - tile_range, routability_tile_cnt_x_ - 1);
+  int lower_y =  std::clamp(cell_tile_y, cell_tile_y - tile_range, routability_tile_cnt_x_ - 1);
 
   float tile_range_squared = float(tile_range * tile_range);
 
@@ -2934,11 +2936,19 @@ FloatPoint NesterovBase::getRoutabilityGradient(const GCell* gCell) const
         continue;
       }
       float congestion = congestion_opt.value();
+      FloatPoint tile_cellspace_coords = FloatPoint(getCellCoordsFromTileCoords(rx, ry));
+      FloatPoint cell_coords = FloatPoint(gCell->cx(), gCell->cy());
+      FloatPoint cell_to_tile_vector = cell_coords - tile_cellspace_coords; // see warning above about needing this to be tile->cell
 
+      float cell_to_tile_distance = cell_to_tile_vector.magnitude();
+      // We never unit-vectorred the original vector so we only need to multiply by distance once.
+      float force_weight = cell_to_tile_distance * nbVars_.routability_pass_weight * (std::exp(nbVars_.routability_pass_sharpness * (congestion - nbVars_.routability_pass_offset)) - 1.0f);
+      FloatPoint scaled_vector = cell_to_tile_vector * force_weight;
+      FloatPoint routability_force = routability_force + scaled_vector;
     }
   }
 
-  return FloatPoint(0, 0);
+  return routability_force;
 }
 
 // Density field calls
