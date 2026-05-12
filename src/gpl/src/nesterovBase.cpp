@@ -2839,6 +2839,15 @@ void NesterovBase::runRoutabilityGradient(NesterovBaseVars& nbv)
   }
 }
 
+std::optional<float> NesterovBase::getTileCongestion(int tile_x, int tile_y) const
+{
+  if (tile_x < 0 || tile_x >= routability_tile_cnt_x_ || tile_y < 0 || tile_y >= routability_tile_cnt_y_) {
+    return std::nullopt;
+  }
+  int idx = tile_y * routability_tile_cnt_x_ + tile_x;
+  return routability_tile_congestion_[idx];
+}
+
 FloatPoint NesterovBase::getRoutabilityGradient(const GCell* gCell) const
 {
   // TODO: Boilerplate code, implement actual algorithm.
@@ -2875,6 +2884,46 @@ FloatPoint NesterovBase::getRoutabilityGradient(const GCell* gCell) const
   //   routability_pass_range      - neighborhood radius (DBU)
   //   routability_pass_offset     - offset applied before sharpness
   //
+
+  // Algorithm: For each routability congestion zone, the formula should be weight * distance_squared * (exp(sharpness * (congestion - offset)) - 1).
+  // The exponential component should yield a result where faraway stuff is irrelevant, but nearby low congestion will pull on the cell.
+  // TODO: This shouldn't overpower more important things, and there is no way to set that right now.
+
+  int cell_tile_x = (gCell->cx() - routability_grid_lx_) / routability_tile_size_;
+  int cell_tile_y = (gCell->cy() - routability_grid_ly_) / routability_tile_size_;
+
+  // TODO: Figure out if this is wise
+  cell_tile_x = std::clamp(tile_x, 0, routability_tile_cnt_x_ - 1);
+  cell_tile_y = std::clamp(tile_y, 0, routability_tile_cnt_y_ - 1);
+
+  // FIXME: possibly suceptible to roundoff problems, but I am not 100% sure. Theoretically, the range should be significantly larger than
+  int tile_range = routability_pass_range / routability_tile_size_;
+  int upper_x =  std::clamp(tile_x, cell_tile_x + tile_range, routability_tile_cnt_x_ - 1);
+  int upper_y =  std::clamp(tile_x, cell_tile_y + tile_range, routability_tile_cnt_x_ - 1);
+  int lower_x =  std::clamp(tile_x, cell_tile_x - tile_range, routability_tile_cnt_x_ - 1);
+  int lower_y =  std::clamp(tile_x, cell_tile_y - tile_range, routability_tile_cnt_x_ - 1);
+
+  float tile_range_squared = float(tile_range * tile_range);
+
+
+  auto routability_force = FloatPoint(0, 0);
+  // rx and ry are tile-space coordinates that we iterate over the whole neighborhood of the cell on.
+  for(int rx = lower_x; rx <= upper_x; rx++){
+    for(int ry = lower_y; ry <= upper_y; ry++){
+      float distance_squared = float(((cell_tile_x - rx) * (cell_tile_x - rx)) + ((cell_tile_y - ry) * (cell_tile_y - ry)));
+      if(distance_squared > tile_range_squared){
+        continue;
+      }
+      auto congestion_opt = getTileCongestion(rx, ry);
+
+      if(!congestion_opt){
+        continue;
+      }
+      float congestion = congestion_opt.value();
+      FloatPoint vector_cell_to_tile = FloatPoint(float((rx - cell_tile_x) * ), )
+    }
+  }
+
   return FloatPoint(0, 0);
 }
 
