@@ -1210,6 +1210,10 @@ class NesterovBase
                              NesterovBaseVars& nbv,
                              std::vector<FloatPoint>& grad);
 
+  // Populate routability tile congestion data for gradient computation.
+  // Uses RUDY or GRT depending on nbv.routability_pass_use_grt.
+  void runRoutabilityGradient(NesterovBaseVars& nbv);
+
   // Query STA for violating paths and store them in violating_paths_
   void queryTimingViolations(NesterovBaseCommon& nbc);
 
@@ -1382,6 +1386,15 @@ class NesterovBase
 
   // Store routability gradients here. Make sure to zero them in the constructor
   std::vector<FloatPoint> routabilityGrads_;
+
+  // Routability tile congestion data for gradient computation.
+  // Populated by runRoutabilityGradient(), consumed by getRoutabilityGradient().
+  std::vector<float> routability_tile_congestion_;
+  int routability_tile_cnt_x_ = 0;
+  int routability_tile_cnt_y_ = 0;
+  int routability_tile_size_ = 0;
+  int routability_grid_lx_ = 0;
+  int routability_grid_ly_ = 0;
 
   // Helper to compute the timing gradient force for a cell on a violating path.
   // Performs the mathematical gradient calculation (endpoint attraction and

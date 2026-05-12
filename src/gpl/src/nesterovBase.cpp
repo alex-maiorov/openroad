@@ -41,6 +41,9 @@
 #include "timingBase.h"
 #include "utl/Logger.h"
 
+#include "grt/GlobalRouter.h"
+#include "grt/Rudy.h"
+
 #define REPLACE_SQRT2 1.414213562373095048801L
 
 namespace gpl {
@@ -2676,8 +2679,176 @@ FloatPoint NesterovBase::getRoutabilityPreconditioner(const GCell* gCell) const
   return FloatPoint(1, 1);
 }
 
+void NesterovBase::runRoutabilityGradient(NesterovBaseVars& nbv)
+{
+  grt::GlobalRouter* grouter = est_ ? est_->getGlobalRouter() : nullptr;
+  if (grouter == nullptr) {
+    return;
+  }
+
+  // Clear previous congestion data
+  routability_tile_congestion_.clear();
+
+  if (!nbv.routability_pass_use_grt) {
+    // === RUDY mode ===
+    // Use the GRT RUDY estimator to populate per-tile congestion
+    grt::Rudy* rudy = grouter->getRudy();
+    rudy->calculateRudy();
+
+    int grid_x, grid_y;
+    grouter->getGridSize(grid_x, grid_y);
+    routability_tile_cnt_x_ = grid_x;
+    routability_tile_cnt_y_ = grid_y;
+    routability_tile_size_ = rudy->getTileSize();
+
+    // RUDY tile grid origin is at (0, 0)
+    routability_grid_lx_ = 0;
+    routability_grid_ly_ = 0;
+
+    routability_tile_congestion_.resize(grid_x * grid_y, 0.0f);
+    for (int ty = 0; ty < grid_y; ty++) {
+      for (int tx = 0; tx < grid_x; tx++) {
+        const float ratio
+            = rudy->getTile(tx, ty).getRudy() / 100.0f;
+        const int idx = ty * grid_x + tx;
+        routability_tile_congestion_[idx]
+            = (std::isfinite(ratio)) ? ratio : 0.0f;
+      }
+    }
+  } else {
+    // === GRT mode ===
+    // Run global routing and read per-tile usage/capacity from the GCell grid
+    nbc_->updateDbGCells();
+    grouter->setAllowCongestion(true);
+    grouter->setCongestionIterations(0);
+    grouter->setCriticalNetsPercentage(0);
+    grouter->globalRoute();
+
+    odb::dbGCellGrid* gGrid
+        = grouter->db()->getChip()->getBlock()->getGCellGrid();
+    std::vector<int> gridX, gridY;
+    gGrid->getGridX(gridX);
+    gGrid->getGridY(gridY);
+
+    routability_tile_cnt_x_ = static_cast<int>(gridX.size());
+    routability_tile_cnt_y_ = static_cast<int>(gridY.size());
+    routability_tile_size_ = gridX[1] - gridX[0];  // assumes uniform grid
+    routability_grid_lx_ = gridX[0];
+    routability_grid_ly_ = gridY[0];
+
+    odb::dbTech* tech = grouter->db()->getTech();
+    const int num_layers = tech->getRoutingLayerCount();
+    int min_routing_layer, max_routing_layer;
+    grouter->getMinMaxLayer(min_routing_layer, max_routing_layer);
+
+    routability_tile_congestion_.resize(
+        routability_tile_cnt_x_ * routability_tile_cnt_y_, 0.0f);
+
+    // Accumulate usage/capacity ratio across all routing layers
+    for (int layer = 1; layer <= num_layers; layer++) {
+      odb::dbTechLayer* db_layer = tech->findRoutingLayer(layer);
+      if (db_layer == nullptr) {
+        continue;
+      }
+
+      const bool is_horizontal
+          = (db_layer->getDirection() == odb::dbTechLayerDir::HORIZONTAL);
+
+      for (int ty = 0; ty < routability_tile_cnt_y_; ty++) {
+        for (int tx = 0; tx < routability_tile_cnt_x_; tx++) {
+          float ratio = 0.0f;
+          if (layer >= min_routing_layer
+              && layer <= max_routing_layer) {
+            const uint8_t cur_cap
+                = gGrid->getCapacity(db_layer, tx, ty);
+            const uint8_t cur_use
+                = gGrid->getUsage(db_layer, tx, ty);
+            ratio = (cur_cap > 0)
+                        ? static_cast<float>(cur_use) / cur_cap
+                        : 0.0f;
+
+            // Mirror neighbor-tile logic from RouteBase::updateGrtRoute:
+            // horizontal layers also consider the left neighbor's right edge
+            if (is_horizontal && tx >= 1) {
+              const uint8_t left_cap
+                  = gGrid->getCapacity(db_layer, tx - 1, ty);
+              const uint8_t left_use
+                  = gGrid->getUsage(db_layer, tx - 1, ty);
+              const float left_ratio
+                  = (left_cap > 0)
+                        ? static_cast<float>(left_use) / left_cap
+                        : 0.0f;
+              ratio = std::fmax(left_ratio, ratio);
+            }
+            // vertical layers also consider the down neighbor's up edge
+            if (!is_horizontal && ty >= 1) {
+              const uint8_t down_cap
+                  = gGrid->getCapacity(db_layer, tx, ty - 1);
+              const uint8_t down_use
+                  = gGrid->getUsage(db_layer, tx, ty - 1);
+              const float down_ratio
+                  = (down_cap > 0)
+                        ? static_cast<float>(down_use) / down_cap
+                        : 0.0f;
+              ratio = std::fmax(down_ratio, ratio);
+            }
+
+            ratio = std::fmax(ratio, 0.0f);
+          }
+
+          const int idx = ty * routability_tile_cnt_x_ + tx;
+          routability_tile_congestion_[idx] += ratio;
+        }
+      }
+    }
+
+    // Average across routing layers
+    const int layer_count
+        = max_routing_layer - min_routing_layer + 1;
+    if (layer_count > 0) {
+      for (auto& c : routability_tile_congestion_) {
+        c /= static_cast<float>(layer_count);
+      }
+    }
+  }
+}
+
 FloatPoint NesterovBase::getRoutabilityGradient(const GCell* gCell) const
 {
+  // TODO: Boilerplate code, implement actual algorithm.
+  //
+  // Access pattern for tile congestion data:
+  //
+  //   1. Find which tile this cell falls into:
+  //      int tile_x = (gCell->cx() - routability_grid_lx_) / routability_tile_size_;
+  //      int tile_y = (gCell->cy() - routability_grid_ly_) / routability_tile_size_;
+  //      tile_x = std::clamp(tile_x, 0, routability_tile_cnt_x_ - 1);
+  //      tile_y = std::clamp(tile_y, 0, routability_tile_cnt_y_ - 1);
+  //
+  //   2. Access tile congestion:
+  //      int idx = tile_y * routability_tile_cnt_x_ + tile_x;
+  //      float congestion = routability_tile_congestion_[idx];
+  //
+  //   3. Iterate over neighborhood tiles within 'range':
+  //      int range_in_tiles = static_cast<int>(routability_pass_range / routability_tile_size_);
+  //      for (int dy = -range_in_tiles; dy <= range_in_tiles; dy++) {
+  //        for (int dx = -range_in_tiles; dx <= range_in_tiles; dx++) {
+  //          int nx = tile_x + dx;
+  //          int ny = tile_y + dy;
+  //          if (nx < 0 || nx >= routability_tile_cnt_x_) continue;
+  //          if (ny < 0 || ny >= routability_tile_cnt_y_) continue;
+  //          int nidx = ny * routability_tile_cnt_x_ + nx;
+  //          float neighbor_congestion = routability_tile_congestion_[nidx];
+  //          // ... compute force contribution from this tile
+  //        }
+  //      }
+  //
+  // Parameters available via nbVars_:
+  //   routability_pass_sharpness  - steepness of congestion response
+  //   routability_pass_weight     - overall scaling factor for the gradient
+  //   routability_pass_range      - neighborhood radius (DBU)
+  //   routability_pass_offset     - offset applied before sharpness
+  //
   return FloatPoint(0, 0);
 }
 
@@ -2869,6 +3040,13 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
   std::fill(timingGrads.begin(), timingGrads.end(), FloatPoint(0, 0));
   if (sta_ != nullptr && npVars_->timingDrivenMode) {
     runTimingPassGradient(*nbc_, nbVars_, timingGrads);
+  }
+
+  // Populate routability tile congestion data for gradient computation
+  // This is used by getRoutabilityGradient() in the main loop below
+  if (est_ != nullptr && nbVars_.routability_pass_weight > 0.0f
+      && iter_ >= nbVars_.routability_pass_first_iter) {
+    runRoutabilityGradient(nbVars_);
   }
 
   // TODO: This OpenMP parallel section is causing non-determinism. Consider
