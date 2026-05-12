@@ -1101,7 +1101,13 @@ NesterovBaseVars::NesterovBaseVars(const PlaceOptions& options)
        timing_pass_slack_offset(options.timingGradPassSlackOffset),
        timing_pass_slack_upper(options.timingGradPassSlackUpper),
         timing_pass_sta_run_interval(options.timingGradPassStaRunInterval),
-        timing_pass_first_iter(options.timingGradPassFirstIter)
+        timing_pass_first_iter(options.timingGradPassFirstIter),
+        routability_pass_sharpness(options.routabilityGradPassSharpness),
+        routability_pass_weight(options.routabilityGradPassWeight),
+        routability_pass_range(options.routabilityGradPassRange),
+        routability_pass_offset(options.routabilityGradPassOffset),
+        routability_pass_first_iter(options.routabilityGradPassFirstIter),
+        routability_pass_use_grt(options.routabilityGradPassUseGrt)
 {
 }
 
@@ -1120,7 +1126,8 @@ NesterovPlaceVars::NesterovPlaceVars(const PlaceOptions& options)
       routability_driven_mode(options.routabilityDrivenMode),
        disableRevertIfDiverge(options.disableRevertIfDiverge),
         timingGradPassStaRunInterval(options.timingGradPassStaRunInterval),
-        timingGradPassFirstIter(options.timingGradPassFirstIter)
+        timingGradPassFirstIter(options.timingGradPassFirstIter),
+        routabilityGradPassFirstIter(options.routabilityGradPassFirstIter)
 {
 }
 

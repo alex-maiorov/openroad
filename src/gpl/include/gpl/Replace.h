@@ -107,6 +107,13 @@ struct PlaceOptions
    int timingGradPassStaRunInterval = 10;
    int timingGradPassFirstIter = 0;
 
+  // RoutabilityGradPass parameters for gradient-based routability optimization
+   float routabilityGradPassSharpness = 1.0F;
+   float routabilityGradPassWeight = 1.0F;
+   float routabilityGradPassRange = 1.0F;
+   float routabilityGradPassOffset = 0.0F;
+   int routabilityGradPassFirstIter = 0;
+   bool routabilityGradPassUseGrt = false;
 
   void skipIo();
   void validate(utl::Logger* log);

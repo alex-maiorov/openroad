@@ -341,6 +341,17 @@ int Replace::doNesterovPlace(const int threads,
     rs_->resizeSlackPreamble();
   }
 
+  log_->info(GPL,
+             355,
+             "Routability gradient pass parameters: "
+             "sharpness={}, weight={}, range={}, offset={}, first_iter={}, use_grt={}",
+             options.routabilityGradPassSharpness,
+             options.routabilityGradPassWeight,
+             options.routabilityGradPassRange,
+             options.routabilityGradPassOffset,
+             options.routabilityGradPassFirstIter,
+             options.routabilityGradPassUseGrt);
+
   auto start = std::chrono::high_resolution_clock::now();
 
   int return_do_nesterov = np_->doNesterovPlace(start_iter);

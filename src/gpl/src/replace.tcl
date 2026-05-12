@@ -45,7 +45,13 @@ sta::define_cmd_args "global_placement" {\
      [-timing_gradpass_slack_offset timing_gradpass_slack_offset]\
      [-timing_gradpass_slack_upper timing_gradpass_slack_upper]\
      [-timing_gradpass_sta_run_interval timing_gradpass_sta_run_interval]\
-     [-timing_gradpass_first_iter timing_gradpass_first_iter]
+     [-timing_gradpass_first_iter timing_gradpass_first_iter]\
+     [-routability_gradpass_sharpness routability_gradpass_sharpness]\
+     [-routability_gradpass_weight routability_gradpass_weight]\
+     [-routability_gradpass_range routability_gradpass_range]\
+     [-routability_gradpass_offset routability_gradpass_offset]\
+     [-routability_gradpass_first_iter routability_gradpass_first_iter]\
+     [-routability_gradpass_use_grt]
 }
 
 proc global_placement { args } {
@@ -73,7 +79,12 @@ proc global_placement { args } {
        -timing_gradpass_slack_offset \
        -timing_gradpass_slack_upper \
        -timing_gradpass_sta_run_interval \
-       -timing_gradpass_first_iter} \
+        -timing_gradpass_first_iter \
+        -routability_gradpass_sharpness \
+        -routability_gradpass_weight \
+        -routability_gradpass_range \
+        -routability_gradpass_offset \
+        -routability_gradpass_first_iter} \
      flags {-skip_initial_place \
 
       -force_center_initial_place \
@@ -85,7 +96,8 @@ proc global_placement { args } {
       -incremental \
       -disable_revert_if_diverge \
       -disable_pin_density_adjust \
-      -enable_routing_congestion}
+       -enable_routing_congestion \
+       -routability_gradpass_use_grt}
 
   sta::check_argc_eq0 "global_placement" $args
 

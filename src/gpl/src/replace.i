@@ -83,7 +83,12 @@ static gpl::PlaceOptions getOptions(
     checkKey(keys, "-timing_gradpass_slack_upper", options.timingGradPassSlackUpper);
     checkKey(keys, "-timing_gradpass_sta_run_interval", options.timingGradPassStaRunInterval);
     checkKey(keys, "-timing_gradpass_first_iter", options.timingGradPassFirstIter);
-
+    checkKey(keys, "-routability_gradpass_sharpness", options.routabilityGradPassSharpness);
+    checkKey(keys, "-routability_gradpass_weight", options.routabilityGradPassWeight);
+    checkKey(keys, "-routability_gradpass_range", options.routabilityGradPassRange);
+    checkKey(keys, "-routability_gradpass_offset", options.routabilityGradPassOffset);
+    checkKey(keys, "-routability_gradpass_first_iter", options.routabilityGradPassFirstIter);
+    checkFlag(flags, "-routability_gradpass_use_grt", options.routabilityGradPassUseGrt);
 
   if (auto it = keys.find("-density"); it != keys.end()) {
     if (it->second == "uniform") {
