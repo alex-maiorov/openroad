@@ -1094,6 +1094,9 @@ class NesterovBase
 
   BinGrid& getBinGrid() { return bg_; }
 
+  NesterovBaseVars& getNbVars() { return nbVars_; }
+  const NesterovBaseVars& getNbVars() const { return nbVars_; }
+
   // Nesterov Loop
   void initDensity1();
   float initDensity2(float wlCoeffX, float wlCoeffY);

@@ -2681,7 +2681,18 @@ FloatPoint NesterovBase::getRoutabilityPreconditioner(const GCell* gCell) const
 
 void NesterovBase::runRoutabilityGradient(NesterovBaseVars& nbv)
 {
-  grt::GlobalRouter* grouter = est_ ? est_->getGlobalRouter() : nullptr;
+  // Self-gating: only run when gradient-based routability is active
+  if (est_ == nullptr) {
+    return;
+  }
+  if (nbv.routability_pass_weight <= 0.0f) {
+    return;
+  }
+  if (iter_ < nbv.routability_pass_first_iter) {
+    return;
+  }
+
+  grt::GlobalRouter* grouter = est_->getGlobalRouter();
   if (grouter == nullptr) {
     return;
   }
@@ -3042,12 +3053,10 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
     runTimingPassGradient(*nbc_, nbVars_, timingGrads);
   }
 
-  // Populate routability tile congestion data for gradient computation
-  // This is used by getRoutabilityGradient() in the main loop below
-  if (est_ != nullptr && nbVars_.routability_pass_weight > 0.0f
-      && iter_ >= nbVars_.routability_pass_first_iter) {
-    runRoutabilityGradient(nbVars_);
-  }
+  // Populate routability tile congestion data for gradient computation.
+  // This is used by getRoutabilityGradient() in the main loop below.
+  // (Self-gating: runRoutabilityGradient checks weight/iter internally.)
+  runRoutabilityGradient(nbVars_);
 
   // TODO: This OpenMP parallel section is causing non-determinism. Consider
   // revisiting this in the future to restore determinism.

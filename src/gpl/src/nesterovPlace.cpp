@@ -856,6 +856,77 @@ void NesterovPlace::runRoutability(int iter,
   }
 }
 
+void NesterovPlace::runAllRoutabilityGradients(
+    int iter,
+    int timing_driven_count,
+    const std::string& routability_driven_dir,
+    int routability_driven_revert_count)
+{
+  // Self-gating: runRoutabilityGradient inside each NesterovBase checks
+  // routability_pass_weight > 0.0f and iter >= routability_pass_first_iter.
+  // If no NB has the gradient feature active, this is a no-op per NB.
+
+  // Graphics: save density and congestion heatmap snapshots (same pattern as
+  // runRoutability, but operating on data from the gradient pass).
+  if (graphics_ && graphics_->enabled() && npVars_.debug_generate_images) {
+    updateDb();
+    const std::string label = fmt::format("Iter {} |R: {} |T: {}",
+                                          iter,
+                                          routability_driven_revert_count,
+                                          timing_driven_count);
+
+    graphics_->saveLabeledImage(
+        fmt::format("{}/density_routability_{:05d}.png",
+                    routability_driven_dir,
+                    iter),
+        label,
+        "Heat Maps/Placement Density");
+
+    graphics_->saveLabeledImage(
+        fmt::format(
+            "{}/rudy_routability_{:05d}.png", routability_driven_dir, iter),
+        label,
+        "Heat Maps/Estimated Congestion (RUDY)");
+
+    odb::Rect region;
+    const int width_px = 500;
+    const odb::Rect bbox
+        = pbc_->db()->getChip()->getBlock()->getBBox()->getBox();
+    const int max_dim = std::max(bbox.dx(), bbox.dy());
+    const double dbu_per_pixel = static_cast<double>(max_dim) / 1000.0;
+    const int delay = 20;
+    const std::string label_name
+        = fmt::format("frame_label_routability_{}", iter);
+
+    if (routability_gif_key_ == -1) {
+      log_->report("start routability gif at iter {}", iter);
+      const std::string gif_path
+          = fmt::format("{}/routability.gif", routability_driven_dir);
+      routability_gif_key_ = graphics_->gifStart(gif_path);
+    }
+
+    graphics_->addFrameLabel(bbox, label, label_name);
+    graphics_->setDisplayControl("Heat Maps/Estimated Congestion (RUDY)",
+                                 true);
+    graphics_->gifAddFrame(
+        routability_gif_key_, region, width_px, dbu_per_pixel, delay);
+    graphics_->setDisplayControl("Heat Maps/Estimated Congestion (RUDY)",
+                                 false);
+    graphics_->deleteLabel(label_name);
+  }
+
+  // Refresh tile congestion data: call each NB's runRoutabilityGradient.
+  // This populates the tile congestion map that getRoutabilityGradient()
+  // reads inside updateGradients(). Each NB self-gates on weight/iter.
+  for (auto& nb : nbVec_) {
+    nb->runRoutabilityGradient(nb->getNbVars());
+  }
+
+  if (graphics_ && graphics_->enabled()) {
+    graphics_->addRoutabilityIter(iter, /*revert=*/false);
+  }
+}
+
 bool NesterovPlace::isConverged(int gpl_iter_count,
                                 int routability_gpl_iter_count)
 {
@@ -1156,24 +1227,20 @@ int NesterovPlace::doNesterovPlace(int start_iter)
       break;
     }
 
-    routabilitySnapshot(nesterov_iter,
-                        curA,
-                        routability_driven_dir,
-                        routability_driven_revert_count,
-                        timing_driven_count,
-                        is_routability_snapshot_saved,
-                        route_snapshot_WlCoefX,
-                        route_snapshot_WlCoefY,
-                        route_snapshotA);
+    // routabilitySnapshot(nesterov_iter,
+    //                     curA,
+    //                     routability_driven_dir,
+    //                     routability_driven_revert_count,
+    //                     timing_driven_count,
+    //                     is_routability_snapshot_saved,
+    //                     route_snapshot_WlCoefX,
+    //                     route_snapshot_WlCoefY,
+    //                     route_snapshotA);
 
-    runRoutability(nesterov_iter,
-                   timing_driven_count,
-                   routability_driven_dir,
-                   route_snapshotA,
-                   route_snapshot_WlCoefX,
-                   route_snapshot_WlCoefY,
-                   routability_driven_revert_count,
-                   curA);
+    runAllRoutabilityGradients(nesterov_iter,
+                               timing_driven_count,
+                               routability_driven_dir,
+                               routability_driven_revert_count);
 
     if (isConverged(nesterov_iter, routability_gpl_iter_count_)) {
       break;

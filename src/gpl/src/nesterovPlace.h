@@ -126,6 +126,10 @@ class NesterovPlace
                       float route_snapshot_WlCoefY,
                       int& routability_driven_count,
                       float& curA);
+  void runAllRoutabilityGradients(int iter,
+                                  int timing_driven_count,
+                                  const std::string& routability_driven_dir,
+                                  int routability_driven_revert_count);
   bool isConverged(int gpl_iter_count, int routability_gpl_iter_count);
   std::string getReportsDir() const;
   void cleanReportsDirs(const std::string& timing_driven_dir,
