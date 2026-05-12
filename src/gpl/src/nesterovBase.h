@@ -1219,6 +1219,8 @@ class NesterovBase
   // Uses RUDY or GRT depending on nbv.routability_pass_use_grt.
    void runRoutabilityGradient(NesterovBaseVars& nbv);
    std::optional<float> getTileCongestion(int tile_x, int tile_y) const;
+   std::pair<int, int> getTileCoordsFromCellCoords(int cell_x, int cell_y) const;
+   std::pair<int, int> getCellCoordsFromTileCoords(int tile_x, int tile_y) const;
 
   // Query STA for violating paths and store them in violating_paths_
   void queryTimingViolations(NesterovBaseCommon& nbc);

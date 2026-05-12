@@ -2848,6 +2848,20 @@ std::optional<float> NesterovBase::getTileCongestion(int tile_x, int tile_y) con
   return routability_tile_congestion_[idx];
 }
 
+std::pair<int, int> NesterovBase::getTileCoordsFromCellCoords(int cell_x, int cell_y) const
+{
+  int tile_x = (cell_x - routability_grid_lx_) / routability_tile_size_;
+  int tile_y = (cell_y - routability_grid_ly_) / routability_tile_size_;
+  return {tile_x, tile_y};
+}
+
+std::pair<int, int> NesterovBase::getCellCoordsFromTileCoords(int tile_x, int tile_y) const
+{
+  int cx = routability_grid_lx_ + tile_x * routability_tile_size_ + routability_tile_size_ / 2;
+  int cy = routability_grid_ly_ + tile_y * routability_tile_size_ + routability_tile_size_ / 2;
+  return {cx, cy};
+}
+
 FloatPoint NesterovBase::getRoutabilityGradient(const GCell* gCell) const
 {
   // TODO: Boilerplate code, implement actual algorithm.
@@ -2920,7 +2934,7 @@ FloatPoint NesterovBase::getRoutabilityGradient(const GCell* gCell) const
         continue;
       }
       float congestion = congestion_opt.value();
-      FloatPoint vector_cell_to_tile = FloatPoint(float((rx - cell_tile_x) * ), )
+
     }
   }
 
