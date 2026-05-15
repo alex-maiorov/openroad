@@ -27,7 +27,11 @@
 #include <utility>
 #include <vector>
 #include <thread>
-#include <atomic>
+#include <mutex>
+#include <queue>
+#include <deque>
+#include <optional>
+#include <unordered_map>
 
 #include "spdlog/details/os.h"
 #include "spdlog/fmt/fmt.h"
@@ -76,9 +80,51 @@ struct SchemaInfo {
   std::string prepared_statement_sql;
 };
 
+// Type-to-SQLiteType mapping trait.
+// Integral types (int, short, size_t, bool, etc.) → INTEGER.
+// Floating-point types (float, double, etc.) → REAL.
+// Types convertible to std::string_view (string, const char*, char*, ...) → TEXT.
+// Everything else → BLOB (opaque binary).
+template <typename T, typename Enabler = void>
+struct TypeToSQLite {
+  static constexpr SQLiteType value = SQLiteType::BLOB;
+};
+
+template <typename T>
+struct TypeToSQLite<T, std::enable_if_t<std::is_integral_v<T>>> {
+  static constexpr SQLiteType value = SQLiteType::INTEGER;
+};
+
+template <typename T>
+struct TypeToSQLite<T, std::enable_if_t<std::is_floating_point_v<T>>> {
+  static constexpr SQLiteType value = SQLiteType::REAL;
+};
+
+template <typename T>
+struct TypeToSQLite<T, std::enable_if_t<std::is_convertible_v<T, std::string_view>>> {
+  static constexpr SQLiteType value = SQLiteType::TEXT;
+};
+
+// Per-schema queue: one per (tool, id) registration.
+// Holds the SchemaInfo and a placeholder for the data queue.
+struct SchemaQueue {
+  SchemaInfo info;
+  // TODO: Replace with a high-performance MPSC queue.
+  std::mutex mutex;
+  std::queue<std::vector<char>> data_queue;
+};
+
+// Command sent from caller thread to the backend thread
+// when a new schema is discovered and needs a table created.
+struct NewSchemaCommand {
+  SchemaKey key;
+  std::shared_ptr<SchemaQueue> queue;
+};
+
 class SchemaRegistry {
 public:
-  using RegistryMap = std::unordered_map<SchemaKey, SchemaInfo, SchemaKeyHasher>;
+  using RegistryMap
+      = std::unordered_map<SchemaKey, std::shared_ptr<SchemaQueue>, SchemaKeyHasher>;
 
   SchemaRegistry() : registry_ptr_(std::make_shared<const RegistryMap>()) {}
 
@@ -86,18 +132,26 @@ public:
     return std::atomic_load(&registry_ptr_);
   }
 
-  void register_schema(SchemaKey key, SchemaInfo info) {
+  // Register a new schema. Returns the SchemaQueue (either newly created or
+  // existing if another thread registered it first).
+  std::shared_ptr<SchemaQueue> register_schema(
+      SchemaKey key,
+      std::shared_ptr<SchemaQueue> queue)
+  {
     std::lock_guard<std::mutex> lock(registration_mutex_);
     auto current_map = get_map();
 
-    // Double-check pattern
-    if (current_map->find(key) != current_map->end()) {
-      return;
+    auto it = current_map->find(key);
+    if (it != current_map->end()) {
+      return it->second;  // Already registered
     }
 
     auto new_map = std::make_shared<RegistryMap>(*current_map);
-    (*new_map)[key] = std::move(info);
-    std::atomic_store(&registry_ptr_, std::const_pointer_cast<const RegistryMap>(new_map));
+    (*new_map)[key] = queue;
+    std::atomic_store(
+        &registry_ptr_,
+        std::const_pointer_cast<const RegistryMap>(new_map));
+    return queue;
   }
 
 private:
@@ -107,8 +161,11 @@ private:
 
 // --- End SQLite Logging Types ---
 
+template <size_t N>
 struct FixedString {
-  char data[N];
+  char data[N]{};
+
+  constexpr FixedString() = default;
 
   constexpr FixedString(const char (&str)[N]) {
     for (size_t i = 0; i < N; ++i) {
@@ -117,10 +174,17 @@ struct FixedString {
   }
 
   constexpr size_t count_fields() const {
+    if (data[0] == '\0') return 0;
     size_t count = 1;
     for (size_t i = 0; i < N; ++i) {
+      if (data[i] == '\0') break;
       if (data[i] == ',') {
-        count++;
+        // Skip empty trailing field check
+        size_t j = i + 1;
+        while (j < N && data[j] == ' ') j++;
+        if (j < N && data[j] != '\0' && data[j] != ',') {
+          count++;
+        }
       }
     }
     return count;
@@ -137,15 +201,49 @@ struct FixedString {
         current_segment_empty = true;
       } else if (c == ' ') {
         // Space is allowed as padding, doesn't change empty status
-      } else if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || (c == '_')) {
+      } else if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                 || (c >= '0' && c <= '9') || (c == '_')) {
         current_segment_empty = false;
       } else {
-        return false; // Illegal character
+        return false;  // Illegal character
       }
     }
     return !current_segment_empty;
   }
+
+  // Returns the start index of the i-th field (0-based)
+  constexpr size_t field_start(size_t idx) const {
+    size_t current = 0;
+    for (size_t i = 0; i < N; ++i) {
+      if (current == idx) {
+        // Skip leading spaces
+        while (i < N && data[i] == ' ') i++;
+        return i;
+      }
+      if (data[i] == ',') {
+        current++;
+      }
+      if (data[i] == '\0') break;
+    }
+    return N; // Not found
+  }
+
+  // Returns the end index (exclusive) of the i-th field
+  constexpr size_t field_end(size_t idx) const {
+    size_t start = field_start(idx);
+    if (start >= N) return N;
+    size_t i = start;
+    // Find end: comma, null, or trailing space before comma/null
+    size_t last_non_space = start;
+    while (i < N && data[i] != ',' && data[i] != '\0') {
+      if (data[i] != ' ') last_non_space = i + 1;
+      i++;
+    }
+    return last_non_space;
+  }
 };
+
+// --- End helper utilities ---
 
 class PrometheusMetricsServer;
 class PrometheusRegistry;
@@ -343,29 +441,36 @@ class Logger
   void suppressMessage(ToolId tool, int id);
   void unsuppressMessage(ToolId tool, int id);
 
-  // Logs structured data to the SQLite database. 
-  // The schema (types of Args...) is registered lazily on the first call for a (tool, id) pair.
+  // Logs structured data to the SQLite database.
+  // The schema (types of Args...) is registered lazily on the first call
+  // for a (tool, id) pair.  The template body is intentionally thin:
+  // compile-time checks live here, all runtime logic is in the .cpp.
   template <FixedString Header, typename... Args>
   void logToDb(ToolId tool, int id, Args... args)
   {
-    static_assert(Header.isValid(), "Header must be a comma-separated list of alphanumeric names and underscores.");
-    static_assert(sizeof...(Args) == Header.count_fields(),
-                  "Number of arguments provided to logToDb must match the number of fields in the header.");
+    static_assert(
+        Header.isValid(),
+        "Header must be a comma-separated list of alphanumeric names"
+        " and underscores.");
+    static_assert(
+        sizeof...(Args) == Header.count_fields(),
+        "Number of arguments provided to logToDb must match the number"
+        " of fields in the header.");
 
-    auto current_map = schema_registry_.get_map();
-    auto it = current_map->find({tool, id});
+    // Build a compile-time array of SQLiteTypes for each argument.
+    constexpr std::array<SQLiteType, sizeof...(Args)> types_arr
+        = {TypeToSQLite<Args>::value...};
 
-    if (it == current_map->end()) {
-      // --- SLOW PATH: Register Schema ---
-      // TODO: Use a template trait or helper to map C++ types to SQLiteType.
-      // TODO: Construct ColumnDefinition list.
-      // TODO: Construct SchemaInfo (including table name "[tool_name]_[id]").
-      // TODO: schema_registry_.register_schema({tool, id}, info);
-      // TODO: Package SchemaInfo into a command and push to the background thread queue.
+    // Delegate all runtime work to non-template helpers in Logger.cpp.
+    SchemaKey key{tool, id};
+    auto queue_opt = logToDbFindQueue(key);
+    if (!queue_opt.has_value()) {
+      logToDbRegisterSchema(
+          key,
+          std::string_view(Header.data),
+          std::vector<SQLiteType>(types_arr.begin(), types_arr.end()));
     } else {
-      // --- FAST PATH: Log Data ---
-      // TODO: Package Args... into a type-erased container.
-      // TODO: Push the data + SchemaKey to the background thread queue.
+      // --- FAST PATH: log data (TODO) ---
     }
   }
 
@@ -504,6 +609,17 @@ class Logger
   std::atomic<bool> log_db_running_{false};
   SchemaRegistry schema_registry_;
 
+  // Command queue: caller threads enqueue NewSchemaCommand,
+  // the backend thread (logDbLoop) drains and processes them.
+  std::deque<NewSchemaCommand> new_schema_queue_;
+  std::mutex new_schema_queue_mutex_;
+
+  // Non-template helpers called by the thin logToDb template.
+  // Implemented in Logger.cpp.
+  std::optional<std::shared_ptr<SchemaQueue>> logToDbFindQueue(SchemaKey key);
+  void logToDbRegisterSchema(SchemaKey key,
+                              std::string_view header,
+                              const std::vector<SQLiteType>& types);
 
   void logDbLoop();
 

@@ -35,19 +35,9 @@
 #include "utl/prometheus/metrics_server.h"
 #include "utl/prometheus/registry.h"
 
-// --- SQLite Logging Command Types (Placeholder) ---
-// TODO: Implement a proper thread-safe command queue.
-struct CreateSchemaCommand {
-  SchemaKey key;
-  SchemaInfo info;
-};
+namespace utl {
 
-struct LogDataCommand {
-  SchemaKey key;
-  // TODO: Use a type-erased container for the actual arguments.
-  std::vector<char> binary_data;
-};
-// --- End SQLite Logging Command Types ---
+Logger::Logger(const char* log_filename, const char* metrics_filename)
 {
   progress_ = std::make_unique<CommandLineProgress>(this);
 
@@ -141,32 +131,161 @@ void Logger::stopLogDb()
   }
 }
 
+// ---------------------------------------------------------------------------
+// Free helper utilities (moved from Logger.h)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+const char* sqlite_type_name(utl::SQLiteType t) {
+  switch (t) {
+    case utl::SQLiteType::INTEGER:
+      return "INTEGER";
+    case utl::SQLiteType::REAL:
+      return "REAL";
+    case utl::SQLiteType::TEXT:
+      return "TEXT";
+    case utl::SQLiteType::BLOB:
+      return "BLOB";
+  }
+  return "TEXT";
+}
+
+// Split a comma-separated header string into individual column names,
+// trimming leading/trailing whitespace from each.
+std::vector<std::string> split_header(std::string_view header) {
+  std::vector<std::string> fields;
+  const char* cur = header.data();
+  const char* end = cur + header.size();
+  while (cur < end) {
+    // Skip leading spaces
+    while (cur < end && *cur == ' ') ++cur;
+    const char* start = cur;
+    // Find next comma or end
+    while (cur < end && *cur != ',') ++cur;
+    // Trim trailing spaces
+    const char* stop = cur;
+    while (stop > start && *(stop - 1) == ' ') --stop;
+    if (stop > start || (!fields.empty() && stop == start)) {
+      fields.emplace_back(start, stop - start);
+    }
+    if (cur < end) ++cur;  // skip comma
+  }
+  return fields;
+}
+
+std::vector<ColumnDefinition> build_columns_from_runtime(
+    std::string_view header,
+    const std::vector<SQLiteType>& types) {
+  auto names = split_header(header);
+  // Safety: if counts don't match, pad with "unknown"
+  std::vector<ColumnDefinition> cols;
+  cols.reserve(types.size());
+  for (size_t i = 0; i < types.size(); ++i) {
+    std::string name = (i < names.size()) ? names[i] : "unknown";
+    cols.push_back({std::move(name), types[i]});
+  }
+  return cols;
+}
+
+}  // anonymous namespace
+
+// ---------------------------------------------------------------------------
+// logToDb helpers  (called by the thin template in Logger.h)
+// ---------------------------------------------------------------------------
+
+std::optional<std::shared_ptr<SchemaQueue>> Logger::logToDbFindQueue(SchemaKey key)
+{
+  auto map = schema_registry_.get_map();
+  auto it = map->find(key);
+  if (it != map->end()) {
+    return it->second;
+  }
+  return std::nullopt;
+}
+
+void Logger::logToDbRegisterSchema(SchemaKey key,
+                                    std::string_view header,
+                                    const std::vector<SQLiteType>& types)
+{
+  SchemaInfo info;
+  info.table_name
+      = std::string(tool_names_[key.tool]) + "_" + std::to_string(key.id);
+  info.columns = build_columns_from_runtime(header, types);
+
+  // Build CREATE TABLE SQL
+  std::string create_sql
+      = "CREATE TABLE IF NOT EXISTS " + info.table_name + " (";
+  for (size_t i = 0; i < info.columns.size(); ++i) {
+    if (i > 0)
+      create_sql += ", ";
+    create_sql
+        += info.columns[i].name + " " + sqlite_type_name(info.columns[i].type);
+  }
+  create_sql += ");";
+  info.prepared_statement_sql = std::move(create_sql);
+
+  // Create SchemaQueue, attach info, register
+  auto queue = std::make_shared<SchemaQueue>();
+  queue->info = std::move(info);
+
+  auto registered = schema_registry_.register_schema(key, std::move(queue));
+
+  // Enqueue NewSchemaCommand for the backend thread (if running)
+  if (log_db_running_.load(std::memory_order_acquire)) {
+    NewSchemaCommand cmd{key, std::move(registered)};
+    std::lock_guard<std::mutex> lock(new_schema_queue_mutex_);
+    new_schema_queue_.push_back(std::move(cmd));
+  }
+}
+
 void Logger::logDbLoop()
 {
-  // Local registry for the backend thread to avoid locking.
-  std::unordered_map<SchemaKey, SchemaInfo, SchemaKeyHasher> local_registry;
+  // Local registry for the backend thread: SchemaKey -> SchemaQueue
+  std::unordered_map<SchemaKey, std::shared_ptr<SchemaQueue>, SchemaKeyHasher> local_registry;
 
-  while (log_db_running_) {
-    // TODO: Pull command from the queue (e.g., std::variant<CreateSchemaCommand, LogDataCommand>).
-
-    /*
-    // PSEUDO-CODE for processing:
-
-    if (auto cmd = queue.pop()) {
-      if (std::holds_alternative<CreateSchemaCommand>(cmd)) {
-        auto& csc = std::get<CreateSchemaCommand>(cmd);
-        // 1. Create table if not exists
-        // 2. Add to local_registry
-      } else if (std::holds_alternative<LogDataCommand>(cmd)) {
-        auto& ldc = std::get<LogDataCommand>(cmd);
-        // 1. Check local_registry
-        // 2. Parse binary_data using columns info
-        // 3. Execute INSERT
-      }
+  while (log_db_running_.load(std::memory_order_acquire)) {
+    // --- Phase 1: Drain all pending NewSchemaCommand entries ---
+    std::deque<NewSchemaCommand> pending_commands;
+    {
+      std::lock_guard<std::mutex> lock(new_schema_queue_mutex_);
+      pending_commands.swap(new_schema_queue_);
     }
-    */
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    bool did_work = !pending_commands.empty();
+
+    for (auto& cmd : pending_commands) {
+      // If already registered locally (shouldn't happen, but guard),
+      // skip the CREATE TABLE.
+      if (local_registry.find(cmd.key) != local_registry.end()) {
+        continue;
+      }
+
+      // Execute CREATE TABLE
+      const SchemaInfo& info = cmd.queue->info;
+      char* err_msg = nullptr;
+      int rc = sqlite3_exec(
+          db_, info.prepared_statement_sql.c_str(), nullptr, nullptr, &err_msg);
+      if (rc != SQLITE_OK) {
+        // TODO(amaiorov): route this through the Logger error/warn system
+        // once we figure out thread-safe Logger usage.
+        fprintf(stderr,
+                "[UTL] SQLite error creating table '%s': %s\n",
+                info.table_name.c_str(),
+                err_msg ? err_msg : "unknown");
+        sqlite3_free(err_msg);
+      }
+
+      // Store the SchemaQueue in the local backend registry
+      local_registry[cmd.key] = std::move(cmd.queue);
+    }
+
+    // --- Phase 2: (TODO) Drain data queues and bulk-INSERT ---
+
+    // If no work was done, sleep briefly to avoid busy-waiting
+    if (!did_work) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
   }
 }
 
