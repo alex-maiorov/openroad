@@ -23,6 +23,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <tuple>
 #include <utility>
 #include <vector>
 #include <thread>
@@ -39,6 +40,47 @@
 #include "spdlog/spdlog.h"
 
 namespace utl {
+
+template <size_t N>
+struct FixedString {
+  char data[N];
+
+  constexpr FixedString(const char (&str)[N]) {
+    for (size_t i = 0; i < N; ++i) {
+      data[i] = str[i];
+    }
+  }
+
+  constexpr size_t count_fields() const {
+    size_t count = 1;
+    for (size_t i = 0; i < N; ++i) {
+      if (data[i] == ',') {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  constexpr bool isValid() const {
+    bool current_segment_empty = true;
+    for (size_t i = 0; i < N; ++i) {
+      char c = data[i];
+      if (c == '\0') break;
+
+      if (c == ',') {
+        if (current_segment_empty) return false;
+        current_segment_empty = true;
+      } else if (c == ' ') {
+        // Space is allowed as padding, doesn't change empty status
+      } else if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || (c == '_')) {
+        current_segment_empty = false;
+      } else {
+        return false; // Illegal character
+      }
+    }
+    return !current_segment_empty;
+  }
+};
 
 class PrometheusMetricsServer;
 class PrometheusRegistry;
@@ -235,6 +277,21 @@ class Logger
 
   void suppressMessage(ToolId tool, int id);
   void unsuppressMessage(ToolId tool, int id);
+
+  // Logs structured data to the SQLite database. 
+  // The schema (types of Args...) is registered lazily on the first call for a (tool, id) pair.
+  template <FixedString Header, typename... Args>
+  void logToDb(ToolId tool, int id, Args... args)
+  {
+    static_assert(Header.isValid(), "Header must be a comma-separated list of alphanumeric names and underscores.");
+    static_assert(sizeof...(Args) == Header.count_fields(),
+                  "Number of arguments provided to logToDb must match the number of fields in the header.");
+
+    // TODO: Implement lazy schema registration and push data to the log DB thread.
+    // 1. Check if (tool, id) has a registered schema in a mapping.
+    // 2. If not, register the schema using the types in Args...
+    // 3. Package the arguments and push them to the log_db_thread.
+  }
 
   void addSink(spdlog::sink_ptr sink);
   void removeSink(const spdlog::sink_ptr& sink);
