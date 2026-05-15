@@ -35,9 +35,19 @@
 #include "utl/prometheus/metrics_server.h"
 #include "utl/prometheus/registry.h"
 
-namespace utl {
+// --- SQLite Logging Command Types (Placeholder) ---
+// TODO: Implement a proper thread-safe command queue.
+struct CreateSchemaCommand {
+  SchemaKey key;
+  SchemaInfo info;
+};
 
-Logger::Logger(const char* log_filename, const char* metrics_filename)
+struct LogDataCommand {
+  SchemaKey key;
+  // TODO: Use a type-erased container for the actual arguments.
+  std::vector<char> binary_data;
+};
+// --- End SQLite Logging Command Types ---
 {
   progress_ = std::make_unique<CommandLineProgress>(this);
 
@@ -133,8 +143,29 @@ void Logger::stopLogDb()
 
 void Logger::logDbLoop()
 {
+  // Local registry for the backend thread to avoid locking.
+  std::unordered_map<SchemaKey, SchemaInfo, SchemaKeyHasher> local_registry;
+
   while (log_db_running_) {
-    // TODO: All logging logic will go here.
+    // TODO: Pull command from the queue (e.g., std::variant<CreateSchemaCommand, LogDataCommand>).
+
+    /*
+    // PSEUDO-CODE for processing:
+
+    if (auto cmd = queue.pop()) {
+      if (std::holds_alternative<CreateSchemaCommand>(cmd)) {
+        auto& csc = std::get<CreateSchemaCommand>(cmd);
+        // 1. Create table if not exists
+        // 2. Add to local_registry
+      } else if (std::holds_alternative<LogDataCommand>(cmd)) {
+        auto& ldc = std::get<LogDataCommand>(cmd);
+        // 1. Check local_registry
+        // 2. Parse binary_data using columns info
+        // 3. Execute INSERT
+      }
+    }
+    */
+
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
 }

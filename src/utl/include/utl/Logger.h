@@ -41,7 +41,72 @@
 
 namespace utl {
 
-template <size_t N>
+// --- SQLite Logging Types ---
+
+enum class SQLiteType {
+  INTEGER,
+  REAL,
+  TEXT,
+  BLOB
+};
+
+struct SchemaKey {
+  ToolId tool;
+  int id;
+
+  bool operator==(const SchemaKey& other) const {
+    return tool == other.tool && id == other.id;
+  }
+};
+
+struct SchemaKeyHasher {
+  size_t operator()(const SchemaKey& k) const {
+    return std::hash<int>{}(static_cast<int>(k.tool)) ^ (std::hash<int>{}(k.id) << 1);
+  }
+};
+
+struct ColumnDefinition {
+  std::string name;
+  SQLiteType type;
+};
+
+struct SchemaInfo {
+  std::vector<ColumnDefinition> columns;
+  std::string table_name;
+  std::string prepared_statement_sql;
+};
+
+class SchemaRegistry {
+public:
+  using RegistryMap = std::unordered_map<SchemaKey, SchemaInfo, SchemaKeyHasher>;
+
+  SchemaRegistry() : registry_ptr_(std::make_shared<const RegistryMap>()) {}
+
+  std::shared_ptr<const RegistryMap> get_map() const {
+    return std::atomic_load(&registry_ptr_);
+  }
+
+  void register_schema(SchemaKey key, SchemaInfo info) {
+    std::lock_guard<std::mutex> lock(registration_mutex_);
+    auto current_map = get_map();
+
+    // Double-check pattern
+    if (current_map->find(key) != current_map->end()) {
+      return;
+    }
+
+    auto new_map = std::make_shared<RegistryMap>(*current_map);
+    (*new_map)[key] = std::move(info);
+    std::atomic_store(&registry_ptr_, std::const_pointer_cast<const RegistryMap>(new_map));
+  }
+
+private:
+  std::shared_ptr<const RegistryMap> registry_ptr_;
+  std::mutex registration_mutex_;
+};
+
+// --- End SQLite Logging Types ---
+
 struct FixedString {
   char data[N];
 
@@ -287,10 +352,21 @@ class Logger
     static_assert(sizeof...(Args) == Header.count_fields(),
                   "Number of arguments provided to logToDb must match the number of fields in the header.");
 
-    // TODO: Implement lazy schema registration and push data to the log DB thread.
-    // 1. Check if (tool, id) has a registered schema in a mapping.
-    // 2. If not, register the schema using the types in Args...
-    // 3. Package the arguments and push them to the log_db_thread.
+    auto current_map = schema_registry_.get_map();
+    auto it = current_map->find({tool, id});
+
+    if (it == current_map->end()) {
+      // --- SLOW PATH: Register Schema ---
+      // TODO: Use a template trait or helper to map C++ types to SQLiteType.
+      // TODO: Construct ColumnDefinition list.
+      // TODO: Construct SchemaInfo (including table name "[tool_name]_[id]").
+      // TODO: schema_registry_.register_schema({tool, id}, info);
+      // TODO: Package SchemaInfo into a command and push to the background thread queue.
+    } else {
+      // --- FAST PATH: Log Data ---
+      // TODO: Package Args... into a type-erased container.
+      // TODO: Push the data + SchemaKey to the background thread queue.
+    }
   }
 
   void addSink(spdlog::sink_ptr sink);
@@ -426,6 +502,8 @@ class Logger
   sqlite3* db_ = nullptr;
   std::thread log_db_thread_;
   std::atomic<bool> log_db_running_{false};
+  SchemaRegistry schema_registry_;
+
 
   void logDbLoop();
 
