@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <chrono>
 #include <fstream>
 #include <memory>
 #include <ostream>
@@ -14,7 +15,9 @@
 #include <stack>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
+#include <sqlite3.h>
 
 #include "CommandLineProgress.h"
 #include "utl/Metrics.h"
@@ -72,6 +75,7 @@ Logger::Logger(const char* log_filename, const char* metrics_filename)
 
 Logger::~Logger()
 {
+  stopLogDb();
   finalizeMetrics();
 }
 
@@ -89,6 +93,50 @@ void Logger::removeMetricsSink(const char* metrics_filename)
   flushMetrics();
 
   metrics_sinks_.erase(metrics_file);
+}
+
+void Logger::startLogDb(const char* filename)
+{
+  if (db_) {
+    return;
+  }
+
+  int rc = sqlite3_open_v2(filename, &db_,
+                           SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX);
+  if (rc != SQLITE_OK) {
+    this->error(UTL, 103, "Failed to open SQLite database {}: {}", filename, sqlite3_errmsg(db_));
+    sqlite3_close(db_);
+    db_ = nullptr;
+    return;
+  }
+
+  // Set fast mode
+  sqlite3_exec(db_, "PRAGMA journal_mode = WAL;", nullptr, nullptr, nullptr);
+  sqlite3_exec(db_, "PRAGMA synchronous = OFF;", nullptr, nullptr, nullptr);
+
+  log_db_running_ = true;
+  log_db_thread_ = std::thread(&Logger::logDbLoop, this);
+}
+
+void Logger::stopLogDb()
+{
+  log_db_running_ = false;
+  if (log_db_thread_.joinable()) {
+    log_db_thread_.join();
+  }
+
+  if (db_) {
+    sqlite3_close(db_);
+    db_ = nullptr;
+  }
+}
+
+void Logger::logDbLoop()
+{
+  while (log_db_running_) {
+    // TODO: All logging logic will go here.
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
 }
 
 ToolId Logger::findToolId(const char* tool_name)

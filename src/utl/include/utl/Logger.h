@@ -18,12 +18,15 @@
 #include <ostream>
 #include <sstream>
 #include <stack>
+#include <sqlite3.h>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
+#include <thread>
+#include <atomic>
 
 #include "spdlog/details/os.h"
 #include "spdlog/fmt/fmt.h"
@@ -237,6 +240,8 @@ class Logger
   void removeSink(const spdlog::sink_ptr& sink);
   void addMetricsSink(const char* metrics_filename);
   void removeMetricsSink(const char* metrics_filename);
+  void startLogDb(const char* filename);
+  void stopLogDb();
 
   void setMetricsStage(std::string_view format);
   void clearMetricsStage();
@@ -361,6 +366,11 @@ class Logger
   // Prometheus server metrics collection
   std::shared_ptr<PrometheusRegistry> prometheus_registry_;
   std::unique_ptr<PrometheusMetricsServer> prometheus_metrics_;
+  sqlite3* db_ = nullptr;
+  std::thread log_db_thread_;
+  std::atomic<bool> log_db_running_{false};
+
+  void logDbLoop();
 
   // This matrix is pre-allocated so it can be safely updated
   // from multiple threads without locks.
