@@ -279,10 +279,90 @@ void Logger::logDbLoop()
       local_registry[cmd.key] = std::move(cmd.queue);
     }
 
-    // --- Phase 2: Poll all active queues for pending data ---
+    // --- Phase 2: Schedule and drain queues ---
+    //
+    // Scheduling policy (checked in priority order):
+    //
+    // 1. Global memory pressure
+    //    If total buffered bytes across all queues ≥ 80% of the user's global
+    //    limit, fully drain the largest queue.
+    //
+    // 2. Per-channel memory pressure
+    //    If any individual queue ≥ 80% of its per-channel limit, drain enough
+    //    rows from it to fall back below the 80% threshold.
+    //
+    // 3. Round-robin
+    //    Otherwise, drain a fixed batch (100 rows) from every queue.
+
+    // Total buffered memory across all queues.
+    size_t total_mem = 0;
     for (auto& entry : local_registry) {
-      auto& q = entry.second;
-      did_work |= (q->drain_to_db(db, 100) > 0);
+      total_mem += entry.second->approx_size()
+                   * entry.second->row_size_bytes();
+    }
+
+    bool drained_some = false;
+
+    // --- Global pressure: fully drain the largest queue ---
+    bool global_pressure = false;
+    if (db_log_global_max_mem_ > 0) {
+      const size_t global_limit
+          = static_cast<size_t>(db_log_global_max_mem_
+                                * k_queue_mem_high_water_mark);
+      global_pressure = (total_mem >= global_limit);
+    }
+
+    if (global_pressure) {
+      AbstractQueue* largest_q = nullptr;
+      size_t largest_bytes = 0;
+      for (auto& entry : local_registry) {
+        const size_t bytes = entry.second->approx_size()
+                             * entry.second->row_size_bytes();
+        if (bytes > largest_bytes) {
+          largest_bytes = bytes;
+          largest_q = entry.second.get();
+        }
+      }
+      if (largest_q) {
+        drained_some |= (largest_q->drain_to_db(db, SIZE_MAX) > 0);
+      }
+      did_work |= drained_some;
+      // Skip round-robin / per-channel when we hit global pressure.
+    } else {
+      // --- Per-channel pressure: drain enough to get below 80% ---
+      for (auto& entry : local_registry) {
+        if (db_log_per_channel_max_mem_ == 0) {
+          continue;
+        }
+
+        auto& q = entry.second;
+        const size_t channel_bytes
+            = q->approx_size() * q->row_size_bytes();
+        const size_t channel_limit
+            = static_cast<size_t>(db_log_per_channel_max_mem_
+                                  * k_queue_mem_high_water_mark);
+
+        if (channel_bytes >= channel_limit) {
+          // Drain enough bytes to fall strictly below the threshold.
+          const size_t bytes_to_clear
+              = channel_bytes - channel_limit + 1;
+          const size_t row_size = q->row_size_bytes();
+          // Ceiling division — drain at least one row.
+          const size_t rows_to_clear
+              = (bytes_to_clear + row_size - 1) / row_size;
+
+          drained_some |= (q->drain_to_db(db, rows_to_clear) > 0);
+        }
+      }
+
+      if (!drained_some) {
+        // --- Round-robin: fully clear every queue ---
+        for (auto& entry : local_registry) {
+          drained_some
+              |= (entry.second->drain_to_db(db, SIZE_MAX) > 0);
+        }
+      }
+      did_work |= drained_some;
     }
 
     // If no work was done, sleep briefly to avoid busy-waiting

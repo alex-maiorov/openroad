@@ -771,6 +771,10 @@ class Logger
   // Stop issuing messages of a given tool/id when this limit is hit.
   static constexpr int max_message_print = 1000;
 
+  // Backend scheduler: when a queue reaches this fraction of its memory
+  // limit, it is considered under pressure and gets drained aggressively.
+  static constexpr double k_queue_mem_high_water_mark = 0.8;
+
   std::vector<spdlog::sink_ptr> sinks_;
   std::shared_ptr<spdlog::logger> logger_;
   std::stack<std::string> metrics_stages_;
