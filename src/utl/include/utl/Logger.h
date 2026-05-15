@@ -33,6 +33,8 @@
 #include <optional>
 #include <unordered_map>
 
+#include <boost/lockfree/queue.hpp>
+
 #include "spdlog/details/os.h"
 #include "spdlog/fmt/fmt.h"
 #include "spdlog/fmt/ostr.h"
@@ -81,14 +83,12 @@ struct SchemaInfo {
 };
 
 // Type-to-SQLiteType mapping trait.
-// Integral types (int, short, size_t, bool, etc.) → INTEGER.
-// Floating-point types (float, double, etc.) → REAL.
-// Types convertible to std::string_view (string, const char*, char*, ...) → TEXT.
-// Everything else → BLOB (opaque binary).
+// Only numeric types are supported:
+//   Integral types (int, short, size_t, bool, etc.) → INTEGER.
+//   Floating-point types (float, double, etc.)      → REAL.
+// Passing any other type is a compile-time error.
 template <typename T, typename Enabler = void>
-struct TypeToSQLite {
-  static constexpr SQLiteType value = SQLiteType::BLOB;
-};
+struct TypeToSQLite;
 
 template <typename T>
 struct TypeToSQLite<T, std::enable_if_t<std::is_integral_v<T>>> {
@@ -100,31 +100,86 @@ struct TypeToSQLite<T, std::enable_if_t<std::is_floating_point_v<T>>> {
   static constexpr SQLiteType value = SQLiteType::REAL;
 };
 
-template <typename T>
-struct TypeToSQLite<T, std::enable_if_t<std::is_convertible_v<T, std::string_view>>> {
-  static constexpr SQLiteType value = SQLiteType::TEXT;
+// ---------------------------------------------------------------------------
+// Type-erased queue hierarchy.
+//
+// AbstractQueue  (backend-facing, type-erased)
+//   └─ TypedQueue<Args...>  (concrete, created at registration time)
+//
+// The backend stores shared_ptr<AbstractQueue> and calls drain_to_db()
+// opaquely.  The caller downcasts to TypedQueue<Args...>* to push tuples
+// with the exact C++ types.
+// ---------------------------------------------------------------------------
+
+class AbstractQueue {
+public:
+  AbstractQueue() = default;
+  AbstractQueue(const AbstractQueue&) = delete;
+  AbstractQueue& operator=(const AbstractQueue&) = delete;
+  virtual ~AbstractQueue() = default;
+
+  const SchemaInfo& schema_info() const { return info_; }
+
+  // Bulk-write up to max_records pending rows using the given handle.
+  // Returns the number of rows written.
+  virtual size_t drain_to_db(sqlite3* db, size_t max_records) = 0;
+
+protected:
+  SchemaInfo info_;
 };
 
-// Per-schema queue: one per (tool, id) registration.
-// Holds the SchemaInfo and a placeholder for the data queue.
-struct SchemaQueue {
-  SchemaInfo info;
-  // TODO: Replace with a high-performance MPSC queue.
-  std::mutex mutex;
-  std::queue<std::vector<char>> data_queue;
+// Concrete per-schema queue.  Stores rows as std::tuple<Args...> directly
+// in the lock-free queue, avoiding any binary serialization.
+template <typename... Args>
+class TypedQueue : public AbstractQueue {
+public:
+  using row_type = std::tuple<Args...>;
+
+  explicit TypedQueue(SchemaInfo info) { info_ = std::move(info); }
+
+  // --- Caller-facing (called from the logToDb template) ---
+  // Enqueue one row via move semantics.  Spins if the queue is full;
+  // returns false if the operation was aborted (backend shutdown).
+  bool push(row_type row, const std::atomic<bool>& abort_flag)
+  {
+    while (!queue_.push(std::move(row))) {
+      if (!abort_flag.load(std::memory_order_relaxed)) {
+        return false;
+      }
+      std::this_thread::yield();
+    }
+    return true;
+  }
+
+  // --- Backend-facing (called by logDbLoop) ---
+  size_t drain_to_db(sqlite3* db, size_t max_records) override
+  {
+    // TODO: pop rows from queue_ and bulk-INSERT using info_.
+    size_t count = 0;
+    row_type row;
+    while (count < max_records && queue_.pop(row)) {
+      ++count;
+    }
+    return count;
+  }
+
+private:
+  boost::lockfree::queue<row_type> queue_{4096};
 };
+
+// --- End type-erased queue hierarchy ---
 
 // Command sent from caller thread to the backend thread
 // when a new schema is discovered and needs a table created.
 struct NewSchemaCommand {
   SchemaKey key;
-  std::shared_ptr<SchemaQueue> queue;
+  std::shared_ptr<AbstractQueue> queue;
 };
 
 class SchemaRegistry {
 public:
   using RegistryMap
-      = std::unordered_map<SchemaKey, std::shared_ptr<SchemaQueue>, SchemaKeyHasher>;
+      = std::unordered_map<SchemaKey, std::shared_ptr<AbstractQueue>, SchemaKeyHasher>;
 
   SchemaRegistry() : registry_ptr_(std::make_shared<const RegistryMap>()) {}
 
@@ -132,11 +187,11 @@ public:
     return std::atomic_load(&registry_ptr_);
   }
 
-  // Register a new schema. Returns the SchemaQueue (either newly created or
+  // Register a new schema. Returns the AbstractQueue (either newly created or
   // existing if another thread registered it first).
-  std::shared_ptr<SchemaQueue> register_schema(
+  std::shared_ptr<AbstractQueue> register_schema(
       SchemaKey key,
-      std::shared_ptr<SchemaQueue> queue)
+      std::shared_ptr<AbstractQueue> queue)
   {
     std::lock_guard<std::mutex> lock(registration_mutex_);
     auto current_map = get_map();
@@ -446,7 +501,7 @@ class Logger
   // for a (tool, id) pair.  The template body is intentionally thin:
   // compile-time checks live here, all runtime logic is in the .cpp.
   template <FixedString Header, typename... Args>
-  void logToDb(ToolId tool, int id, Args... args)
+  void logToDb(ToolId tool, int id, Args&&... args)
   {
     static_assert(
         Header.isValid(),
@@ -465,12 +520,19 @@ class Logger
     SchemaKey key{tool, id};
     auto queue_opt = logToDbFindQueue(key);
     if (!queue_opt.has_value()) {
-      logToDbRegisterSchema(
+      // --- SLOW PATH: build SchemaInfo, create TypedQueue, register ---
+      SchemaInfo info = logToDbBuildSchemaInfo(
           key,
           std::string_view(Header.data),
           std::vector<SQLiteType>(types_arr.begin(), types_arr.end()));
+      auto queue = std::make_shared<TypedQueue<Args...>>(std::move(info));
+      logToDbRegisterQueue(key, std::move(queue));
     } else {
-      // --- FAST PATH: log data (TODO) ---
+      // --- FAST PATH: downcast and enqueue a strongly-typed tuple ---
+      auto& base = queue_opt.value();
+      auto* typed = static_cast<TypedQueue<Args...>*>(base.get());
+      typed->push(
+          std::make_tuple(std::forward<Args>(args)...), log_db_running_);
     }
   }
 
@@ -616,10 +678,12 @@ class Logger
 
   // Non-template helpers called by the thin logToDb template.
   // Implemented in Logger.cpp.
-  std::optional<std::shared_ptr<SchemaQueue>> logToDbFindQueue(SchemaKey key);
-  void logToDbRegisterSchema(SchemaKey key,
-                              std::string_view header,
-                              const std::vector<SQLiteType>& types);
+  std::optional<std::shared_ptr<AbstractQueue>> logToDbFindQueue(SchemaKey key);
+  SchemaInfo logToDbBuildSchemaInfo(SchemaKey key,
+                                     std::string_view header,
+                                     const std::vector<SQLiteType>& types);
+  void logToDbRegisterQueue(SchemaKey key,
+                             std::shared_ptr<AbstractQueue> queue);
 
   void logDbLoop();
 

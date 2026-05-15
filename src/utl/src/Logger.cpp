@@ -194,7 +194,7 @@ std::vector<ColumnDefinition> build_columns_from_runtime(
 // logToDb helpers  (called by the thin template in Logger.h)
 // ---------------------------------------------------------------------------
 
-std::optional<std::shared_ptr<SchemaQueue>> Logger::logToDbFindQueue(SchemaKey key)
+std::optional<std::shared_ptr<AbstractQueue>> Logger::logToDbFindQueue(SchemaKey key)
 {
   auto map = schema_registry_.get_map();
   auto it = map->find(key);
@@ -204,9 +204,10 @@ std::optional<std::shared_ptr<SchemaQueue>> Logger::logToDbFindQueue(SchemaKey k
   return std::nullopt;
 }
 
-void Logger::logToDbRegisterSchema(SchemaKey key,
-                                    std::string_view header,
-                                    const std::vector<SQLiteType>& types)
+SchemaInfo Logger::logToDbBuildSchemaInfo(
+    SchemaKey key,
+    std::string_view header,
+    const std::vector<SQLiteType>& types)
 {
   SchemaInfo info;
   info.table_name
@@ -225,13 +226,14 @@ void Logger::logToDbRegisterSchema(SchemaKey key,
   create_sql += ");";
   info.prepared_statement_sql = std::move(create_sql);
 
-  // Create SchemaQueue, attach info, register
-  auto queue = std::make_shared<SchemaQueue>();
-  queue->info = std::move(info);
+  return info;
+}
 
+void Logger::logToDbRegisterQueue(SchemaKey key,
+                                   std::shared_ptr<AbstractQueue> queue)
+{
   auto registered = schema_registry_.register_schema(key, std::move(queue));
 
-  // Enqueue NewSchemaCommand for the backend thread (if running)
   if (log_db_running_.load(std::memory_order_acquire)) {
     NewSchemaCommand cmd{key, std::move(registered)};
     std::lock_guard<std::mutex> lock(new_schema_queue_mutex_);
@@ -239,10 +241,14 @@ void Logger::logToDbRegisterSchema(SchemaKey key,
   }
 }
 
+// ---------------------------------------------------------------------------
+// logDbLoop  (backend thread)
+// ---------------------------------------------------------------------------
+
 void Logger::logDbLoop()
 {
-  // Local registry for the backend thread: SchemaKey -> SchemaQueue
-  std::unordered_map<SchemaKey, std::shared_ptr<SchemaQueue>, SchemaKeyHasher> local_registry;
+  // Local registry for the backend thread: SchemaKey -> AbstractQueue
+  std::unordered_map<SchemaKey, std::shared_ptr<AbstractQueue>, SchemaKeyHasher> local_registry;
 
   while (log_db_running_.load(std::memory_order_acquire)) {
     // --- Phase 1: Drain all pending NewSchemaCommand entries ---
@@ -262,25 +268,26 @@ void Logger::logDbLoop()
       }
 
       // Execute CREATE TABLE
-      const SchemaInfo& info = cmd.queue->info;
+      const SchemaInfo& info = cmd.queue->schema_info();
       char* err_msg = nullptr;
       int rc = sqlite3_exec(
           db_, info.prepared_statement_sql.c_str(), nullptr, nullptr, &err_msg);
       if (rc != SQLITE_OK) {
-        // TODO(amaiorov): route this through the Logger error/warn system
-        // once we figure out thread-safe Logger usage.
-        fprintf(stderr,
-                "[UTL] SQLite error creating table '%s': %s\n",
-                info.table_name.c_str(),
-                err_msg ? err_msg : "unknown");
+        this->error(UTL, 104, "SQLite error creating table '{}': {}",
+                   info.table_name,
+                   err_msg ? err_msg : "unknown");
         sqlite3_free(err_msg);
       }
 
-      // Store the SchemaQueue in the local backend registry
+      // Store the AbstractQueue in the local backend registry
       local_registry[cmd.key] = std::move(cmd.queue);
     }
 
-    // --- Phase 2: (TODO) Drain data queues and bulk-INSERT ---
+    // --- Phase 2: Poll all active queues for pending data ---
+    for (auto& entry : local_registry) {
+      auto& q = entry.second;
+      did_work |= (q->drain_to_db(db, 100) > 0);
+    }
 
     // If no work was done, sleep briefly to avoid busy-waiting
     if (!did_work) {
