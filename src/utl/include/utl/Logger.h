@@ -156,6 +156,12 @@ public:
 
   explicit TypedQueue(SchemaInfo info) { info_ = std::move(info); }
 
+  ~TypedQueue() override {
+    if (stmt_) {
+      sqlite3_finalize(stmt_);
+    }
+  }
+
   size_t row_size_bytes() const override { return sizeof(row_type); }
 
   // --- Caller-facing (called from the logToDb template) ---
@@ -176,12 +182,40 @@ public:
   // --- Backend-facing (called by logDbLoop) ---
   size_t drain_to_db(sqlite3* db, size_t max_records) override
   {
-    // TODO: pop rows from queue_ and bulk-INSERT using info_.
+    // Prepare the INSERT statement on first drain.
+    if (!stmt_ && !build_insert_stmt(db)) {
+      return 0;
+    }
+
+    // Bulk transaction.
+    sqlite3_exec(db, "BEGIN", nullptr, nullptr, nullptr);
+
     size_t count = 0;
     row_type row;
+    bool ok = true;
+
     while (count < max_records && queue_.pop(row)) {
       item_count_.fetch_sub(1, std::memory_order_release);
+
+      bind_row(stmt_, row, std::index_sequence_for<Args...>{});
+
+      int rc = sqlite3_step(stmt_);
+      sqlite3_reset(stmt_);
+
+      if (rc != SQLITE_DONE) {
+        // Individual row insert failed; abandon the batch.
+        ok = false;
+        break;
+      }
       ++count;
+    }
+
+    if (count > 0) {
+      sqlite3_exec(db, ok ? "COMMIT" : "ROLLBACK",
+                   nullptr, nullptr, nullptr);
+    } else {
+      // No rows popped; roll back the empty transaction.
+      sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
     }
 
     last_flush_ms_.store(
@@ -194,7 +228,46 @@ public:
   }
 
 private:
+  // Bind one tuple element to a parameter by its SQLite type.
+  template <typename T>
+  static void bind_field(sqlite3_stmt* stmt, int idx, T value)
+  {
+    if constexpr (TypeToSQLite<T>::value == SQLiteType::INTEGER) {
+      sqlite3_bind_int64(stmt, idx, static_cast<sqlite3_int64>(value));
+    } else if constexpr (TypeToSQLite<T>::value == SQLiteType::REAL) {
+      sqlite3_bind_double(stmt, idx, static_cast<double>(value));
+    }
+  }
+
+  // Fold over the tuple elements, binding each to the statement.
+  template <size_t... Is>
+  void bind_row(sqlite3_stmt* stmt,
+                const row_type& row,
+                std::index_sequence<Is...>) const
+  {
+    ((bind_field(stmt, static_cast<int>(Is) + 1, std::get<Is>(row))), ...);
+  }
+
+  // Lazily build the cached INSERT prepared statement.
+  bool build_insert_stmt(sqlite3* db)
+  {
+    std::string sql = "INSERT INTO " + info_.table_name + " (";
+    for (size_t i = 0; i < info_.columns.size(); ++i) {
+      if (i > 0) sql += ", ";
+      sql += info_.columns[i].name;
+    }
+    sql += ") VALUES (";
+    for (size_t i = 0; i < info_.columns.size(); ++i) {
+      if (i > 0) sql += ", ";
+      sql += "?";
+    }
+    sql += ");";
+
+    return sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt_, nullptr) == SQLITE_OK;
+  }
+
   boost::lockfree::queue<row_type> queue_{4096};
+  sqlite3_stmt* stmt_ = nullptr;
 };
 
 // --- End type-erased queue hierarchy ---
@@ -574,6 +647,18 @@ class Logger
   void startLogDb(const char* filename);
   void stopLogDb();
 
+  // Maximum total memory (in bytes) the user is willing to let all buffered
+  // log-db queues consume before the backend applies backpressure or drops
+  // data.  0 means unlimited.
+  void setDbLogGlobalMaxMem(size_t bytes) { db_log_global_max_mem_ = bytes; }
+  size_t getDbLogGlobalMaxMem() const { return db_log_global_max_mem_; }
+
+  // Maximum memory (in bytes) a single per-schema queue may consume before
+  // the backend applies backpressure or drops data on that channel.
+  // 0 means unlimited.
+  void setDbLogPerChannelMaxMem(size_t bytes) { db_log_per_channel_max_mem_ = bytes; }
+  size_t getDbLogPerChannelMaxMem() const { return db_log_per_channel_max_mem_; }
+
   void setMetricsStage(std::string_view format);
   void clearMetricsStage();
   void pushMetricsStage(std::string_view format);
@@ -700,6 +785,14 @@ class Logger
   sqlite3* db_ = nullptr;
   std::thread log_db_thread_;
   std::atomic<bool> log_db_running_{false};
+
+  // Maximum global memory footprint from buffered log-db data (bytes).
+  // 0 = unlimited.  Used by the backend to decide when to throttle.
+  size_t db_log_global_max_mem_ = 0;
+  // Maximum per-channel (per-registration) memory from buffered data (bytes).
+  // 0 = unlimited.
+  size_t db_log_per_channel_max_mem_ = 0;
+
   SchemaRegistry schema_registry_;
 
   // Command queue: caller threads enqueue NewSchemaCommand,
