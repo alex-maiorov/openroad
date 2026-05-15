@@ -205,6 +205,7 @@ std::optional<std::shared_ptr<AbstractQueue>> Logger::logToDbFindQueue(SchemaKey
 }
 
 SchemaInfo Logger::logToDbBuildSchemaInfo(
+    sqlite3* db,
     SchemaKey key,
     std::string_view header,
     const std::vector<SQLiteType>& types)
@@ -214,7 +215,7 @@ SchemaInfo Logger::logToDbBuildSchemaInfo(
       = std::string(tool_names_[key.tool]) + "_" + std::to_string(key.id);
   info.columns = build_columns_from_runtime(header, types);
 
-  // Build CREATE TABLE SQL
+  // Build and execute CREATE TABLE IF NOT EXISTS in one shot.
   std::string create_sql
       = "CREATE TABLE IF NOT EXISTS " + info.table_name + " (";
   for (size_t i = 0; i < info.columns.size(); ++i) {
@@ -224,7 +225,15 @@ SchemaInfo Logger::logToDbBuildSchemaInfo(
         += info.columns[i].name + " " + sqlite_type_name(info.columns[i].type);
   }
   create_sql += ");";
-  info.prepared_statement_sql = std::move(create_sql);
+
+  char* err_msg = nullptr;
+  int rc = sqlite3_exec(db, create_sql.c_str(), nullptr, nullptr, &err_msg);
+  if (rc != SQLITE_OK) {
+    this->error(UTL, 104, "SQLite error creating table '{}': {}",
+                info.table_name,
+                err_msg ? err_msg : "unknown");
+    sqlite3_free(err_msg);
+  }
 
   return info;
 }
@@ -261,22 +270,9 @@ void Logger::logDbLoop()
     bool did_work = !pending_commands.empty();
 
     for (auto& cmd : pending_commands) {
-      // If already registered locally (shouldn't happen, but guard),
-      // skip the CREATE TABLE.
+      // If already registered locally (shouldn't happen, but guard), skip.
       if (local_registry.find(cmd.key) != local_registry.end()) {
         continue;
-      }
-
-      // Execute CREATE TABLE
-      const SchemaInfo& info = cmd.queue->schema_info();
-      char* err_msg = nullptr;
-      int rc = sqlite3_exec(
-          db_, info.prepared_statement_sql.c_str(), nullptr, nullptr, &err_msg);
-      if (rc != SQLITE_OK) {
-        this->error(UTL, 104, "SQLite error creating table '{}': {}",
-                   info.table_name,
-                   err_msg ? err_msg : "unknown");
-        sqlite3_free(err_msg);
       }
 
       // Store the AbstractQueue in the local backend registry

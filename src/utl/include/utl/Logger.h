@@ -15,6 +15,8 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <atomic>
+#include <chrono>
 #include <ostream>
 #include <sstream>
 #include <stack>
@@ -79,7 +81,9 @@ struct ColumnDefinition {
 struct SchemaInfo {
   std::vector<ColumnDefinition> columns;
   std::string table_name;
-  std::string prepared_statement_sql;
+  // Note: table creation (CREATE TABLE IF NOT EXISTS) is done immediately
+  // during registration via sqlite3_exec — no SQL string is cached here.
+};
 };
 
 // Type-to-SQLiteType mapping trait.
@@ -120,12 +124,27 @@ public:
 
   const SchemaInfo& schema_info() const { return info_; }
 
+  // Size of a single row in bytes (compile-time constant per schema).
+  virtual size_t row_size_bytes() const = 0;
+
+  // Approximate number of items currently enqueued.
+  size_t approx_size() const {
+    return item_count_.load(std::memory_order_acquire);
+  }
+
+  // Timestamp (steady_clock, ms) of the most recent drain_to_db completion.
+  uint64_t last_flush_timestamp_ms() const {
+    return last_flush_ms_.load(std::memory_order_acquire);
+  }
+
   // Bulk-write up to max_records pending rows using the given handle.
   // Returns the number of rows written.
   virtual size_t drain_to_db(sqlite3* db, size_t max_records) = 0;
 
 protected:
   SchemaInfo info_;
+  std::atomic<size_t> item_count_{0};
+  std::atomic<uint64_t> last_flush_ms_{0};
 };
 
 // Concrete per-schema queue.  Stores rows as std::tuple<Args...> directly
@@ -136,6 +155,8 @@ public:
   using row_type = std::tuple<Args...>;
 
   explicit TypedQueue(SchemaInfo info) { info_ = std::move(info); }
+
+  size_t row_size_bytes() const override { return sizeof(row_type); }
 
   // --- Caller-facing (called from the logToDb template) ---
   // Enqueue one row via move semantics.  Spins if the queue is full;
@@ -148,6 +169,7 @@ public:
       }
       std::this_thread::yield();
     }
+    item_count_.fetch_add(1, std::memory_order_release);
     return true;
   }
 
@@ -158,8 +180,16 @@ public:
     size_t count = 0;
     row_type row;
     while (count < max_records && queue_.pop(row)) {
+      item_count_.fetch_sub(1, std::memory_order_release);
       ++count;
     }
+
+    last_flush_ms_.store(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count(),
+        std::memory_order_release);
+
     return count;
   }
 
@@ -520,8 +550,9 @@ class Logger
     SchemaKey key{tool, id};
     auto queue_opt = logToDbFindQueue(key);
     if (!queue_opt.has_value()) {
-      // --- SLOW PATH: build SchemaInfo, create TypedQueue, register ---
+      // --- SLOW PATH: build SchemaInfo (creates table via sqlite3_exec), create TypedQueue, register ---
       SchemaInfo info = logToDbBuildSchemaInfo(
+          db_,
           key,
           std::string_view(Header.data),
           std::vector<SQLiteType>(types_arr.begin(), types_arr.end()));
@@ -679,7 +710,8 @@ class Logger
   // Non-template helpers called by the thin logToDb template.
   // Implemented in Logger.cpp.
   std::optional<std::shared_ptr<AbstractQueue>> logToDbFindQueue(SchemaKey key);
-  SchemaInfo logToDbBuildSchemaInfo(SchemaKey key,
+  SchemaInfo logToDbBuildSchemaInfo(sqlite3* db,
+                                     SchemaKey key,
                                      std::string_view header,
                                      const std::vector<SQLiteType>& types);
   void logToDbRegisterQueue(SchemaKey key,
