@@ -16,26 +16,27 @@
 #include <map>
 #include <memory>
 #include <atomic>
-#include <chrono>
 #include <ostream>
 #include <sstream>
 #include <stack>
-#include <sqlite3.h>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
-#include <tuple>
 #include <utility>
 #include <vector>
+#ifndef SWIG
+#include <chrono>
+#include <sqlite3.h>
+#include <tuple>
 #include <thread>
 #include <mutex>
 #include <queue>
 #include <deque>
 #include <optional>
 #include <unordered_map>
-
 #include <boost/lockfree/queue.hpp>
+#endif
 
 #include "spdlog/details/os.h"
 #include "spdlog/fmt/fmt.h"
@@ -48,360 +49,6 @@
 #include "spdlog/spdlog.h"
 
 namespace utl {
-
-// --- SQLite Logging Types ---
-
-enum class SQLiteType {
-  INTEGER,
-  REAL,
-  TEXT,
-  BLOB
-};
-
-struct SchemaKey {
-  ToolId tool;
-  int id;
-
-  bool operator==(const SchemaKey& other) const {
-    return tool == other.tool && id == other.id;
-  }
-};
-
-struct SchemaKeyHasher {
-  size_t operator()(const SchemaKey& k) const {
-    return std::hash<int>{}(static_cast<int>(k.tool)) ^ (std::hash<int>{}(k.id) << 1);
-  }
-};
-
-struct ColumnDefinition {
-  std::string name;
-  SQLiteType type;
-};
-
-struct SchemaInfo {
-  std::vector<ColumnDefinition> columns;
-  std::string table_name;
-  // Note: table creation (CREATE TABLE IF NOT EXISTS) is done immediately
-  // during registration via sqlite3_exec — no SQL string is cached here.
-};
-};
-
-// Type-to-SQLiteType mapping trait.
-// Only numeric types are supported:
-//   Integral types (int, short, size_t, bool, etc.) → INTEGER.
-//   Floating-point types (float, double, etc.)      → REAL.
-// Passing any other type is a compile-time error.
-template <typename T, typename Enabler = void>
-struct TypeToSQLite;
-
-template <typename T>
-struct TypeToSQLite<T, std::enable_if_t<std::is_integral_v<T>>> {
-  static constexpr SQLiteType value = SQLiteType::INTEGER;
-};
-
-template <typename T>
-struct TypeToSQLite<T, std::enable_if_t<std::is_floating_point_v<T>>> {
-  static constexpr SQLiteType value = SQLiteType::REAL;
-};
-
-// ---------------------------------------------------------------------------
-// Type-erased queue hierarchy.
-//
-// AbstractQueue  (backend-facing, type-erased)
-//   └─ TypedQueue<Args...>  (concrete, created at registration time)
-//
-// The backend stores shared_ptr<AbstractQueue> and calls drain_to_db()
-// opaquely.  The caller downcasts to TypedQueue<Args...>* to push tuples
-// with the exact C++ types.
-// ---------------------------------------------------------------------------
-
-class AbstractQueue {
-public:
-  AbstractQueue() = default;
-  AbstractQueue(const AbstractQueue&) = delete;
-  AbstractQueue& operator=(const AbstractQueue&) = delete;
-  virtual ~AbstractQueue() = default;
-
-  const SchemaInfo& schema_info() const { return info_; }
-
-  // Size of a single row in bytes (compile-time constant per schema).
-  virtual size_t row_size_bytes() const = 0;
-
-  // Approximate number of items currently enqueued.
-  size_t approx_size() const {
-    return item_count_.load(std::memory_order_acquire);
-  }
-
-  // Timestamp (steady_clock, ms) of the most recent drain_to_db completion.
-  uint64_t last_flush_timestamp_ms() const {
-    return last_flush_ms_.load(std::memory_order_acquire);
-  }
-
-  // Bulk-write up to max_records pending rows using the given handle.
-  // Returns the number of rows written.
-  virtual size_t drain_to_db(sqlite3* db, size_t max_records) = 0;
-
-protected:
-  SchemaInfo info_;
-  std::atomic<size_t> item_count_{0};
-  std::atomic<uint64_t> last_flush_ms_{0};
-};
-
-// Concrete per-schema queue.  Stores rows as std::tuple<Args...> directly
-// in the lock-free queue, avoiding any binary serialization.
-template <typename... Args>
-class TypedQueue : public AbstractQueue {
-public:
-  using row_type = std::tuple<Args...>;
-
-  explicit TypedQueue(SchemaInfo info) { info_ = std::move(info); }
-
-  ~TypedQueue() override {
-    if (stmt_) {
-      sqlite3_finalize(stmt_);
-    }
-  }
-
-  size_t row_size_bytes() const override { return sizeof(row_type); }
-
-  // --- Caller-facing (called from the logToDb template) ---
-  // Enqueue one row via move semantics.  Spins if the queue is full;
-  // returns false if the operation was aborted (backend shutdown).
-  bool push(row_type row, const std::atomic<bool>& abort_flag)
-  {
-    while (!queue_.push(std::move(row))) {
-      if (!abort_flag.load(std::memory_order_relaxed)) {
-        return false;
-      }
-      std::this_thread::yield();
-    }
-    item_count_.fetch_add(1, std::memory_order_release);
-    return true;
-  }
-
-  // --- Backend-facing (called by logDbLoop) ---
-  size_t drain_to_db(sqlite3* db, size_t max_records) override
-  {
-    // Prepare the INSERT statement on first drain.
-    if (!stmt_ && !build_insert_stmt(db)) {
-      return 0;
-    }
-
-    // Bulk transaction.
-    sqlite3_exec(db, "BEGIN", nullptr, nullptr, nullptr);
-
-    size_t count = 0;
-    row_type row;
-    bool ok = true;
-
-    while (count < max_records && queue_.pop(row)) {
-      item_count_.fetch_sub(1, std::memory_order_release);
-
-      bind_row(stmt_, row, std::index_sequence_for<Args...>{});
-
-      int rc = sqlite3_step(stmt_);
-      sqlite3_reset(stmt_);
-
-      if (rc != SQLITE_DONE) {
-        // Individual row insert failed; abandon the batch.
-        ok = false;
-        break;
-      }
-      ++count;
-    }
-
-    if (count > 0) {
-      sqlite3_exec(db, ok ? "COMMIT" : "ROLLBACK",
-                   nullptr, nullptr, nullptr);
-    } else {
-      // No rows popped; roll back the empty transaction.
-      sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
-    }
-
-    last_flush_ms_.store(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
-            .count(),
-        std::memory_order_release);
-
-    return count;
-  }
-
-private:
-  // Bind one tuple element to a parameter by its SQLite type.
-  template <typename T>
-  static void bind_field(sqlite3_stmt* stmt, int idx, T value)
-  {
-    if constexpr (TypeToSQLite<T>::value == SQLiteType::INTEGER) {
-      sqlite3_bind_int64(stmt, idx, static_cast<sqlite3_int64>(value));
-    } else if constexpr (TypeToSQLite<T>::value == SQLiteType::REAL) {
-      sqlite3_bind_double(stmt, idx, static_cast<double>(value));
-    }
-  }
-
-  // Fold over the tuple elements, binding each to the statement.
-  template <size_t... Is>
-  void bind_row(sqlite3_stmt* stmt,
-                const row_type& row,
-                std::index_sequence<Is...>) const
-  {
-    ((bind_field(stmt, static_cast<int>(Is) + 1, std::get<Is>(row))), ...);
-  }
-
-  // Lazily build the cached INSERT prepared statement.
-  bool build_insert_stmt(sqlite3* db)
-  {
-    std::string sql = "INSERT INTO " + info_.table_name + " (";
-    for (size_t i = 0; i < info_.columns.size(); ++i) {
-      if (i > 0) sql += ", ";
-      sql += info_.columns[i].name;
-    }
-    sql += ") VALUES (";
-    for (size_t i = 0; i < info_.columns.size(); ++i) {
-      if (i > 0) sql += ", ";
-      sql += "?";
-    }
-    sql += ");";
-
-    return sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt_, nullptr) == SQLITE_OK;
-  }
-
-  boost::lockfree::queue<row_type> queue_{4096};
-  sqlite3_stmt* stmt_ = nullptr;
-};
-
-// --- End type-erased queue hierarchy ---
-
-// Command sent from caller thread to the backend thread
-// when a new schema is discovered and needs a table created.
-struct NewSchemaCommand {
-  SchemaKey key;
-  std::shared_ptr<AbstractQueue> queue;
-};
-
-class SchemaRegistry {
-public:
-  using RegistryMap
-      = std::unordered_map<SchemaKey, std::shared_ptr<AbstractQueue>, SchemaKeyHasher>;
-
-  SchemaRegistry() : registry_ptr_(std::make_shared<const RegistryMap>()) {}
-
-  std::shared_ptr<const RegistryMap> get_map() const {
-    return std::atomic_load(&registry_ptr_);
-  }
-
-  // Register a new schema. Returns the AbstractQueue (either newly created or
-  // existing if another thread registered it first).
-  std::shared_ptr<AbstractQueue> register_schema(
-      SchemaKey key,
-      std::shared_ptr<AbstractQueue> queue)
-  {
-    std::lock_guard<std::mutex> lock(registration_mutex_);
-    auto current_map = get_map();
-
-    auto it = current_map->find(key);
-    if (it != current_map->end()) {
-      return it->second;  // Already registered
-    }
-
-    auto new_map = std::make_shared<RegistryMap>(*current_map);
-    (*new_map)[key] = queue;
-    std::atomic_store(
-        &registry_ptr_,
-        std::const_pointer_cast<const RegistryMap>(new_map));
-    return queue;
-  }
-
-private:
-  std::shared_ptr<const RegistryMap> registry_ptr_;
-  std::mutex registration_mutex_;
-};
-
-// --- End SQLite Logging Types ---
-
-template <size_t N>
-struct FixedString {
-  char data[N]{};
-
-  constexpr FixedString() = default;
-
-  constexpr FixedString(const char (&str)[N]) {
-    for (size_t i = 0; i < N; ++i) {
-      data[i] = str[i];
-    }
-  }
-
-  constexpr size_t count_fields() const {
-    if (data[0] == '\0') return 0;
-    size_t count = 1;
-    for (size_t i = 0; i < N; ++i) {
-      if (data[i] == '\0') break;
-      if (data[i] == ',') {
-        // Skip empty trailing field check
-        size_t j = i + 1;
-        while (j < N && data[j] == ' ') j++;
-        if (j < N && data[j] != '\0' && data[j] != ',') {
-          count++;
-        }
-      }
-    }
-    return count;
-  }
-
-  constexpr bool isValid() const {
-    bool current_segment_empty = true;
-    for (size_t i = 0; i < N; ++i) {
-      char c = data[i];
-      if (c == '\0') break;
-
-      if (c == ',') {
-        if (current_segment_empty) return false;
-        current_segment_empty = true;
-      } else if (c == ' ') {
-        // Space is allowed as padding, doesn't change empty status
-      } else if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
-                 || (c >= '0' && c <= '9') || (c == '_')) {
-        current_segment_empty = false;
-      } else {
-        return false;  // Illegal character
-      }
-    }
-    return !current_segment_empty;
-  }
-
-  // Returns the start index of the i-th field (0-based)
-  constexpr size_t field_start(size_t idx) const {
-    size_t current = 0;
-    for (size_t i = 0; i < N; ++i) {
-      if (current == idx) {
-        // Skip leading spaces
-        while (i < N && data[i] == ' ') i++;
-        return i;
-      }
-      if (data[i] == ',') {
-        current++;
-      }
-      if (data[i] == '\0') break;
-    }
-    return N; // Not found
-  }
-
-  // Returns the end index (exclusive) of the i-th field
-  constexpr size_t field_end(size_t idx) const {
-    size_t start = field_start(idx);
-    if (start >= N) return N;
-    size_t i = start;
-    // Find end: comma, null, or trailing space before comma/null
-    size_t last_non_space = start;
-    while (i < N && data[i] != ',' && data[i] != '\0') {
-      if (data[i] != ' ') last_non_space = i + 1;
-      i++;
-    }
-    return last_non_space;
-  }
-};
-
-// --- End helper utilities ---
 
 class PrometheusMetricsServer;
 class PrometheusRegistry;
@@ -463,6 +110,297 @@ enum ToolId
   FOREACH_TOOL(GENERATE_ENUM)
       SIZE  // the number of tools, do not put anything after this
 };
+
+#ifndef SWIG
+// --- SQLite Logging Types ---
+
+enum class SQLiteType {
+  INTEGER,
+  REAL,
+  TEXT,
+  BLOB
+};
+
+struct SchemaKey {
+  ToolId tool;
+  int id;
+
+  bool operator==(const SchemaKey& other) const {
+    return tool == other.tool && id == other.id;
+  }
+};
+
+struct SchemaKeyHasher {
+  size_t operator()(const SchemaKey& k) const {
+    return std::hash<int>{}(static_cast<int>(k.tool)) ^ (std::hash<int>{}(k.id) << 1);
+  }
+};
+
+struct ColumnDefinition {
+  std::string name;
+  SQLiteType type;
+};
+
+struct SchemaInfo {
+  std::vector<ColumnDefinition> columns;
+  std::string table_name;
+};
+
+// Type-to-SQLiteType mapping trait.
+template <typename T, typename Enabler = void>
+struct TypeToSQLite;
+
+template <typename T>
+struct TypeToSQLite<T, std::enable_if_t<std::is_integral_v<T>>> {
+  static constexpr SQLiteType value = SQLiteType::INTEGER;
+};
+
+template <typename T>
+struct TypeToSQLite<T, std::enable_if_t<std::is_floating_point_v<T>>> {
+  static constexpr SQLiteType value = SQLiteType::REAL;
+};
+
+// ---------------------------------------------------------------------------
+// Type-erased queue hierarchy.
+// ---------------------------------------------------------------------------
+
+class AbstractQueue {
+public:
+  AbstractQueue() = default;
+  AbstractQueue(const AbstractQueue&) = delete;
+  AbstractQueue& operator=(const AbstractQueue&) = delete;
+  virtual ~AbstractQueue() = default;
+
+  const SchemaInfo& schema_info() const { return info_; }
+  virtual size_t row_size_bytes() const = 0;
+
+  size_t approx_size() const {
+    return item_count_.load(std::memory_order_acquire);
+  }
+
+  uint64_t last_flush_timestamp_ms() const {
+    return last_flush_ms_.load(std::memory_order_acquire);
+  }
+
+  virtual size_t drain_to_db(sqlite3* db, size_t max_records) = 0;
+
+protected:
+  SchemaInfo info_;
+  std::atomic<size_t> item_count_{0};
+  std::atomic<uint64_t> last_flush_ms_{0};
+};
+
+template <typename... Args>
+class TypedQueue : public AbstractQueue {
+public:
+  using row_type = std::tuple<Args...>;
+
+  explicit TypedQueue(SchemaInfo info) { info_ = std::move(info); }
+
+  ~TypedQueue() override {
+    if (stmt_) {
+      sqlite3_finalize(stmt_);
+    }
+  }
+
+  size_t row_size_bytes() const override { return sizeof(row_type); }
+
+  bool push(row_type row, const std::atomic<bool>& abort_flag)
+  {
+    while (!queue_.push(std::move(row))) {
+      if (!abort_flag.load(std::memory_order_relaxed)) {
+        return false;
+      }
+      std::this_thread::yield();
+    }
+    item_count_.fetch_add(1, std::memory_order_release);
+    return true;
+  }
+
+  size_t drain_to_db(sqlite3* db, size_t max_records) override
+  {
+    if (!stmt_ && !build_insert_stmt(db)) {
+      return 0;
+    }
+
+    sqlite3_exec(db, "BEGIN", nullptr, nullptr, nullptr);
+
+    size_t count = 0;
+    row_type row;
+    bool ok = true;
+
+    while (count < max_records && queue_.pop(row)) {
+      item_count_.fetch_sub(1, std::memory_order_release);
+      bind_row(stmt_, row, std::index_sequence_for<Args...>{});
+      int rc = sqlite3_step(stmt_);
+      sqlite3_reset(stmt_);
+      if (rc != SQLITE_DONE) {
+        ok = false;
+        break;
+      }
+      ++count;
+    }
+
+    if (count > 0) {
+      sqlite3_exec(db, ok ? "COMMIT" : "ROLLBACK",
+                   nullptr, nullptr, nullptr);
+    } else {
+      sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
+    }
+
+    last_flush_ms_.store(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count(),
+        std::memory_order_release);
+    return count;
+  }
+
+private:
+  template <typename T>
+  static void bind_field(sqlite3_stmt* stmt, int idx, T value)
+  {
+    if constexpr (TypeToSQLite<T>::value == SQLiteType::INTEGER) {
+      sqlite3_bind_int64(stmt, idx, static_cast<sqlite3_int64>(value));
+    } else if constexpr (TypeToSQLite<T>::value == SQLiteType::REAL) {
+      sqlite3_bind_double(stmt, idx, static_cast<double>(value));
+    }
+  }
+
+  template <size_t... Is>
+  void bind_row(sqlite3_stmt* stmt,
+                const row_type& row,
+                std::index_sequence<Is...>) const
+  {
+    ((bind_field(stmt, static_cast<int>(Is) + 1, std::get<Is>(row))), ...);
+  }
+
+  bool build_insert_stmt(sqlite3* db)
+  {
+    std::string sql = "INSERT INTO " + info_.table_name + " (";
+    for (size_t i = 0; i < info_.columns.size(); ++i) {
+      if (i > 0) sql += ", ";
+      sql += info_.columns[i].name;
+    }
+    sql += ") VALUES (";
+    for (size_t i = 0; i < info_.columns.size(); ++i) {
+      if (i > 0) sql += ", ";
+      sql += "?";
+    }
+    sql += ");";
+    return sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt_, nullptr) == SQLITE_OK;
+  }
+
+  boost::lockfree::queue<row_type> queue_{4096};
+  sqlite3_stmt* stmt_ = nullptr;
+};
+
+// Command sent from caller thread to the backend thread
+// when a new schema is discovered.
+struct NewSchemaCommand {
+  SchemaKey key;
+  std::shared_ptr<AbstractQueue> queue;
+};
+
+class SchemaRegistry {
+public:
+  using RegistryMap
+      = std::unordered_map<SchemaKey, std::shared_ptr<AbstractQueue>, SchemaKeyHasher>;
+
+  SchemaRegistry() : registry_ptr_(std::make_shared<const RegistryMap>()) {}
+
+  std::shared_ptr<const RegistryMap> get_map() const {
+    return std::atomic_load(&registry_ptr_);
+  }
+
+  std::shared_ptr<AbstractQueue> register_schema(
+      SchemaKey key,
+      std::shared_ptr<AbstractQueue> queue)
+  {
+    std::lock_guard<std::mutex> lock(registration_mutex_);
+    auto current_map = get_map();
+    auto it = current_map->find(key);
+    if (it != current_map->end()) {
+      return it->second;
+    }
+    auto new_map = std::make_shared<RegistryMap>(*current_map);
+    (*new_map)[key] = queue;
+    std::atomic_store(
+        &registry_ptr_,
+        std::const_pointer_cast<const RegistryMap>(new_map));
+    return queue;
+  }
+
+private:
+  std::shared_ptr<const RegistryMap> registry_ptr_;
+  std::mutex registration_mutex_;
+};
+
+// --- End SQLite Logging Types ---
+
+template <size_t N>
+struct FixedString {
+  char data[N]{};
+  constexpr FixedString() = default;
+  constexpr FixedString(const char (&str)[N]) {
+    for (size_t i = 0; i < N; ++i) data[i] = str[i];
+  }
+
+  constexpr size_t count_fields() const {
+    if (data[0] == '\0') return 0;
+    size_t count = 1;
+    for (size_t i = 0; i < N; ++i) {
+      if (data[i] == '\0') break;
+      if (data[i] == ',') {
+        size_t j = i + 1;
+        while (j < N && data[j] == ' ') j++;
+        if (j < N && data[j] != '\0' && data[j] != ',') count++;
+      }
+    }
+    return count;
+  }
+
+  constexpr bool isValid() const {
+    bool empty = true;
+    for (size_t i = 0; i < N; ++i) {
+      char c = data[i];
+      if (c == '\0') break;
+      if (c == ',') {
+        if (empty) return false;
+        empty = true;
+      } else if (c != ' ') {
+        empty = false;
+      }
+    }
+    return !empty;
+  }
+
+  constexpr size_t field_start(size_t idx) const {
+    size_t cur = 0;
+    for (size_t i = 0; i < N; ++i) {
+      if (cur == idx) {
+        while (i < N && data[i] == ' ') i++;
+        return i;
+      }
+      if (data[i] == ',') cur++;
+      if (data[i] == '\0') break;
+    }
+    return N;
+  }
+
+  constexpr size_t field_end(size_t idx) const {
+    size_t start = field_start(idx);
+    if (start >= N) return N;
+    size_t last = start;
+    for (size_t i = start; i < N && data[i] != ',' && data[i] != '\0'; ++i) {
+      if (data[i] != ' ') last = i + 1;
+    }
+    return last;
+  }
+};
+
+// --- End helper utilities ---
+#endif
 
 class Logger
 {
@@ -599,6 +537,7 @@ class Logger
   void suppressMessage(ToolId tool, int id);
   void unsuppressMessage(ToolId tool, int id);
 
+#ifndef SWIG
   // Logs structured data to the SQLite database.
   // The schema (types of Args...) is registered lazily on the first call
   // for a (tool, id) pair.  The template body is intentionally thin:
@@ -639,6 +578,7 @@ class Logger
           std::make_tuple(std::forward<Args>(args)...), log_db_running_);
     }
   }
+#endif
 
   void addSink(spdlog::sink_ptr sink);
   void removeSink(const spdlog::sink_ptr& sink);
@@ -650,14 +590,14 @@ class Logger
   // Maximum total memory (in bytes) the user is willing to let all buffered
   // log-db queues consume before the backend applies backpressure or drops
   // data.  0 means unlimited.
-  void setDbLogGlobalMaxMem(size_t bytes) { db_log_global_max_mem_ = bytes; }
-  size_t getDbLogGlobalMaxMem() const { return db_log_global_max_mem_; }
+  void setDbLogGlobalMaxMem(size_t bytes);
+  size_t getDbLogGlobalMaxMem() const;
 
   // Maximum memory (in bytes) a single per-schema queue may consume before
   // the backend applies backpressure or drops data on that channel.
   // 0 means unlimited.
-  void setDbLogPerChannelMaxMem(size_t bytes) { db_log_per_channel_max_mem_ = bytes; }
-  size_t getDbLogPerChannelMaxMem() const { return db_log_per_channel_max_mem_; }
+  void setDbLogPerChannelMaxMem(size_t bytes);
+  size_t getDbLogPerChannelMaxMem() const;
 
   void setMetricsStage(std::string_view format);
   void clearMetricsStage();
@@ -786,6 +726,8 @@ class Logger
   // Prometheus server metrics collection
   std::shared_ptr<PrometheusRegistry> prometheus_registry_;
   std::unique_ptr<PrometheusMetricsServer> prometheus_metrics_;
+
+#ifndef SWIG
   sqlite3* db_ = nullptr;
   std::thread log_db_thread_;
   std::atomic<bool> log_db_running_{false};
@@ -815,6 +757,7 @@ class Logger
                              std::shared_ptr<AbstractQueue> queue);
 
   void logDbLoop();
+#endif
 
   // This matrix is pre-allocated so it can be safely updated
   // from multiple threads without locks.

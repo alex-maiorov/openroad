@@ -102,9 +102,10 @@ void Logger::startLogDb(const char* filename)
   }
 
   int rc = sqlite3_open_v2(filename, &db_,
-                           SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX);
+                           SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX,
+                           nullptr);
   if (rc != SQLITE_OK) {
-    this->error(UTL, 103, "Failed to open SQLite database {}: {}", filename, sqlite3_errmsg(db_));
+    this->error(UTL, 109, "Failed to open SQLite database {}: {}", filename, sqlite3_errmsg(db_));
     sqlite3_close(db_);
     db_ = nullptr;
     return;
@@ -229,7 +230,7 @@ SchemaInfo Logger::logToDbBuildSchemaInfo(
   char* err_msg = nullptr;
   int rc = sqlite3_exec(db, create_sql.c_str(), nullptr, nullptr, &err_msg);
   if (rc != SQLITE_OK) {
-    this->error(UTL, 104, "SQLite error creating table '{}': {}",
+    this->error(UTL, 110, "SQLite error creating table '{}': {}",
                 info.table_name,
                 err_msg ? err_msg : "unknown");
     sqlite3_free(err_msg);
@@ -324,7 +325,7 @@ void Logger::logDbLoop()
         }
       }
       if (largest_q) {
-        drained_some |= (largest_q->drain_to_db(db, SIZE_MAX) > 0);
+        drained_some |= (largest_q->drain_to_db(db_, SIZE_MAX) > 0);
       }
       did_work |= drained_some;
       // Skip round-robin / per-channel when we hit global pressure.
@@ -351,7 +352,7 @@ void Logger::logDbLoop()
           const size_t rows_to_clear
               = (bytes_to_clear + row_size - 1) / row_size;
 
-          drained_some |= (q->drain_to_db(db, rows_to_clear) > 0);
+          drained_some |= (q->drain_to_db(db_, rows_to_clear) > 0);
         }
       }
 
@@ -359,7 +360,7 @@ void Logger::logDbLoop()
         // --- Round-robin: fully clear every queue ---
         for (auto& entry : local_registry) {
           drained_some
-              |= (entry.second->drain_to_db(db, SIZE_MAX) > 0);
+              |= (entry.second->drain_to_db(db_, SIZE_MAX) > 0);
         }
       }
       did_work |= drained_some;
@@ -688,6 +689,26 @@ std::unique_ptr<Progress> Logger::swapProgress(Progress* progress)
   progress_.reset(progress);
 
   return current_progress;
+}
+
+void Logger::setDbLogGlobalMaxMem(size_t bytes)
+{
+  db_log_global_max_mem_ = bytes;
+}
+
+size_t Logger::getDbLogGlobalMaxMem() const
+{
+  return db_log_global_max_mem_;
+}
+
+void Logger::setDbLogPerChannelMaxMem(size_t bytes)
+{
+  db_log_per_channel_max_mem_ = bytes;
+}
+
+size_t Logger::getDbLogPerChannelMaxMem() const
+{
+  return db_log_per_channel_max_mem_;
 }
 
 }  // namespace utl
