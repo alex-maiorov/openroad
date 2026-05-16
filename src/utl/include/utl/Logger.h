@@ -40,8 +40,10 @@
 #include <mutex>
 #include <queue>
 #include <deque>
+#include <iterator>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <boost/lockfree/queue.hpp>
 #endif
 
@@ -336,6 +338,20 @@ public:
     return queue;
   }
 
+  void remove_schema(SchemaKey key) {
+    std::lock_guard<std::mutex> lock(registration_mutex_);
+    auto current_map = get_map();
+    auto it = current_map->find(key);
+    if (it == current_map->end()) {
+      return;
+    }
+    auto new_map = std::make_shared<RegistryMap>(*current_map);
+    new_map->erase(key);
+    std::atomic_store(
+        &registry_ptr_,
+        std::const_pointer_cast<const RegistryMap>(new_map));
+  }
+
 private:
   std::shared_ptr<const RegistryMap> registry_ptr_;
   std::mutex registration_mutex_;
@@ -410,6 +426,11 @@ struct FixedString {
 };
 
 // --- End helper utilities ---
+
+// Value type extracted from an iterator — used by logToDbBulk.
+template <typename Iter>
+using iter_val_t = typename std::iterator_traits<Iter>::value_type;
+
 #endif
 
 class Logger
@@ -555,6 +576,11 @@ class Logger
   template <FixedString Header, typename... Args>
   void logToDb(ToolId tool, int id, Args&&... args)
   {
+    // If database logging is not running, silently skip.
+    if (!db_) {
+      return;
+    }
+
     static_assert(
         Header.isValid(),
         "Header must be a comma-separated list of alphanumeric names"
@@ -570,6 +596,12 @@ class Logger
 
     // Delegate all runtime work to non-template helpers in Logger.cpp.
     SchemaKey key{tool, id};
+
+    // If this (tool, id) pair has been explicitly disabled, skip silently.
+    if (!isDbLogEnabled(key)) {
+      return;
+    }
+
     auto queue_opt = logToDbFindQueue(key);
     if (!queue_opt.has_value()) {
       // --- SLOW PATH: build SchemaInfo (creates table via sqlite3_exec), create TypedQueue, register ---
@@ -580,12 +612,78 @@ class Logger
           std::vector<SQLiteType>(types_arr.begin(), types_arr.end()));
       auto queue = std::make_shared<TypedQueue<Args...>>(std::move(info));
       logToDbRegisterQueue(key, std::move(queue));
-    } else {
-      // --- FAST PATH: downcast and enqueue a strongly-typed tuple ---
-      auto& base = queue_opt.value();
-      auto* typed = static_cast<TypedQueue<Args...>*>(base.get());
+      // Re-fetch after registration so the data is pushed.
+      queue_opt = logToDbFindQueue(key);
+      if (!queue_opt.has_value()) {
+        return;
+      }
+    }
+
+    // --- FAST PATH (also reached from SLOW PATH after re-fetch): ---
+    auto& base = queue_opt.value();
+    auto* typed = static_cast<TypedQueue<Args...>*>(base.get());
+    typed->push(
+        std::make_tuple(std::forward<Args>(args)...), log_db_running_);
+  }
+
+  // Bulk version of logToDb: takes one iterator per column and pushes
+  // 'count' tuples assembled from *iters++ in lockstep.
+  // Move semantics — caller transfers ownership of the pointed-to values.
+  template <FixedString Header, typename... InputIters>
+  void logToDbBulk(ToolId tool, int id, size_t count, InputIters... iters)
+  {
+    // If database logging is not running, silently skip.
+    if (!db_) {
+      return;
+    }
+
+    static_assert(
+        Header.isValid(),
+        "Header must be a comma-separated list of alphanumeric names"
+        " and underscores.");
+    static_assert(
+        sizeof...(InputIters) == Header.count_fields(),
+        "Number of iterators provided to logToDbBulk must match the"
+        " number of fields in the header.");
+
+    // Check every iterator's value type at compile time.
+    constexpr bool all_numeric
+        = (... && std::is_arithmetic_v<iter_val_t<InputIters>>);
+    static_assert(
+        all_numeric,
+        "All iterator value types must be arithmetic"
+        " (maps to INTEGER or REAL in SQLite).");
+
+    constexpr std::array<SQLiteType, sizeof...(InputIters)> types_arr
+        = {TypeToSQLite<iter_val_t<InputIters>>::value...};
+
+    SchemaKey key{tool, id};
+    if (!isDbLogEnabled(key)) {
+      return;
+    }
+
+    auto queue_opt = logToDbFindQueue(key);
+    if (!queue_opt.has_value()) {
+      SchemaInfo info = logToDbBuildSchemaInfo(
+          db_,
+          key,
+          std::string_view(Header.data),
+          std::vector<SQLiteType>(types_arr.begin(), types_arr.end()));
+      auto queue = std::make_shared<TypedQueue<iter_val_t<InputIters>...>>(
+          std::move(info));
+      logToDbRegisterQueue(key, std::move(queue));
+      // Re-fetch after registration so the batch can be pushed.
+      queue_opt = logToDbFindQueue(key);
+      if (!queue_opt.has_value()) {
+        return;
+      }
+    }
+
+    auto* typed
+        = static_cast<TypedQueue<iter_val_t<InputIters>...>*>(queue_opt->get());
+    for (size_t i = 0; i < count; ++i) {
       typed->push(
-          std::make_tuple(std::forward<Args>(args)...), log_db_running_);
+          std::make_tuple(std::move(*iters++)...), log_db_running_);
     }
   }
 
@@ -613,6 +711,15 @@ class Logger
   // 0 means unlimited.
   void setDbLogPerChannelMaxMem(size_t bytes);
   size_t getDbLogPerChannelMaxMem() const;
+
+  // Enable or disable database logging for a specific (tool, id) pair.
+  // Disabled entries are silently skipped in logToDb.  If a schema was
+  // already registered, it is removed so the next logToDb call triggers
+  // a fresh registration check.
+  void setDbLogEnabled(ToolId tool, int id, bool enabled);
+  // Returns true if logging is enabled for (tool, id).  Default is true
+  // for all pairs not explicitly disabled.
+  bool getDbLogEnabled(ToolId tool, int id) const;
 
   void setMetricsStage(std::string_view format);
   void clearMetricsStage();
@@ -767,6 +874,14 @@ class Logger
   using MetadataRow = std::tuple<ToolId, std::string, std::string>;
   std::queue<MetadataRow> metadata_queue_;
   std::mutex metadata_queue_mutex_;
+
+  // Per-schema enable/disable set.  Logging is enabled by default for
+  // all (tool, id) pairs.  Insert a key here to disable it.
+  std::unordered_set<SchemaKey, SchemaKeyHasher> db_log_disabled_set_;
+  mutable std::mutex db_log_enabled_mutex_;
+
+  // Returns false if the key is in db_log_disabled_set_.
+  bool isDbLogEnabled(SchemaKey key) const;
 
   // Non-template helpers called by the thin logToDb template.
   // Implemented in Logger.cpp.

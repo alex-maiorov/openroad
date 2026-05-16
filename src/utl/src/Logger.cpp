@@ -863,4 +863,29 @@ bool Logger::drainMetadataQueue()
   return true;
 }
 
+bool Logger::isDbLogEnabled(SchemaKey key) const
+{
+  std::lock_guard<std::mutex> lock(db_log_enabled_mutex_);
+  return db_log_disabled_set_.find(key) == db_log_disabled_set_.end();
+}
+
+void Logger::setDbLogEnabled(ToolId tool, int id, bool enabled)
+{
+  SchemaKey key{tool, id};
+  std::lock_guard<std::mutex> lock(db_log_enabled_mutex_);
+  if (enabled) {
+    db_log_disabled_set_.erase(key);
+  } else {
+    db_log_disabled_set_.insert(key);
+    // If already registered, remove it so the next logToDb call
+    // hits the slow path and re-checks isDbLogEnabled.
+    schema_registry_.remove_schema(key);
+  }
+}
+
+bool Logger::getDbLogEnabled(ToolId tool, int id) const
+{
+  return isDbLogEnabled({tool, id});
+}
+
 }  // namespace utl
