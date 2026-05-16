@@ -323,7 +323,7 @@ int Replace::doNesterovPlace(const int threads,
   log_->info(GPL, 84, "---- Execute Nesterov Global Placement.");
   if (options.timingDrivenMode) {
     log_->info(GPL,
-               8,
+               88,
                "Timing driven mode enabled. timing_gradpass parameters: "
                "top_n={}, proj_weight={}, end_to_end_weight={}, "
                "slack_sharpness={}, slack_offset={}, slack_upper={}, sta_run_interval={}, first_iter={}",
