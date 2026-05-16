@@ -578,6 +578,11 @@ class Logger
           std::make_tuple(std::forward<Args>(args)...), log_db_running_);
     }
   }
+
+  // Enqueue a metadata row (tool, key, value) for the backend to write
+  // to the 'metadata' table (both key and value are TEXT).
+  // Thread-safe; uses a mutex-guarded std::queue.
+  void logMetadata(ToolId tool, std::string key, std::string value);
 #endif
 
   void addSink(spdlog::sink_ptr sink);
@@ -745,6 +750,13 @@ class Logger
   // the backend thread (logDbLoop) drains and processes them.
   std::deque<NewSchemaCommand> new_schema_queue_;
   std::mutex new_schema_queue_mutex_;
+
+  // Metadata queue: low-traffic text-to-text rows written to the
+  // 'metadata' table.  Uses a std::queue (not lockfree) because
+  // std::string has non-trivial copy semantics.
+  using MetadataRow = std::tuple<ToolId, std::string, std::string>;
+  std::queue<MetadataRow> metadata_queue_;
+  std::mutex metadata_queue_mutex_;
 
   // Non-template helpers called by the thin logToDb template.
   // Implemented in Logger.cpp.

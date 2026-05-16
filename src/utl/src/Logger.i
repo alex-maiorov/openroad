@@ -105,6 +105,44 @@ void startPrometheusEndpoint(uint16_t port)
   logger->startPrometheusEndpoint(port);
 }
 
+// --- Database logging controls ---
+
+void start_log_db(const std::string& filename)
+{
+  utl::Logger* logger = ord::getLogger();
+  logger->startLogDb(filename.c_str());
+}
+
+void stop_log_db()
+{
+  utl::Logger* logger = ord::getLogger();
+  logger->stopLogDb();
+}
+
+void set_db_log_global_max_mem(size_t bytes)
+{
+  utl::Logger* logger = ord::getLogger();
+  logger->setDbLogGlobalMaxMem(bytes);
+}
+
+size_t get_db_log_global_max_mem()
+{
+  utl::Logger* logger = ord::getLogger();
+  return logger->getDbLogGlobalMaxMem();
+}
+
+void set_db_log_per_channel_max_mem(size_t bytes)
+{
+  utl::Logger* logger = ord::getLogger();
+  logger->setDbLogPerChannelMaxMem(bytes);
+}
+
+size_t get_db_log_per_channel_max_mem()
+{
+  utl::Logger* logger = ord::getLogger();
+  return logger->getDbLogPerChannelMaxMem();
+}
+
 } // namespace
 
 %} // inline

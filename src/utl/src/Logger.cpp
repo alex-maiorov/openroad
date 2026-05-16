@@ -115,6 +115,30 @@ void Logger::startLogDb(const char* filename)
   sqlite3_exec(db_, "PRAGMA journal_mode = WAL;", nullptr, nullptr, nullptr);
   sqlite3_exec(db_, "PRAGMA synchronous = OFF;", nullptr, nullptr, nullptr);
 
+  // Create system tables
+  sqlite3_exec(db_,
+      "CREATE TABLE IF NOT EXISTS tool_names ("
+      "tool_id INTEGER PRIMARY KEY, name TEXT)",
+      nullptr, nullptr, nullptr);
+  sqlite3_exec(db_,
+      "CREATE TABLE IF NOT EXISTS table_list ("
+      "tool_id INTEGER, message_id INTEGER,"
+      " column_types TEXT, column_names TEXT,"
+      " PRIMARY KEY(tool_id, message_id))",
+      nullptr, nullptr, nullptr);
+  sqlite3_exec(db_,
+      "CREATE TABLE IF NOT EXISTS metadata ("
+      "tool_id INTEGER, key TEXT, value TEXT)",
+      nullptr, nullptr, nullptr);
+
+  // Populate tool_names table
+  for (int i = 0; i < ToolId::SIZE; ++i) {
+    std::string insert = fmt::format(
+        "INSERT OR REPLACE INTO tool_names VALUES ({}, '{}')",
+        i, tool_names_[i]);
+    sqlite3_exec(db_, insert.c_str(), nullptr, nullptr, nullptr);
+  }
+
   log_db_running_ = true;
   log_db_thread_ = std::thread(&Logger::logDbLoop, this);
 }
@@ -127,6 +151,46 @@ void Logger::stopLogDb()
   }
 
   if (db_) {
+    // Drain any remaining metadata rows.
+    {
+      std::queue<MetadataRow> local_meta;
+      {
+        std::lock_guard<std::mutex> lock(metadata_queue_mutex_);
+        local_meta.swap(metadata_queue_);
+      }
+
+      if (!local_meta.empty()) {
+        sqlite3_exec(db_, "BEGIN", nullptr, nullptr, nullptr);
+        bool meta_ok = true;
+        while (!local_meta.empty()) {
+          auto [mtool, mkey, mval] = std::move(local_meta.front());
+          local_meta.pop();
+
+          char* sql = sqlite3_mprintf(
+              "INSERT INTO metadata VALUES (%d, %q, %q)",
+              static_cast<int>(mtool), mkey.c_str(), mval.c_str());
+          int rc = sqlite3_exec(db_, sql, nullptr, nullptr, nullptr);
+          sqlite3_free(sql);
+
+          if (rc != SQLITE_OK) {
+            meta_ok = false;
+            break;
+          }
+        }
+        sqlite3_exec(db_, meta_ok ? "COMMIT" : "ROLLBACK",
+                     nullptr, nullptr, nullptr);
+      }
+    }
+
+    // Catch any remaining data in queues that may have been registered
+    // after the backend thread exited (or data pushed during the final
+    // moments).  This also drains data for schemas whose
+    // NewSchemaCommand was never processed by the thread.
+    auto reg = schema_registry_.get_map();
+    for (auto& [key, q] : *reg) {
+      q->drain_to_db(db_, SIZE_MAX);
+    }
+
     sqlite3_close(db_);
     db_ = nullptr;
   }
@@ -236,6 +300,25 @@ SchemaInfo Logger::logToDbBuildSchemaInfo(
     sqlite3_free(err_msg);
   }
 
+  // Insert into table_list to track this registered schema.
+  std::string col_types, col_names;
+  for (size_t i = 0; i < info.columns.size(); ++i) {
+    if (i > 0) {
+      col_types += ",";
+      col_names += ",";
+    }
+    col_types += sqlite_type_name(info.columns[i].type);
+    col_names += info.columns[i].name;
+  }
+  char* tbl_sql = sqlite3_mprintf(
+      "INSERT OR REPLACE INTO table_list VALUES (%d, %d, %q, %q)",
+      static_cast<int>(key.tool),
+      key.id,
+      col_types.c_str(),
+      col_names.c_str());
+  sqlite3_exec(db, tbl_sql, nullptr, nullptr, nullptr);
+  sqlite3_free(tbl_sql);
+
   return info;
 }
 
@@ -280,7 +363,41 @@ void Logger::logDbLoop()
       local_registry[cmd.key] = std::move(cmd.queue);
     }
 
-    // --- Phase 2: Schedule and drain queues ---
+    // --- Phase 2: Drain metadata queue (low-traffic text pairs) ---
+    {
+      std::queue<MetadataRow> local_meta;
+      {
+        std::lock_guard<std::mutex> lock(metadata_queue_mutex_);
+        local_meta.swap(metadata_queue_);
+      }
+
+      if (!local_meta.empty()) {
+        sqlite3_exec(db_, "BEGIN", nullptr, nullptr, nullptr);
+        bool meta_ok = true;
+        while (!local_meta.empty()) {
+          auto [mtool, mkey, mval] = std::move(local_meta.front());
+          local_meta.pop();
+
+          char* sql = sqlite3_mprintf(
+              "INSERT INTO metadata VALUES (%d, %q, %q)",
+              static_cast<int>(mtool), mkey.c_str(), mval.c_str());
+          int rc = sqlite3_exec(db_, sql, nullptr, nullptr, nullptr);
+          sqlite3_free(sql);
+
+          if (rc != SQLITE_OK) {
+            meta_ok = false;
+            break;
+          }
+        }
+        sqlite3_exec(db_, meta_ok ? "COMMIT" : "ROLLBACK",
+                     nullptr, nullptr, nullptr);
+        did_work = true;
+      }
+    }
+
+    // --- Phase 3: Schedule and drain queues ---
+    //
+    // (Phase 2 above drained the metadata queue.)
     //
     // Scheduling policy (checked in priority order):
     //
@@ -370,6 +487,55 @@ void Logger::logDbLoop()
     if (!did_work) {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
+  }
+
+  // --- Shutdown drain: flush all remaining data ---
+  // Process any pending schema commands that arrived during the final iteration.
+  {
+    std::lock_guard<std::mutex> lock(new_schema_queue_mutex_);
+    for (auto& cmd : new_schema_queue_) {
+      if (local_registry.find(cmd.key) == local_registry.end()) {
+        local_registry[cmd.key] = std::move(cmd.queue);
+      }
+    }
+    new_schema_queue_.clear();
+  }
+
+  // Drain any remaining metadata rows.
+  {
+    std::queue<MetadataRow> local_meta;
+    {
+      std::lock_guard<std::mutex> lock(metadata_queue_mutex_);
+      local_meta.swap(metadata_queue_);
+    }
+
+    if (!local_meta.empty()) {
+      sqlite3_exec(db_, "BEGIN", nullptr, nullptr, nullptr);
+      bool meta_ok = true;
+      while (!local_meta.empty()) {
+        auto [mtool, mkey, mval] = std::move(local_meta.front());
+        local_meta.pop();
+
+        char* sql = sqlite3_mprintf(
+            "INSERT INTO metadata VALUES (%d, %q, %q)",
+            static_cast<int>(mtool), mkey.c_str(), mval.c_str());
+        int rc = sqlite3_exec(db_, sql, nullptr, nullptr, nullptr);
+        sqlite3_free(sql);
+
+        if (rc != SQLITE_OK) {
+          meta_ok = false;
+          break;
+        }
+      }
+      sqlite3_exec(db_, meta_ok ? "COMMIT" : "ROLLBACK",
+                   nullptr, nullptr, nullptr);
+    }
+  }
+
+  // Drain every queue in the local registry to SQLite before the
+  // backend thread exits.
+  for (auto& [key, q] : local_registry) {
+    q->drain_to_db(db_, SIZE_MAX);
   }
 }
 
@@ -709,6 +875,15 @@ void Logger::setDbLogPerChannelMaxMem(size_t bytes)
 size_t Logger::getDbLogPerChannelMaxMem() const
 {
   return db_log_per_channel_max_mem_;
+}
+
+void Logger::logMetadata(ToolId tool, std::string key, std::string value)
+{
+  if (!db_) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(metadata_queue_mutex_);
+  metadata_queue_.emplace(tool, std::move(key), std::move(value));
 }
 
 }  // namespace utl
