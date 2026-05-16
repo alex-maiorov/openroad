@@ -5080,6 +5080,37 @@ void gpl::NesterovBase::queryTimingViolations(NesterovBaseCommon& nbc)
 {
   // Query STA for violating paths and store them
   violating_paths_ = getViolatingPaths(nbVars_.timing_pass_top_n, nbc);
+
+  // Logging
+  static int base_path_id = 0;
+  std::vector<int> slacks_path_id;
+  std::vector<float> slacks_slack;
+  std::vector<int> slacks_iter;
+  
+  std::vector<int> nodes_path_id;
+  std::vector<int> nodes_cell_id;
+  std::vector<int> nodes_iter;
+  
+  for (const auto& path : violating_paths_) {
+    int path_id = base_path_id++;
+    slacks_path_id.push_back(path_id);
+    slacks_slack.push_back(path.slack);
+    slacks_iter.push_back(iter_);
+    
+    for (size_t cell_idx : path.gCellIndexSequence) {
+      nodes_path_id.push_back(path_id);
+      nodes_cell_id.push_back(cell_idx);
+      nodes_iter.push_back(iter_);
+    }
+  }
+  
+  log_->logToDbBulk<"PathId,Slack,Iter">(
+    utl::GPL, 803, slacks_path_id.size(),
+    slacks_path_id.begin(), slacks_slack.begin(), slacks_iter.begin());
+    
+  log_->logToDbBulk<"PathId,CellId,Iter">(
+    utl::GPL, 804, nodes_path_id.size(),
+    nodes_path_id.begin(), nodes_cell_id.begin(), nodes_iter.begin());
 }
 
 void gpl::NesterovBase::runTimingPassGradient(NesterovBaseCommon& nbc,
@@ -5326,3 +5357,41 @@ void NesterovBase::updateSTA()
   }
 }
 }  // namespace gpl
+
+void gpl::NesterovBase::dumpGradientsToDb(int iter) {
+  std::vector<int> iters(nb_gcells_.size(), iter);
+  std::vector<int> ids(nb_gcells_.size());
+  for (size_t i = 0; i < nb_gcells_.size(); i++) {
+    ids[i] = i;
+  }
+  
+  std::vector<float> pos_x(nb_gcells_.size());
+  std::vector<float> pos_y(nb_gcells_.size());
+  std::vector<float> wl_x(nb_gcells_.size());
+  std::vector<float> wl_y(nb_gcells_.size());
+  std::vector<float> den_x(nb_gcells_.size());
+  std::vector<float> den_y(nb_gcells_.size());
+  std::vector<float> tim_x(nb_gcells_.size());
+  std::vector<float> tim_y(nb_gcells_.size());
+  std::vector<float> rt_x(nb_gcells_.size());
+  std::vector<float> rt_y(nb_gcells_.size());
+  
+  for (size_t i = 0; i < nb_gcells_.size(); i++) {
+    pos_x[i] = curSLPCoordi_[i].x;
+    pos_y[i] = curSLPCoordi_[i].y;
+    wl_x[i] = curSLPWireLengthGrads_[i].x;
+    wl_y[i] = curSLPWireLengthGrads_[i].y;
+    den_x[i] = curSLPDensityGrads_[i].x;
+    den_y[i] = curSLPDensityGrads_[i].y;
+    tim_x[i] = curSLPTimingGrads_[i].x;
+    tim_y[i] = curSLPTimingGrads_[i].y;
+    rt_x[i] = curSLPRoutabilityGrads_[i].x;
+    rt_y[i] = curSLPRoutabilityGrads_[i].y;
+  }
+
+  log_->logToDbBulk<"Iter,CellId,PosX,PosY,WlX,WlY,DenX,DenY,TimX,TimY,RtX,RtY">(
+    utl::GPL, 802, nb_gcells_.size(), 
+    iters.begin(), ids.begin(), pos_x.begin(), pos_y.begin(),
+    wl_x.begin(), wl_y.begin(), den_x.begin(), den_y.begin(),
+    tim_x.begin(), tim_y.begin(), rt_x.begin(), rt_y.begin());
+}

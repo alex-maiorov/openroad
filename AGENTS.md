@@ -18,6 +18,7 @@ Detailed guides are in `docs/agents/` subdirectory:
 3. **Always use `git commit -s`** for DCO compliance.
 4. When amending submodule commits, parent repo submodule reference must also be updated via `git submodule update --init --recursive`. It is needed after any merge/pull.
 5. **Trace bugs upstream** -- when a bug appears in output (e.g., Verilog), find the data creation point (e.g., `buffer_ports`, `remove_buffers`), not the serialization point (e.g., `VerilogWriter`).
+6. **Temporary scripts**: All temporary development scripts MUST go into the `tmp/` folder in the project.
 
 ## ⚠️ Container-Only Build & Test Rule
 

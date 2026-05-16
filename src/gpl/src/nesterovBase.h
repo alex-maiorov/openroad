@@ -1210,6 +1210,7 @@ class NesterovBase
   odb::dbGroup* getGroup() const { return pb_->getGroup(); }
 
   void updateSTA();
+  void dumpGradientsToDb(int iter);
 
   void runTimingPassGradient(NesterovBaseCommon& nbc,
                              NesterovBaseVars& nbv,
