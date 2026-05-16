@@ -29,7 +29,7 @@
 // Everything behind this guard is invisible to SWIG because the
 // parser cannot handle:
 //   - <sqlite3.h> (C callbacks, opaque types)
-//   - boost::lockfree::queue (templates, C++ atomics)
+//   - mutex-protected queues (templates, C++ atomics)
 //   - Template-heavy helpers (std::tuple, fold expressions,
 //     index_sequence, TypedQueue<Args...>)
 // The corresponding .cpp code is still compiled normally.
@@ -40,11 +40,13 @@
 #include <mutex>
 #include <queue>
 #include <deque>
+#include <future>
+#include <condition_variable>
 #include <iterator>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
-#include <boost/lockfree/queue.hpp>
+
 #endif
 
 #include "spdlog/details/os.h"
@@ -212,14 +214,10 @@ public:
 
   size_t row_size_bytes() const override { return sizeof(row_type); }
 
-  bool push(row_type row, const std::atomic<bool>& abort_flag)
+  bool push(row_type row, const std::atomic<bool>& /*abort_flag*/)
   {
-    while (!queue_.push(std::move(row))) {
-      if (!abort_flag.load(std::memory_order_relaxed)) {
-        return false;
-      }
-      std::this_thread::yield();
-    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    queue_.push_back(std::move(row));
     item_count_.fetch_add(1, std::memory_order_release);
     return true;
   }
@@ -233,11 +231,19 @@ public:
     sqlite3_exec(db, "BEGIN", nullptr, nullptr, nullptr);
 
     size_t count = 0;
-    row_type row;
     bool ok = true;
 
-    while (count < max_records && queue_.pop(row)) {
-      item_count_.fetch_sub(1, std::memory_order_release);
+    while (count < max_records) {
+      row_type row;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (queue_.empty()) {
+          break;
+        }
+        row = std::move(queue_.front());
+        queue_.pop_front();
+        item_count_.fetch_sub(1, std::memory_order_release);
+      }
       bind_row(stmt_, row, std::index_sequence_for<Args...>{});
       int rc = sqlite3_step(stmt_);
       sqlite3_reset(stmt_);
@@ -251,8 +257,6 @@ public:
     if (count > 0) {
       sqlite3_exec(db, ok ? "COMMIT" : "ROLLBACK",
                    nullptr, nullptr, nullptr);
-    } else {
-      sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr);
     }
 
     last_flush_ms_.store(
@@ -298,7 +302,8 @@ private:
     return sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt_, nullptr) == SQLITE_OK;
   }
 
-  boost::lockfree::queue<row_type> queue_{4096};
+  std::deque<row_type> queue_;
+  mutable std::mutex mutex_;
   sqlite3_stmt* stmt_ = nullptr;
 };
 
@@ -307,6 +312,16 @@ private:
 struct NewSchemaCommand {
   SchemaKey key;
   std::shared_ptr<AbstractQueue> queue;
+};
+
+// Command sent from caller thread to the backend thread to create a SQLite
+// table and register its schema.  The caller blocks on result_promise until
+// the backend has executed the DDL.
+struct CreateTableCommand {
+  SchemaKey key;
+  std::string header;
+  std::vector<SQLiteType> types;
+  std::promise<SchemaInfo> result_promise;
 };
 
 class SchemaRegistry {
@@ -573,11 +588,11 @@ class Logger
   // The schema (types of Args...) is registered lazily on the first call
   // for a (tool, id) pair.  The template body is intentionally thin:
   // compile-time checks live here, all runtime logic is in the .cpp.
-  template <FixedString Header, typename... Args>
-  void logToDb(ToolId tool, int id, Args&&... args)
+  template <FixedString Header, typename... RawArgs>
+  void logToDb(ToolId tool, int id, RawArgs&&... raw_args)
   {
     // If database logging is not running, silently skip.
-    if (!db_) {
+    if (!db_ready_) {
       return;
     }
 
@@ -586,13 +601,13 @@ class Logger
         "Header must be a comma-separated list of alphanumeric names"
         " and underscores.");
     static_assert(
-        sizeof...(Args) == Header.count_fields(),
+        sizeof...(RawArgs) == Header.count_fields(),
         "Number of arguments provided to logToDb must match the number"
         " of fields in the header.");
 
     // Build a compile-time array of SQLiteTypes for each argument.
-    constexpr std::array<SQLiteType, sizeof...(Args)> types_arr
-        = {TypeToSQLite<Args>::value...};
+    constexpr std::array<SQLiteType, sizeof...(RawArgs)> types_arr
+        = {TypeToSQLite<std::decay_t<RawArgs>>::value...};
 
     // Delegate all runtime work to non-template helpers in Logger.cpp.
     SchemaKey key{tool, id};
@@ -604,13 +619,12 @@ class Logger
 
     auto queue_opt = logToDbFindQueue(key);
     if (!queue_opt.has_value()) {
-      // --- SLOW PATH: build SchemaInfo (creates table via sqlite3_exec), create TypedQueue, register ---
-      SchemaInfo info = logToDbBuildSchemaInfo(
-          db_,
+      // --- SLOW PATH: send CreateTableCommand to backend, create TypedQueue, register ---
+      SchemaInfo info = syncCreateTable(
           key,
           std::string_view(Header.data),
           std::vector<SQLiteType>(types_arr.begin(), types_arr.end()));
-      auto queue = std::make_shared<TypedQueue<Args...>>(std::move(info));
+      auto queue = std::make_shared<TypedQueue<std::decay_t<RawArgs>...>>(std::move(info));
       logToDbRegisterQueue(key, std::move(queue));
       // Re-fetch after registration so the data is pushed.
       queue_opt = logToDbFindQueue(key);
@@ -621,9 +635,12 @@ class Logger
 
     // --- FAST PATH (also reached from SLOW PATH after re-fetch): ---
     auto& base = queue_opt.value();
-    auto* typed = static_cast<TypedQueue<Args...>*>(base.get());
+    auto* typed = static_cast<TypedQueue<std::decay_t<RawArgs>...>*>(base.get());
     typed->push(
-        std::make_tuple(std::forward<Args>(args)...), log_db_running_);
+        // Construct a tuple of value types (strip references) from the
+        // forwarded arguments so the queue owns the data.
+        std::tuple<std::decay_t<RawArgs>...>(std::forward<RawArgs>(raw_args)...),
+        log_db_running_);
   }
 
   // Bulk version of logToDb: takes one iterator per column and pushes
@@ -633,7 +650,7 @@ class Logger
   void logToDbBulk(ToolId tool, int id, size_t count, InputIters... iters)
   {
     // If database logging is not running, silently skip.
-    if (!db_) {
+    if (!db_ready_) {
       return;
     }
 
@@ -664,8 +681,7 @@ class Logger
 
     auto queue_opt = logToDbFindQueue(key);
     if (!queue_opt.has_value()) {
-      SchemaInfo info = logToDbBuildSchemaInfo(
-          db_,
+      SchemaInfo info = syncCreateTable(
           key,
           std::string_view(Header.data),
           std::vector<SQLiteType>(types_arr.begin(), types_arr.end()));
@@ -690,6 +706,7 @@ class Logger
   // Enqueue a metadata row (tool, key, value) for the backend to write
   // to the 'metadata' table (both key and value are TEXT).
   // Thread-safe; uses a mutex-guarded std::queue.
+  // Silently drops data if the database backend has not started yet.
   void logMetadata(ToolId tool, std::string key, std::string value);
 #endif
 
@@ -850,9 +867,15 @@ class Logger
   std::unique_ptr<PrometheusMetricsServer> prometheus_metrics_;
 
 #ifndef SWIG
+  // The SQLite handle is accessed ONLY by the backend (logDbLoop) thread.
   sqlite3* db_ = nullptr;
   std::thread log_db_thread_;
   std::atomic<bool> log_db_running_{false};
+
+  // Main thread checks this atomic instead of reading db_ directly
+  // (which is owned by the backend thread after startup).
+  std::atomic<bool> db_ready_{false};
+  std::string db_filename_;
 
   // Maximum global memory footprint from buffered log-db data (bytes).
   // 0 = unlimited.  Used by the backend to decide when to throttle.
@@ -868,12 +891,24 @@ class Logger
   std::deque<NewSchemaCommand> new_schema_queue_;
   std::mutex new_schema_queue_mutex_;
 
+  // Command queue for creating SQLite tables.  The caller blocks on
+  // the embedded promise until the backend executes the DDL.
+  std::deque<CreateTableCommand> create_table_queue_;
+  std::mutex create_table_mutex_;
+
   // Metadata queue: low-traffic text-to-text rows written to the
   // 'metadata' table.  Uses a std::queue (not lockfree) because
   // std::string has non-trivial copy semantics.
   using MetadataRow = std::tuple<ToolId, std::string, std::string>;
   std::queue<MetadataRow> metadata_queue_;
   std::mutex metadata_queue_mutex_;
+
+  // Startup synchronization: startLogDb blocks until the backend thread
+  // has opened the SQLite database and created system tables.
+  std::mutex startup_mutex_;
+  std::condition_variable startup_cv_;
+  bool startup_done_ = false;
+  std::string db_start_error_;
 
   // Per-schema enable/disable set.  Logging is enabled by default for
   // all (tool, id) pairs.  Insert a key here to disable it.
@@ -892,6 +927,13 @@ class Logger
                                      const std::vector<SQLiteType>& types);
   void logToDbRegisterQueue(SchemaKey key,
                              std::shared_ptr<AbstractQueue> queue);
+
+  // Sends a CreateTableCommand to the backend thread and blocks until
+  // the table has been created and the SchemaInfo is returned.  Called
+  // from logToDb / logToDbBulk slow paths.
+  SchemaInfo syncCreateTable(SchemaKey key,
+                              std::string_view header,
+                              const std::vector<SQLiteType>& types);
 
   void logDbLoop();
 

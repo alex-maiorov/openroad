@@ -96,80 +96,40 @@ void Logger::removeMetricsSink(const char* metrics_filename)
 
 void Logger::startLogDb(const char* filename)
 {
-  if (db_) {
+  if (db_ready_) {
     return;
   }
 
-  int rc = sqlite3_open_v2(filename, &db_,
-                           SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX,
-                           nullptr);
-  if (rc != SQLITE_OK) {
-    this->error(UTL, 109, "Failed to open SQLite database {}: {}", filename, sqlite3_errmsg(db_));
-    sqlite3_close(db_);
-    db_ = nullptr;
-    return;
-  }
-
-  // Set fast mode
-  sqlite3_exec(db_, "PRAGMA journal_mode = WAL;", nullptr, nullptr, nullptr);
-  sqlite3_exec(db_, "PRAGMA synchronous = OFF;", nullptr, nullptr, nullptr);
-
-  // Create system tables
+  // Reset startup state
+  db_filename_ = filename;
+  db_start_error_.clear();
   {
-    char* err = nullptr;
-    int rc = sqlite3_exec(db_,
-        "CREATE TABLE IF NOT EXISTS tool_names ("
-        "tool_id INTEGER PRIMARY KEY, name TEXT)",
-        nullptr, nullptr, &err);
-    if (rc != SQLITE_OK) {
-      this->error(UTL, 111, "Failed to create tool_names table: {}",
-                  err ? err : "unknown");
-      sqlite3_free(err);
-    }
-  }
-  {
-    char* err = nullptr;
-    int rc = sqlite3_exec(db_,
-        "CREATE TABLE IF NOT EXISTS table_list ("
-        "tool_id INTEGER, message_id INTEGER,"
-        " column_types TEXT, column_names TEXT,"
-        " PRIMARY KEY(tool_id, message_id))",
-        nullptr, nullptr, &err);
-    if (rc != SQLITE_OK) {
-      this->error(UTL, 112, "Failed to create table_list table: {}",
-                  err ? err : "unknown");
-      sqlite3_free(err);
-    }
-  }
-  {
-    char* err = nullptr;
-    int rc = sqlite3_exec(db_,
-        "CREATE TABLE IF NOT EXISTS metadata ("
-        "tool_id INTEGER, key TEXT, value TEXT)",
-        nullptr, nullptr, &err);
-    if (rc != SQLITE_OK) {
-      this->error(UTL, 113, "Failed to create metadata table: {}",
-                  err ? err : "unknown");
-      sqlite3_free(err);
-    }
-  }
-
-  // Populate tool_names table
-  for (int i = 0; i < ToolId::SIZE; ++i) {
-    std::string insert = fmt::format(
-        "INSERT OR REPLACE INTO tool_names VALUES ({}, '{}')",
-        i, tool_names_[i]);
-    char* err = nullptr;
-    int rc = sqlite3_exec(db_, insert.c_str(), nullptr, nullptr, &err);
-    if (rc != SQLITE_OK) {
-      this->error(UTL, 114, "Failed to insert tool_name '{}': {}",
-                  tool_names_[i], err ? err : "unknown");
-      sqlite3_free(err);
-    }
+    std::lock_guard<std::mutex> lock(startup_mutex_);
+    startup_done_ = false;
   }
 
   log_db_running_ = true;
   log_db_thread_ = std::thread(&Logger::logDbLoop, this);
+
+  // Wait for the backend thread to open the database and create system
+  // tables.
+  {
+    std::unique_lock<std::mutex> lock(startup_mutex_);
+    startup_cv_.wait(lock, [this]() { return startup_done_; });
+  }
+
+  if (!db_ready_) {
+    // Backend failed to open the database.
+    std::string err_msg = db_start_error_.empty()
+                              ? "unknown error"
+                              : db_start_error_;
+    log_db_running_ = false;
+    if (log_db_thread_.joinable()) {
+      log_db_thread_.join();
+    }
+    this->error(UTL, 109, "Failed to open SQLite database {}: {}",
+                filename, err_msg);
+  }
 }
 
 void Logger::stopLogDb()
@@ -178,23 +138,8 @@ void Logger::stopLogDb()
   if (log_db_thread_.joinable()) {
     log_db_thread_.join();
   }
-
-  if (db_) {
-    // Drain any remaining metadata rows.
-    drainMetadataQueue();
-
-    // Catch any remaining data in queues that may have been registered
-    // after the backend thread exited (or data pushed during the final
-    // moments).  This also drains data for schemas whose
-    // NewSchemaCommand was never processed by the thread.
-    auto reg = schema_registry_.get_map();
-    for (auto& [key, q] : *reg) {
-      q->drain_to_db(db_, SIZE_MAX);
-    }
-
-    sqlite3_close(db_);
-    db_ = nullptr;
-  }
+  // All SQLite operations (drain, close) are handled inside the backend
+  // thread (logDbLoop).  Nothing more to do here.
 }
 
 // ---------------------------------------------------------------------------
@@ -291,10 +236,10 @@ SchemaInfo Logger::logToDbBuildSchemaInfo(
   char* err_msg = nullptr;
   int rc = sqlite3_exec(db, create_sql.c_str(), nullptr, nullptr, &err_msg);
   if (rc != SQLITE_OK) {
-    this->error(UTL, 110, "SQLite error creating table '{}': {}",
-                info.table_name,
-                err_msg ? err_msg : "unknown");
+    std::string err_str = err_msg ? err_msg : "unknown";
     sqlite3_free(err_msg);
+    this->error(UTL, 110, "SQLite error creating table '{}': {}",
+                info.table_name, err_str);
   }
 
   // Insert into table_list to track this registered schema.
@@ -308,13 +253,19 @@ SchemaInfo Logger::logToDbBuildSchemaInfo(
     col_names += info.columns[i].name;
   }
   char* tbl_sql = sqlite3_mprintf(
-      "INSERT OR REPLACE INTO table_list VALUES (%d, %d, %q, %q)",
+      "INSERT OR REPLACE INTO table_list VALUES (%d, %d, %Q, %Q)",
       static_cast<int>(key.tool),
       key.id,
       col_types.c_str(),
       col_names.c_str());
-  sqlite3_exec(db, tbl_sql, nullptr, nullptr, nullptr);
-  sqlite3_free(tbl_sql);
+  if (tbl_sql) {
+    char* tbl_err = nullptr;
+    if (sqlite3_exec(db, tbl_sql, nullptr, nullptr, &tbl_err) != SQLITE_OK) {
+      this->warn(UTL, 115, "Failed to insert into table_list: {}", tbl_err);
+      sqlite3_free(tbl_err);
+    }
+    sqlite3_free(tbl_sql);
+  }
 
   return info;
 }
@@ -331,58 +282,175 @@ void Logger::logToDbRegisterQueue(SchemaKey key,
   }
 }
 
+SchemaInfo Logger::syncCreateTable(
+    SchemaKey key,
+    std::string_view header,
+    const std::vector<SQLiteType>& types)
+{
+  auto promise = std::promise<SchemaInfo>();
+  auto future = promise.get_future();
+
+  {
+    std::lock_guard<std::mutex> lock(create_table_mutex_);
+    create_table_queue_.push_back(
+        {key, std::string(header), types, std::move(promise)});
+  }
+
+  // Block until the backend thread processes this command.
+  return future.get();
+}
+
 // ---------------------------------------------------------------------------
 // logDbLoop  (backend thread)
 // ---------------------------------------------------------------------------
 
 void Logger::logDbLoop()
 {
+  // ==================================================================
+  // Startup: Open the SQLite database and create system tables.
+  // ==================================================================
+  int rc = sqlite3_open_v2(db_filename_.c_str(), &db_,
+                           SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+                           nullptr);
+  if (rc != SQLITE_OK) {
+    db_start_error_ = sqlite3_errmsg(db_)
+                          ? sqlite3_errmsg(db_)
+                          : "sqlite3_open_v2 returned no message";
+    sqlite3_close(db_);
+    db_ = nullptr;
+    // Signal startup completion (with failure) so startLogDb can throw.
+    {
+      std::lock_guard<std::mutex> lock(startup_mutex_);
+      startup_done_ = true;
+    }
+    startup_cv_.notify_one();
+    log_db_running_ = false;
+    return;
+  }
+
+  // Fast-mode pragmas.
+  sqlite3_exec(db_, "PRAGMA journal_mode = WAL;", nullptr, nullptr, nullptr);
+  sqlite3_exec(db_, "PRAGMA synchronous = OFF;", nullptr, nullptr, nullptr);
+
+  // Create system tables.
+  auto exec_sql = [&](const char* sql, const char* desc) -> bool {
+    char* err = nullptr;
+    if (sqlite3_exec(db_, sql, nullptr, nullptr, &err) != SQLITE_OK) {
+      db_start_error_ = err ? err : desc;
+      sqlite3_free(err);
+      return false;
+    }
+    return true;
+  };
+
+  if (!exec_sql("CREATE TABLE IF NOT EXISTS tool_names ("
+                "tool_id INTEGER PRIMARY KEY, name TEXT)",
+                "tool_names")
+      || !exec_sql("CREATE TABLE IF NOT EXISTS table_list ("
+                   "tool_id INTEGER, message_id INTEGER,"
+                   " column_types TEXT, column_names TEXT,"
+                   " PRIMARY KEY(tool_id, message_id))",
+                   "table_list")
+      || !exec_sql("CREATE TABLE IF NOT EXISTS metadata ("
+                   "tool_id INTEGER, key TEXT, value TEXT)",
+                   "metadata")) {
+    sqlite3_close(db_);
+    db_ = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(startup_mutex_);
+      startup_done_ = true;
+    }
+    startup_cv_.notify_one();
+    log_db_running_ = false;
+    return;
+  }
+
+  // Populate tool_names table.
+  for (int i = 0; i < ToolId::SIZE; ++i) {
+    std::string insert = fmt::format(
+        "INSERT OR REPLACE INTO tool_names VALUES ({}, '{}')",
+        i, tool_names_[i]);
+    char* err = nullptr;
+    if (sqlite3_exec(db_, insert.c_str(), nullptr, nullptr, &err)
+        != SQLITE_OK) {
+      db_start_error_ = err ? err : "tool_names insert failed";
+      sqlite3_free(err);
+      sqlite3_close(db_);
+      db_ = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(startup_mutex_);
+        startup_done_ = true;
+      }
+      startup_cv_.notify_one();
+      log_db_running_ = false;
+      return;
+    }
+  }
+
+  // Signal to startLogDb that the backend is ready.
+  db_ready_ = true;
+  {
+    std::lock_guard<std::mutex> lock(startup_mutex_);
+    startup_done_ = true;
+  }
+  startup_cv_.notify_one();
+
+  // ==================================================================
+  // Main loop
+  // ==================================================================
   // Local registry for the backend thread: SchemaKey -> AbstractQueue
   std::unordered_map<SchemaKey, std::shared_ptr<AbstractQueue>, SchemaKeyHasher> local_registry;
 
   while (log_db_running_.load(std::memory_order_acquire)) {
-    // --- Phase 1: Drain all pending NewSchemaCommand entries ---
-    std::deque<NewSchemaCommand> pending_commands;
+    bool did_work = false;
+
+    // --- Phase 1: Drain all pending CreateTableCommand entries ---
+    // These have the highest priority because callers are blocked on them.
     {
-      std::lock_guard<std::mutex> lock(new_schema_queue_mutex_);
-      pending_commands.swap(new_schema_queue_);
+      std::deque<CreateTableCommand> pending_ct;
+      {
+        std::lock_guard<std::mutex> lock(create_table_mutex_);
+        pending_ct.swap(create_table_queue_);
+      }
+      for (auto& cmd : pending_ct) {
+        try {
+          SchemaInfo info = logToDbBuildSchemaInfo(
+              db_, cmd.key, cmd.header, cmd.types);
+          cmd.result_promise.set_value(std::move(info));
+        } catch (...) {
+          // Propagate any exception (e.g. from this->error()) to the
+          // caller that is blocked on future.get().
+          cmd.result_promise.set_exception(std::current_exception());
+        }
+        did_work = true;
+      }
     }
 
-    bool did_work = !pending_commands.empty();
-
-    for (auto& cmd : pending_commands) {
-      // If already registered locally (shouldn't happen, but guard), skip.
-      if (local_registry.find(cmd.key) != local_registry.end()) {
-        continue;
+    // --- Phase 2: Drain all pending NewSchemaCommand entries ---
+    {
+      std::deque<NewSchemaCommand> pending_commands;
+      {
+        std::lock_guard<std::mutex> lock(new_schema_queue_mutex_);
+        pending_commands.swap(new_schema_queue_);
       }
 
-      // Store the AbstractQueue in the local backend registry
-      local_registry[cmd.key] = std::move(cmd.queue);
+      for (auto& cmd : pending_commands) {
+        if (local_registry.find(cmd.key) != local_registry.end()) {
+          // Schema re-registration (e.g., after disable/enable):
+          // drain any remaining data in the old queue, then replace.
+          local_registry[cmd.key]->drain_to_db(db_, SIZE_MAX);
+        }
+        local_registry[cmd.key] = std::move(cmd.queue);
+      }
+      did_work = did_work || !pending_commands.empty();
     }
 
-    // --- Phase 2: Drain metadata queue (low-traffic text pairs) ---
+    // --- Phase 3: Drain metadata queue (low-traffic text pairs) ---
     if (drainMetadataQueue()) {
       did_work = true;
     }
 
-    // --- Phase 3: Schedule and drain queues ---
-    //
-    // (Phase 2 above drained the metadata queue.)
-    //
-    // Scheduling policy (checked in priority order):
-    //
-    // 1. Global memory pressure
-    //    If total buffered bytes across all queues ≥ 80% of the user's global
-    //    limit, fully drain the largest queue.
-    //
-    // 2. Per-channel memory pressure
-    //    If any individual queue ≥ 80% of its per-channel limit, drain enough
-    //    rows from it to fall back below the 80% threshold.
-    //
-    // 3. Round-robin
-    //    Otherwise, fully drain every queue.
-
-    // Total buffered memory across all queues.
+    // --- Phase 4: Schedule and drain queues ---
     size_t total_mem = 0;
     for (auto& entry : local_registry) {
       total_mem += entry.second->approx_size()
@@ -415,7 +483,6 @@ void Logger::logDbLoop()
         drained_some |= (largest_q->drain_to_db(db_, SIZE_MAX) > 0);
       }
       did_work |= drained_some;
-      // Skip round-robin / per-channel when we hit global pressure.
     } else {
       // --- Per-channel pressure: drain enough to get below 80% ---
       for (auto& entry : local_registry) {
@@ -431,11 +498,9 @@ void Logger::logDbLoop()
                                   * k_queue_mem_high_water_mark);
 
         if (channel_bytes >= channel_limit) {
-          // Drain enough bytes to fall strictly below the threshold.
           const size_t bytes_to_clear
               = channel_bytes - channel_limit + 1;
           const size_t row_size = q->row_size_bytes();
-          // Ceiling division — drain at least one row.
           const size_t rows_to_clear
               = (bytes_to_clear + row_size - 1) / row_size;
 
@@ -453,32 +518,71 @@ void Logger::logDbLoop()
       did_work |= drained_some;
     }
 
-    // If no work was done, sleep briefly to avoid busy-waiting
     if (!did_work) {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
   }
 
-  // --- Shutdown drain: flush all remaining data ---
-  // Process any pending schema commands that arrived during the final iteration.
-  {
-    std::lock_guard<std::mutex> lock(new_schema_queue_mutex_);
-    for (auto& cmd : new_schema_queue_) {
-      if (local_registry.find(cmd.key) == local_registry.end()) {
-        local_registry[cmd.key] = std::move(cmd.queue);
+  // ==================================================================
+  // Shutdown: keep draining all queues until nothing remains, then close.
+  // ==================================================================
+  auto drain_all = [&]() -> bool {
+    bool work = false;
+
+    // Process any remaining CreateTable commands.
+    {
+      std::deque<CreateTableCommand> pending_ct;
+      {
+        std::lock_guard<std::mutex> lock(create_table_mutex_);
+        pending_ct.swap(create_table_queue_);
+      }
+      for (auto& cmd : pending_ct) {
+        try {
+          SchemaInfo info = logToDbBuildSchemaInfo(
+              db_, cmd.key, cmd.header, cmd.types);
+          cmd.result_promise.set_value(std::move(info));
+        } catch (...) {
+          cmd.result_promise.set_exception(std::current_exception());
+        }
+        work = true;
       }
     }
-    new_schema_queue_.clear();
-  }
 
-  // Drain any remaining metadata rows.
-  drainMetadataQueue();
+    // Process any remaining NewSchema commands.
+    {
+      std::deque<NewSchemaCommand> pending_commands;
+      {
+        std::lock_guard<std::mutex> lock(new_schema_queue_mutex_);
+        pending_commands.swap(new_schema_queue_);
+      }
+      for (auto& cmd : pending_commands) {
+        if (local_registry.find(cmd.key) != local_registry.end()) {
+          // Schema re-registration: drain old queue then replace.
+          local_registry[cmd.key]->drain_to_db(db_, SIZE_MAX);
+        }
+        local_registry[cmd.key] = std::move(cmd.queue);
+        work = true;
+      }
+    }
 
-  // Drain every queue in the local registry to SQLite before the
-  // backend thread exits.
-  for (auto& [key, q] : local_registry) {
-    q->drain_to_db(db_, SIZE_MAX);
-  }
+    work |= drainMetadataQueue();
+
+    for (auto& [key, q] : local_registry) {
+      work |= (q->drain_to_db(db_, SIZE_MAX) > 0);
+    }
+
+    return work;
+  };
+
+  while (drain_all()) {}
+
+  // Destroy queues before closing so TypedQueue destructors can finalize
+  // their prepared statements.
+  local_registry.clear();
+
+  sqlite3_close(db_);
+  db_ = nullptr;
+  db_ready_ = false;
 }
 
 ToolId Logger::findToolId(const char* tool_name)
@@ -822,7 +926,7 @@ size_t Logger::getDbLogPerChannelMaxMem() const
 
 void Logger::logMetadata(ToolId tool, std::string key, std::string value)
 {
-  if (!db_) {
+  if (!db_ready_) {
     return;
   }
   std::lock_guard<std::mutex> lock(metadata_queue_mutex_);
@@ -848,12 +952,15 @@ bool Logger::drainMetadataQueue()
     local_meta.pop();
 
     char* sql = sqlite3_mprintf(
-        "INSERT INTO metadata VALUES (%d, %q, %q)",
+        "INSERT INTO metadata VALUES (%d, %Q, %Q)",
         static_cast<int>(mtool), mkey.c_str(), mval.c_str());
     int rc = sqlite3_exec(db_, sql, nullptr, nullptr, nullptr);
     sqlite3_free(sql);
 
     if (rc != SQLITE_OK) {
+      this->warn(UTL, 116,
+                 "Failed to insert metadata row for tool={} key='{}': {}",
+                 static_cast<int>(mtool), mkey, sqlite3_errmsg(db_));
       meta_ok = false;
       break;
     }
