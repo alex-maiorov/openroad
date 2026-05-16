@@ -26,6 +26,13 @@
 #include <utility>
 #include <vector>
 #ifndef SWIG
+// Everything behind this guard is invisible to SWIG because the
+// parser cannot handle:
+//   - <sqlite3.h> (C callbacks, opaque types)
+//   - boost::lockfree::queue (templates, C++ atomics)
+//   - Template-heavy helpers (std::tuple, fold expressions,
+//     index_sequence, TypedQueue<Args...>)
+// The corresponding .cpp code is still compiled normally.
 #include <chrono>
 #include <sqlite3.h>
 #include <tuple>
@@ -116,9 +123,7 @@ enum ToolId
 
 enum class SQLiteType {
   INTEGER,
-  REAL,
-  TEXT,
-  BLOB
+  REAL
 };
 
 struct SchemaKey {
@@ -368,8 +373,13 @@ struct FixedString {
       if (c == ',') {
         if (empty) return false;
         empty = true;
-      } else if (c != ' ') {
+      } else if (c == '_' || c == ' ' || (c >= 'a' && c <= 'z')
+                 || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
         empty = false;
+      } else {
+        // Reject any character that is not alphanumeric, underscore,
+        // comma, or space — prevents SQL injection through column names.
+        return false;
       }
     }
     return !empty;
@@ -769,6 +779,11 @@ class Logger
                              std::shared_ptr<AbstractQueue> queue);
 
   void logDbLoop();
+
+  // Drain all pending metadata rows into the 'metadata' table.
+  // Returns true if any rows were drained.
+  // Caller must ensure db_ is valid.  Called from logDbLoop and stopLogDb.
+  bool drainMetadataQueue();
 #endif
 
   // This matrix is pre-allocated so it can be safely updated
