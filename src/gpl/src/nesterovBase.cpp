@@ -22,6 +22,7 @@
 #include <utility>
 #include <vector>
 
+#include "db_sta/dbNetwork.hh"
 #include "boost/polygon/polygon.hpp"
 #include "fft.h"
 #include "gpl/Replace.h"
@@ -30,7 +31,18 @@
 #include "omp.h"
 #include "placerBase.h"
 #include "point.h"
+#include "sta/Fuzzy.hh"
+#include "sta/MinMax.hh"
+#include "sta/NetworkClass.hh"
+#include "sta/PathEnd.hh"
+#include "sta/PathGroup.hh"
+#include "sta/Search.hh"
+#include "sta/Sta.hh"
+#include "timingBase.h"
 #include "utl/Logger.h"
+
+#include "grt/GlobalRouter.h"
+#include "grt/Rudy.h"
 
 #define REPLACE_SQRT2 1.414213562373095048801L
 
@@ -1080,7 +1092,22 @@ NesterovBaseVars::NesterovBaseVars(const PlaceOptions& options)
       binCntX(isSetBinCnt ? options.binGridCntX : 0),
       binCntY(isSetBinCnt ? options.binGridCntY : 0),
       minPhiCoef(options.minPhiCoef),
-      maxPhiCoef(options.maxPhiCoef)
+      maxPhiCoef(options.maxPhiCoef),
+      timing_pass_top_n(options.timingGradPassTopN),
+      timing_pass_proj_weight(options.timingGradPassProjWeight),
+      timing_pass_end_to_end_weight(options.timingGradPassEndToEndWeight),
+       timing_pass_slack_sharpness(options.timingGradPassSlackSharpness),
+       timing_pass_slack_offset(options.timingGradPassSlackOffset),
+       timing_pass_slack_upper(options.timingGradPassSlackUpper),
+        timing_pass_sta_run_interval(options.timingGradPassStaRunInterval),
+        timing_pass_first_iter(options.timingGradPassFirstIter),
+        routability_pass_sharpness(options.routabilityGradPassSharpness),
+        routability_pass_weight(options.routabilityGradPassWeight),
+        routability_pass_range(options.routabilityGradPassRange),
+        routability_pass_offset(options.routabilityGradPassOffset),
+        routability_pass_first_iter(options.routabilityGradPassFirstIter),
+        routability_pass_run_interval(options.routabilityGradPassRunInterval),
+        routability_pass_use_grt(options.routabilityGradPassUseGrt)
 {
 }
 
@@ -1097,7 +1124,11 @@ NesterovPlaceVars::NesterovPlaceVars(const PlaceOptions& options)
       keepResizeBelowOverflow(options.keepResizeBelowOverflow),
       timingDrivenMode(options.timingDrivenMode),
       routability_driven_mode(options.routabilityDrivenMode),
-      disableRevertIfDiverge(options.disableRevertIfDiverge)
+       disableRevertIfDiverge(options.disableRevertIfDiverge),
+        timingGradPassStaRunInterval(options.timingGradPassStaRunInterval),
+        timingGradPassFirstIter(options.timingGradPassFirstIter),
+        routabilityGradPassFirstIter(options.routabilityGradPassFirstIter),
+        routabilityGradPassRunInterval(options.routabilityGradPassRunInterval)
 {
 }
 
@@ -1395,7 +1426,7 @@ GCell& NesterovBaseCommon::getGCell(size_t index)
 {
   if (index >= gCellStor_.size()) {
     log_->error(utl::GPL,
-                316,
+                330,
                 "getGCell: index {} out of bounds (gCellStor_.size() = {}).",
                 index,
                 gCellStor_.size());
@@ -1403,9 +1434,43 @@ GCell& NesterovBaseCommon::getGCell(size_t index)
   return gCellStor_[index];
 }
 
+GNet& NesterovBaseCommon::getGNet(size_t index)
+{
+  if (index >= gNetStor_.size()) {
+    log_->error(utl::GPL,
+                331,
+                "getGNet: index {} out of bounds (gNetStor_.size() = {}).",
+                index,
+                gNetStor_.size());
+  }
+  return gNetStor_[index];
+}
+
+GPin& NesterovBaseCommon::getGPin(size_t index)
+{
+  if (index >= gPinStor_.size()) {
+    log_->error(utl::GPL,
+                332,
+                "getGPin: index {} out of bounds (gPinStor_.size() = {}).",
+                index,
+                gPinStor_.size());
+  }
+  return gPinStor_[index];
+}
+
 size_t NesterovBaseCommon::getGCellIndex(const GCell* gCell) const
 {
   return std::distance(gCellStor_.data(), gCell);
+}
+
+size_t NesterovBaseCommon::getGPinIndex(const GPin* gPin) const
+{
+  return std::distance(gPinStor_.data(), gPin);
+}
+
+size_t NesterovBaseCommon::getGNetIndex(const GNet* gNet) const
+{
+  return std::distance(gNetStor_.data(), gNet);
 }
 
 // get x,y WA Gradient values with given GCell
@@ -1524,7 +1589,7 @@ FloatPoint NesterovBaseCommon::getWireLengthGradientPinWA(const GPin* gPin,
 FloatPoint NesterovBaseCommon::getWireLengthPreconditioner(
     const GCell* gCell) const
 {
-  return FloatPoint(gCell->gPins().size(), gCell->gPins().size());
+  return FloatPoint(1.0f, 1.0f);
 }
 
 void NesterovBaseCommon::updateDbGCells()
@@ -1948,8 +2013,10 @@ NesterovBase::NesterovBase(
     std::shared_ptr<PlacerBase> pb,
     // NOLINTNEXTLINE(performance-unnecessary-value-param)
     std::shared_ptr<NesterovBaseCommon> nbc,
-    utl::Logger* log)
-    : nbVars_(nbVars)
+    utl::Logger* log,
+    est::EstimateParasitics* est,
+    sta::dbSta* sta)
+    : nbVars_(nbVars), est_(est), sta_(sta)
 {
   pb_ = std::move(pb);
   nbc_ = std::move(nbc);
@@ -2598,6 +2665,295 @@ FloatPoint NesterovBase::getDensityGradient(const GCell* gCell) const
   return electroForce;
 }
 
+FloatPoint NesterovBase::getTimingPreconditioner(const GCell* gCell) const
+{
+  // FIXME: think about this
+  return FloatPoint(1, 1);
+}
+
+FloatPoint NesterovBase::getRoutabilityPreconditioner(const GCell* gCell) const
+{
+  // FIXME: think about this
+  return FloatPoint(1, 1);
+}
+
+void NesterovBase::runRoutabilityGradient()
+{
+  // Self-gating: only run when gradient-based routability is active
+  if (est_ == nullptr) {
+    return;
+  }
+  if (npVars_ == nullptr || !npVars_->routability_driven_mode) {
+    return;
+  }
+  if (nbVars_.routability_pass_weight <= 0.0f) {
+    return;
+  }
+  if (iter_ < nbVars_.routability_pass_first_iter) {
+    return;
+  }
+
+  // Congestion estimation (RUDY/GRT) is expensive — only refresh every
+  // run_interval iterations.  Between refreshes, getRoutabilityGradient()
+  // continues to read the cached tile congestion data.
+  if (nbVars_.routability_pass_run_interval > 0) {
+    const int offset = iter_ - nbVars_.routability_pass_first_iter;
+    if (offset % nbVars_.routability_pass_run_interval != 0) {
+      return;
+    }
+  }
+
+  grt::GlobalRouter* grouter = est_->getGlobalRouter();
+  if (grouter == nullptr) {
+    return;
+  }
+
+  // Clear previous congestion data
+  routability_tile_congestion_.clear();
+
+  if (!nbVars_.routability_pass_use_grt) {
+    // === RUDY mode ===
+    // Use the GRT RUDY estimator to populate per-tile congestion
+    grt::Rudy* rudy = grouter->getRudy();
+    rudy->calculateRudy();
+
+    int grid_x, grid_y;
+    grouter->getGridSize(grid_x, grid_y);
+    routability_tile_cnt_x_ = grid_x;
+    routability_tile_cnt_y_ = grid_y;
+    routability_tile_size_ = rudy->getTileSize();
+
+    // RUDY tile grid origin is at (0, 0)
+    routability_grid_lx_ = 0;
+    routability_grid_ly_ = 0;
+
+    routability_tile_congestion_.resize(grid_x * grid_y, 0.0f);
+    for (int ty = 0; ty < grid_y; ty++) {
+      for (int tx = 0; tx < grid_x; tx++) {
+        const float ratio
+            = rudy->getTile(tx, ty).getRudy() / 100.0f;
+        const int idx = ty * grid_x + tx;
+        routability_tile_congestion_[idx]
+            = (std::isfinite(ratio)) ? ratio : 0.0f;
+      }
+    }
+  } else {
+    // === GRT mode ===
+    // Run global routing and read per-tile usage/capacity from the GCell grid
+    nbc_->updateDbGCells();
+    grouter->setAllowCongestion(true);
+    grouter->setCongestionIterations(0);
+    grouter->setCriticalNetsPercentage(0);
+    grouter->globalRoute();
+
+    odb::dbGCellGrid* gGrid
+        = grouter->db()->getChip()->getBlock()->getGCellGrid();
+    std::vector<int> gridX, gridY;
+    gGrid->getGridX(gridX);
+    gGrid->getGridY(gridY);
+
+    routability_tile_cnt_x_ = static_cast<int>(gridX.size());
+    routability_tile_cnt_y_ = static_cast<int>(gridY.size());
+    routability_tile_size_ = gridX[1] - gridX[0];  // assumes uniform grid
+    routability_grid_lx_ = gridX[0];
+    routability_grid_ly_ = gridY[0];
+
+    odb::dbTech* tech = grouter->db()->getTech();
+    const int num_layers = tech->getRoutingLayerCount();
+    int min_routing_layer, max_routing_layer;
+    grouter->getMinMaxLayer(min_routing_layer, max_routing_layer);
+
+    routability_tile_congestion_.resize(
+        routability_tile_cnt_x_ * routability_tile_cnt_y_, 0.0f);
+
+    // Accumulate usage/capacity ratio across all routing layers
+    for (int layer = 1; layer <= num_layers; layer++) {
+      odb::dbTechLayer* db_layer = tech->findRoutingLayer(layer);
+      if (db_layer == nullptr) {
+        continue;
+      }
+
+      const bool is_horizontal
+          = (db_layer->getDirection() == odb::dbTechLayerDir::HORIZONTAL);
+
+      for (int ty = 0; ty < routability_tile_cnt_y_; ty++) {
+        for (int tx = 0; tx < routability_tile_cnt_x_; tx++) {
+          float ratio = 0.0f;
+          if (layer >= min_routing_layer
+              && layer <= max_routing_layer) {
+            const uint8_t cur_cap
+                = gGrid->getCapacity(db_layer, tx, ty);
+            const uint8_t cur_use
+                = gGrid->getUsage(db_layer, tx, ty);
+            ratio = (cur_cap > 0)
+                        ? static_cast<float>(cur_use) / cur_cap
+                        : 0.0f;
+
+            // Mirror neighbor-tile logic from RouteBase::updateGrtRoute:
+            // horizontal layers also consider the left neighbor's right edge
+            if (is_horizontal && tx >= 1) {
+              const uint8_t left_cap
+                  = gGrid->getCapacity(db_layer, tx - 1, ty);
+              const uint8_t left_use
+                  = gGrid->getUsage(db_layer, tx - 1, ty);
+              const float left_ratio
+                  = (left_cap > 0)
+                        ? static_cast<float>(left_use) / left_cap
+                        : 0.0f;
+              ratio = std::fmax(left_ratio, ratio);
+            }
+            // vertical layers also consider the down neighbor's up edge
+            if (!is_horizontal && ty >= 1) {
+              const uint8_t down_cap
+                  = gGrid->getCapacity(db_layer, tx, ty - 1);
+              const uint8_t down_use
+                  = gGrid->getUsage(db_layer, tx, ty - 1);
+              const float down_ratio
+                  = (down_cap > 0)
+                        ? static_cast<float>(down_use) / down_cap
+                        : 0.0f;
+              ratio = std::fmax(down_ratio, ratio);
+            }
+
+            ratio = std::fmax(ratio, 0.0f);
+          }
+
+          const int idx = ty * routability_tile_cnt_x_ + tx;
+          routability_tile_congestion_[idx] += ratio;
+        }
+      }
+    }
+
+    // Average across routing layers
+    const int layer_count
+        = max_routing_layer - min_routing_layer + 1;
+    if (layer_count > 0) {
+      for (auto& c : routability_tile_congestion_) {
+        c /= static_cast<float>(layer_count);
+      }
+    }
+  }
+}
+
+std::optional<float> NesterovBase::getTileCongestion(int tile_x, int tile_y) const
+{
+  if (tile_x < 0 || tile_x >= routability_tile_cnt_x_ || tile_y < 0 || tile_y >= routability_tile_cnt_y_) {
+    return std::nullopt;
+  }
+  int idx = tile_y * routability_tile_cnt_x_ + tile_x;
+  return routability_tile_congestion_[idx];
+}
+
+std::pair<int, int> NesterovBase::getTileCoordsFromCellCoords(int cell_x, int cell_y) const
+{
+  int tile_x = (cell_x - routability_grid_lx_) / routability_tile_size_;
+  int tile_y = (cell_y - routability_grid_ly_) / routability_tile_size_;
+  return {tile_x, tile_y};
+}
+
+std::pair<int, int> NesterovBase::getCellCoordsFromTileCoords(int tile_x, int tile_y) const
+{
+  int cx = routability_grid_lx_ + tile_x * routability_tile_size_ + routability_tile_size_ / 2;
+  int cy = routability_grid_ly_ + tile_y * routability_tile_size_ + routability_tile_size_ / 2;
+  return {cx, cy};
+}
+
+FloatPoint NesterovBase::getRoutabilityGradient(const GCell* gCell) const
+{
+  // TODO: Boilerplate code, implement actual algorithm.
+  //
+  // Access pattern for tile congestion data:
+  //
+  //   1. Find which tile this cell falls into:
+  //      int tile_x = (gCell->cx() - routability_grid_lx_) / routability_tile_size_;
+  //      int tile_y = (gCell->cy() - routability_grid_ly_) / routability_tile_size_;
+  //      tile_x = std::clamp(tile_x, 0, routability_tile_cnt_x_ - 1);
+  //      tile_y = std::clamp(tile_y, 0, routability_tile_cnt_y_ - 1);
+  //
+  //   2. Access tile congestion:
+  //      int idx = tile_y * routability_tile_cnt_x_ + tile_x;
+  //      float congestion = routability_tile_congestion_[idx];
+  //
+  //   3. Iterate over neighborhood tiles within 'range':
+  //      int range_in_tiles = static_cast<int>(routability_pass_range / routability_tile_size_);
+  //      for (int dy = -range_in_tiles; dy <= range_in_tiles; dy++) {
+  //        for (int dx = -range_in_tiles; dx <= range_in_tiles; dx++) {
+  //          int nx = tile_x + dx;
+  //          int ny = tile_y + dy;
+  //          if (nx < 0 || nx >= routability_tile_cnt_x_) continue;
+  //          if (ny < 0 || ny >= routability_tile_cnt_y_) continue;
+  //          int nidx = ny * routability_tile_cnt_x_ + nx;
+  //          float neighbor_congestion = routability_tile_congestion_[nidx];
+  //          // ... compute force contribution from this tile
+  //        }
+  //      }
+  //
+  // Parameters available via nbVars_:
+  //   routability_pass_sharpness  - steepness of congestion response
+  //   routability_pass_weight     - overall scaling factor for the gradient
+  //   routability_pass_range      - neighborhood radius (DBU)
+  //   routability_pass_offset     - offset applied before sharpness
+  //
+
+
+  // Algorithm: For each routability congestion zone, the formula should be weight * distance_squared * (exp(sharpness * (congestion - offset)) - 1).
+  // The exponential component should yield a result where faraway stuff is irrelevant, but nearby low congestion will pull on the cell.
+  // TODO: This shouldn't overpower more important things, and there is no way to set that right now.
+  // WARNING: Keep in mind that the basis direction for this is FROM THE TILE TO THE CELL, so that positive values push the cell away from the congested zones
+
+  // FIXME: The first iter + 1 is paranoia to avoid this messing up the solution. Probably worth doing this whole orechstration differently honestly.
+  if(!npVars_->routability_driven_mode ||
+    iter_ < (nbVars_.routability_pass_first_iter + 1) ||
+    routability_tile_size_ == 0)
+  {
+    return FloatPoint(0.0f, 0.0f);
+  }
+  // TODO: Figure out if this is wise
+  int cell_tile_x = (gCell->cx() - routability_grid_lx_) / routability_tile_size_;
+  int cell_tile_y = (gCell->cy() - routability_grid_ly_) / routability_tile_size_;
+  cell_tile_x = std::clamp(cell_tile_x, 0, routability_tile_cnt_x_ - 1);
+  cell_tile_y = std::clamp(cell_tile_y, 0, routability_tile_cnt_y_ - 1);
+
+  // Not sure if this will be suceptible to round-to-zero problems or other issues
+  int tile_range = nbVars_.routability_pass_range / routability_tile_size_;
+
+  int upper_x =  std::clamp(cell_tile_x, cell_tile_x + tile_range, routability_tile_cnt_x_ - 1);
+  int upper_y =  std::clamp(cell_tile_y, cell_tile_y + tile_range, routability_tile_cnt_x_ - 1);
+  int lower_x =  std::clamp(cell_tile_x, cell_tile_x - tile_range, routability_tile_cnt_x_ - 1);
+  int lower_y =  std::clamp(cell_tile_y, cell_tile_y - tile_range, routability_tile_cnt_x_ - 1);
+
+  float tile_range_squared = float(tile_range * tile_range);
+
+
+  auto routability_force = FloatPoint(0, 0);
+  // rx and ry are tile-space coordinates that we iterate over the whole neighborhood of the cell on.
+  for(int rx = lower_x; rx <= upper_x; rx++){
+    for(int ry = lower_y; ry <= upper_y; ry++){
+      float distance_squared = float(((cell_tile_x - rx) * (cell_tile_x - rx)) + ((cell_tile_y - ry) * (cell_tile_y - ry)));
+      if(distance_squared > tile_range_squared){
+        continue;
+      }
+      auto congestion_opt = getTileCongestion(rx, ry);
+
+      if(!congestion_opt){
+        continue;
+      }
+      float congestion = congestion_opt.value();
+      FloatPoint tile_cellspace_coords = FloatPoint(getCellCoordsFromTileCoords(rx, ry));
+      FloatPoint cell_coords = FloatPoint(gCell->cx(), gCell->cy());
+      FloatPoint cell_to_tile_vector = cell_coords - tile_cellspace_coords; // see warning above about needing this to be tile->cell
+
+      float cell_to_tile_distance = cell_to_tile_vector.magnitude();
+      // We never unit-vectorred the original vector so we only need to multiply by distance once.
+      float force_weight = cell_to_tile_distance * nbVars_.routability_pass_weight * (std::exp(nbVars_.routability_pass_sharpness * (congestion - nbVars_.routability_pass_offset)) - 1.0f);
+      FloatPoint scaled_vector = cell_to_tile_vector * force_weight;
+      FloatPoint routability_force = routability_force + scaled_vector;
+    }
+  }
+
+  return routability_force;
+}
+
 // Density field calls
 void NesterovBase::updateDensityFieldBin()
 {
@@ -2638,16 +2994,22 @@ void NesterovBase::initDensity1()
   curSLPCoordi_.resize(gCellSize, FloatPoint());
   curSLPWireLengthGrads_.resize(gCellSize, FloatPoint());
   curSLPDensityGrads_.resize(gCellSize, FloatPoint());
+  curSLPTimingGrads_.resize(gCellSize, FloatPoint());
+  curSLPRoutabilityGrads_.resize(gCellSize, FloatPoint());
   curSLPSumGrads_.resize(gCellSize, FloatPoint());
 
   nextSLPCoordi_.resize(gCellSize, FloatPoint());
   nextSLPWireLengthGrads_.resize(gCellSize, FloatPoint());
   nextSLPDensityGrads_.resize(gCellSize, FloatPoint());
+  nextSLPTimingGrads_.resize(gCellSize, FloatPoint());
+  nextSLPRoutabilityGrads_.resize(gCellSize, FloatPoint());
   nextSLPSumGrads_.resize(gCellSize, FloatPoint());
 
   prevSLPCoordi_.resize(gCellSize, FloatPoint());
   prevSLPWireLengthGrads_.resize(gCellSize, FloatPoint());
   prevSLPDensityGrads_.resize(gCellSize, FloatPoint());
+  prevSLPTimingGrads_.resize(gCellSize, FloatPoint());
+  prevSLPRoutabilityGrads_.resize(gCellSize, FloatPoint());
   prevSLPSumGrads_.resize(gCellSize, FloatPoint());
 
   curCoordi_.resize(gCellSize, FloatPoint());
@@ -2751,6 +3113,8 @@ float NesterovBase::getStepLength(
 void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
                                    std::vector<FloatPoint>& wireLengthGrads,
                                    std::vector<FloatPoint>& densityGrads,
+                                   std::vector<FloatPoint>& timingGrads,
+                                   std::vector<FloatPoint>& routabilityGrads,
                                    float wlCoeffX,
                                    float wlCoeffY)
 {
@@ -2761,21 +3125,49 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
 
   wireLengthGradSum_ = 0;
   densityGradSum_ = 0;
+  timingGradSum_ = 0;
+  routabilityGradSum_ = 0;
 
   float gradSum = 0;
 
-  debugPrint(
-      log_, GPL, "updateGrad", 1, "DensityPenalty: {:g}", densityPenalty_);
+  debugPrint(log_,
+             GPL,
+             "updateGrad",
+             1,
+             "updateGradients: DensityPenalty: {:g}",
+             densityPenalty_);
+
+  // First, compute timing gradients using the merged TimingPass functionality
+  // This computes gradient contributions from timing violations
+  std::fill(timingGrads.begin(), timingGrads.end(), FloatPoint(0, 0));
+  if (sta_ != nullptr && npVars_->timingDrivenMode) {
+    runTimingPassGradient(*nbc_, nbVars_, timingGrads);
+  }
+
+  // NOTE: Routability tile congestion data is refreshed periodically by
+  // runAllRoutabilityGradients() in the outer NesterovPlace loop, so the
+  // per-cell gradient calculation below reads already-cached data.
 
   // TODO: This OpenMP parallel section is causing non-determinism. Consider
   // revisiting this in the future to restore determinism.
+
   // #pragma omp parallel for num_threads(nbc_->getNumThreads()) reduction(+ :
   // wireLengthGradSum_, densityGradSum_, gradSum)
+
+
+  // FIXME: Systematize this warning, this is hacky
+  int num_nonzero_tim = 0;
+  float mean_wl_where_timing_nz = 0.0;
+  float mean_tim_where_timing_nz = 0.0;
+  const float timing_to_wirelength_warning_thresh = 5.0;
+
   for (size_t i = 0; i < nb_gcells_.size(); i++) {
     GCell* gCell = nb_gcells_.at(i);
     wireLengthGrads[i]
         = nbc_->getWireLengthGradientWA(gCell, wlCoeffX, wlCoeffY);
     densityGrads[i] = getDensityGradient(gCell);
+    // timingGrads[i] is already computed by runTimingPassGradient above
+    routabilityGrads[i] = getRoutabilityGradient(gCell);
 
     // Different compiler has different results on the following formula.
     // e.g. wireLengthGradSum_ += fabs(~~.x) + fabs(~~.y);
@@ -2788,16 +3180,26 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
 
     densityGradSum_ += std::fabs(densityGrads[i].x);
     densityGradSum_ += std::fabs(densityGrads[i].y);
+    timingGradSum_ += std::fabs(timingGrads[i].x);
+    timingGradSum_ += std::fabs(timingGrads[i].y);
+    routabilityGradSum_ += std::fabs(routabilityGrads[i].x);
+    routabilityGradSum_ += std::fabs(routabilityGrads[i].y);
 
-    sumGrads[i].x = wireLengthGrads[i].x + densityPenalty_ * densityGrads[i].x;
-    sumGrads[i].y = wireLengthGrads[i].y + densityPenalty_ * densityGrads[i].y;
+    sumGrads[i].x = wireLengthGrads[i].x + densityPenalty_ * densityGrads[i].x
+                    + timingGrads[i].x + routabilityGrads[i].x;
+    sumGrads[i].y = wireLengthGrads[i].y + densityPenalty_ * densityGrads[i].y
+                    + timingGrads[i].y + routabilityGrads[i].y;
 
     FloatPoint wireLengthPreCondi = nbc_->getWireLengthPreconditioner(gCell);
     FloatPoint densityPrecondi = getDensityPreconditioner(gCell);
+    FloatPoint timingPrecondi = getTimingPreconditioner(gCell);
+    FloatPoint routabilityPrecondi = getRoutabilityPreconditioner(gCell);
 
     FloatPoint sumPrecondi(
-        wireLengthPreCondi.x + (densityPenalty_ * densityPrecondi.x),
-        wireLengthPreCondi.y + (densityPenalty_ * densityPrecondi.y));
+        wireLengthPreCondi.x + (densityPenalty_ * densityPrecondi.x)
+            + timingPrecondi.x + routabilityPrecondi.x,
+        wireLengthPreCondi.y + (densityPenalty_ * densityPrecondi.y)
+            + timingPrecondi.y + routabilityPrecondi.y);
 
     sumPrecondi.x
         = std::max(sumPrecondi.x, NesterovPlaceVars::minPreconditioner);
@@ -2807,7 +3209,38 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
     sumGrads[i].x /= sumPrecondi.x;
     sumGrads[i].y /= sumPrecondi.y;
 
+
+    //FIXME: Get rid of this later, expensive and only for debug
+    if(std::abs(timingGrads[i].x) > 0.0 || std::abs(timingGrads[i].y) > 0.0){
+      float tim_mag = std::sqrt(std::pow(timingGrads[i].x, 2) + std::pow(timingGrads[i].y, 2));
+      float wl_mag  = std::sqrt(std::pow(wireLengthGrads[i].x, 2) + std::pow(wireLengthGrads[i].y, 2));
+
+      num_nonzero_tim++;
+      mean_wl_where_timing_nz += wl_mag;
+      mean_tim_where_timing_nz += tim_mag;
+    }
+
     gradSum += std::fabs(sumGrads[i].x) + std::fabs(sumGrads[i].y);
+  }
+  mean_wl_where_timing_nz /= num_nonzero_tim;
+  mean_tim_where_timing_nz /= num_nonzero_tim;
+
+  float tim_wl_ratio = mean_tim_where_timing_nz / mean_wl_where_timing_nz;
+
+  if(tim_wl_ratio >= timing_to_wirelength_warning_thresh){
+    log_->warn(GPL,
+               353,
+               "Mean timing to Wirelength Ratio exceeded warning threshold({}>={})",
+               tim_wl_ratio,
+               timing_to_wirelength_warning_thresh);
+  }
+  else{
+    debugPrint(log_,
+               GPL,
+               "updateGrad",
+               1,
+               "tim_wl_ratio: {}, total nonzero: {}",
+               tim_wl_ratio, num_nonzero_tim);
   }
 
   debugPrint(log_,
@@ -2818,6 +3251,13 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
              wireLengthGradSum_);
   debugPrint(
       log_, GPL, "updateGrad", 1, "DensityGradSum: {:g}", densityGradSum_);
+  debugPrint(log_, GPL, "updateGrad", 1, "TimingGradSum: {:g}", timingGradSum_);
+  debugPrint(log_,
+             GPL,
+             "updateGrad",
+             1,
+             "RoutabilityGradSum: {:g}",
+             routabilityGradSum_);
   debugPrint(log_, GPL, "updateGrad", 1, "GradSum: {:g}", gradSum);
 }
 
@@ -2826,6 +3266,8 @@ void NesterovBase::nbUpdatePrevGradient(float wlCoeffX, float wlCoeffY)
   updateGradients(prevSLPSumGrads_,
                   prevSLPWireLengthGrads_,
                   prevSLPDensityGrads_,
+                  prevSLPTimingGrads_,
+                  prevSLPRoutabilityGrads_,
                   wlCoeffX,
                   wlCoeffY);
 }
@@ -2835,6 +3277,8 @@ void NesterovBase::nbUpdateCurGradient(float wlCoeffX, float wlCoeffY)
   updateGradients(curSLPSumGrads_,
                   curSLPWireLengthGrads_,
                   curSLPDensityGrads_,
+                  curSLPTimingGrads_,
+                  curSLPRoutabilityGrads_,
                   wlCoeffX,
                   wlCoeffY);
 }
@@ -2844,6 +3288,8 @@ void NesterovBase::nbUpdateNextGradient(float wlCoeffX, float wlCoeffY)
   updateGradients(nextSLPSumGrads_,
                   nextSLPWireLengthGrads_,
                   nextSLPDensityGrads_,
+                  nextSLPTimingGrads_,
+                  nextSLPRoutabilityGrads_,
                   wlCoeffX,
                   wlCoeffY);
 }
@@ -2856,6 +3302,8 @@ void NesterovBase::updateSinglePrevGradient(size_t gCellIndex,
                        prevSLPSumGrads_,
                        prevSLPWireLengthGrads_,
                        prevSLPDensityGrads_,
+                       prevSLPTimingGrads_,
+                       prevSLPRoutabilityGrads_,
                        wlCoeffX,
                        wlCoeffY);
 }
@@ -2868,6 +3316,8 @@ void NesterovBase::updateSingleCurGradient(size_t gCellIndex,
                        curSLPSumGrads_,
                        curSLPWireLengthGrads_,
                        curSLPDensityGrads_,
+                       curSLPTimingGrads_,
+                       curSLPRoutabilityGrads_,
                        wlCoeffX,
                        wlCoeffY);
 }
@@ -2877,6 +3327,8 @@ void NesterovBase::updateSingleGradient(
     std::vector<FloatPoint>& sumGrads,
     std::vector<FloatPoint>& wireLengthGrads,
     std::vector<FloatPoint>& densityGrads,
+    std::vector<FloatPoint>& timingGrads,
+    std::vector<FloatPoint>& routabilityGrads,
     float wlCoeffX,
     float wlCoeffY)
 {
@@ -2888,6 +3340,8 @@ void NesterovBase::updateSingleGradient(
   if (gCell->isLocked()) {
     wireLengthGrads[gCellIndex] = FloatPoint(0, 0);
     densityGrads[gCellIndex] = FloatPoint(0, 0);
+    timingGrads[gCellIndex] = FloatPoint(0, 0);
+    routabilityGrads[gCellIndex] = FloatPoint(0, 0);
     sumGrads[gCellIndex] = FloatPoint(0, 0);
     return;
   }
@@ -2895,18 +3349,28 @@ void NesterovBase::updateSingleGradient(
   wireLengthGrads[gCellIndex]
       = nbc_->getWireLengthGradientWA(gCell, wlCoeffX, wlCoeffY);
   densityGrads[gCellIndex] = getDensityGradient(gCell);
+  timingGrads[gCellIndex] = getTimingGradient(gCell);
+  routabilityGrads[gCellIndex] = getRoutabilityGradient(gCell);
 
   sumGrads[gCellIndex].x = wireLengthGrads[gCellIndex].x
-                           + densityPenalty_ * densityGrads[gCellIndex].x;
+                           + densityPenalty_ * densityGrads[gCellIndex].x
+                           + timingGrads[gCellIndex].x
+                           + routabilityGrads[gCellIndex].x;
   sumGrads[gCellIndex].y = wireLengthGrads[gCellIndex].y
-                           + densityPenalty_ * densityGrads[gCellIndex].y;
+                           + densityPenalty_ * densityGrads[gCellIndex].y
+                           + timingGrads[gCellIndex].y
+                           + routabilityGrads[gCellIndex].y;
 
-  FloatPoint wireLengthPreCondi = nbc_->getWireLengthPreconditioner(gCell);
+  FloatPoint wireLengthPreCond = nbc_->getWireLengthPreconditioner(gCell);
   FloatPoint densityPrecondi = getDensityPreconditioner(gCell);
+  FloatPoint timingPrecondi = getTimingPreconditioner(gCell);
+  FloatPoint routabilityPrecondi = getRoutabilityPreconditioner(gCell);
 
   FloatPoint sumPrecondi(
-      wireLengthPreCondi.x + (densityPenalty_ * densityPrecondi.x),
-      wireLengthPreCondi.y + (densityPenalty_ * densityPrecondi.y));
+      wireLengthPreCond.x + (densityPenalty_ * densityPrecondi.x)
+          + timingPrecondi.x + routabilityPrecondi.x,
+      wireLengthPreCond.y + (densityPenalty_ * densityPrecondi.y)
+          + timingPrecondi.y + routabilityPrecondi.y);
 
   sumPrecondi.x = std::max(sumPrecondi.x, NesterovPlaceVars::minPreconditioner);
   sumPrecondi.y = std::max(sumPrecondi.y, NesterovPlaceVars::minPreconditioner);
@@ -2990,6 +3454,8 @@ void NesterovBase::updateNextIter(const int iter)
   std::swap(prevSLPCoordi_, curSLPCoordi_);
   std::swap(prevSLPWireLengthGrads_, curSLPWireLengthGrads_);
   std::swap(prevSLPDensityGrads_, curSLPDensityGrads_);
+  std::swap(prevSLPTimingGrads_, curSLPTimingGrads_);
+  std::swap(prevSLPRoutabilityGrads_, curSLPRoutabilityGrads_);
   std::swap(prevSLPSumGrads_, curSLPSumGrads_);
 
   // Prevent locked instances from moving
@@ -2999,6 +3465,8 @@ void NesterovBase::updateNextIter(const int iter)
       nextSLPCoordi_[k] = curSLPCoordi_[k];
       nextSLPWireLengthGrads_[k] = curSLPWireLengthGrads_[k];
       nextSLPDensityGrads_[k] = curSLPDensityGrads_[k];
+      nextSLPTimingGrads_[k] = curSLPTimingGrads_[k];
+      nextSLPRoutabilityGrads_[k] = curSLPRoutabilityGrads_[k];
       nextSLPSumGrads_[k] = curSLPSumGrads_[k];
       nextCoordi_[k] = curCoordi_[k];
     }
@@ -3007,6 +3475,8 @@ void NesterovBase::updateNextIter(const int iter)
   std::swap(curSLPCoordi_, nextSLPCoordi_);
   std::swap(curSLPWireLengthGrads_, nextSLPWireLengthGrads_);
   std::swap(curSLPDensityGrads_, nextSLPDensityGrads_);
+  std::swap(curSLPTimingGrads_, nextSLPTimingGrads_);
+  std::swap(curSLPRoutabilityGrads_, nextSLPRoutabilityGrads_);
   std::swap(curSLPSumGrads_, nextSLPSumGrads_);
 
   std::swap(curCoordi_, nextCoordi_);
@@ -3755,16 +4225,22 @@ void NesterovBase::cutFillerCells(int64_t inflation_area)
           .curSLPCoordi = curSLPCoordi_[i],
           .curSLPWireLengthGrads = curSLPWireLengthGrads_[i],
           .curSLPDensityGrads = curSLPDensityGrads_[i],
+          .curSLPTimingGrads = curSLPTimingGrads_[i],
+          .curSLPRoutabilityGrads = curSLPRoutabilityGrads_[i],
           .curSLPSumGrads = curSLPSumGrads_[i],
 
           .nextSLPCoordi = nextSLPCoordi_[i],
           .nextSLPWireLengthGrads = nextSLPWireLengthGrads_[i],
           .nextSLPDensityGrads = nextSLPDensityGrads_[i],
+          .nextSLPTimingGrads = nextSLPTimingGrads_[i],
+          .nextSLPRoutabilityGrads = nextSLPRoutabilityGrads_[i],
           .nextSLPSumGrads = nextSLPSumGrads_[i],
 
           .prevSLPCoordi = prevSLPCoordi_[i],
           .prevSLPWireLengthGrads = prevSLPWireLengthGrads_[i],
           .prevSLPDensityGrads = prevSLPDensityGrads_[i],
+          .prevSLPTimingGrads = prevSLPTimingGrads_[i],
+          .prevSLPRoutabilityGrads = prevSLPRoutabilityGrads_[i],
           .prevSLPSumGrads = prevSLPSumGrads_[i],
 
           .curCoordi = curCoordi_[i],
@@ -3932,16 +4408,22 @@ void NesterovBase::restoreRemovedFillers()
     curSLPCoordi_[idx] = filler.curSLPCoordi;
     curSLPWireLengthGrads_[idx] = filler.curSLPWireLengthGrads;
     curSLPDensityGrads_[idx] = filler.curSLPDensityGrads;
+    curSLPTimingGrads_[idx] = filler.curSLPTimingGrads;
+    curSLPRoutabilityGrads_[idx] = filler.curSLPRoutabilityGrads;
     curSLPSumGrads_[idx] = filler.curSLPSumGrads;
 
     nextSLPCoordi_[idx] = filler.nextSLPCoordi;
     nextSLPWireLengthGrads_[idx] = filler.nextSLPWireLengthGrads;
     nextSLPDensityGrads_[idx] = filler.nextSLPDensityGrads;
+    nextSLPTimingGrads_[idx] = filler.nextSLPTimingGrads;
+    nextSLPRoutabilityGrads_[idx] = filler.nextSLPRoutabilityGrads;
     nextSLPSumGrads_[idx] = filler.nextSLPSumGrads;
 
     prevSLPCoordi_[idx] = filler.prevSLPCoordi;
     prevSLPWireLengthGrads_[idx] = filler.prevSLPWireLengthGrads;
     prevSLPDensityGrads_[idx] = filler.prevSLPDensityGrads;
+    prevSLPTimingGrads_[idx] = filler.prevSLPTimingGrads;
+    prevSLPRoutabilityGrads_[idx] = filler.prevSLPRoutabilityGrads;
     prevSLPSumGrads_[idx] = filler.prevSLPSumGrads;
 
     curCoordi_[idx] = filler.curCoordi;
@@ -4110,14 +4592,20 @@ void NesterovBase::swapAndPopParallelVectors(size_t remove_index,
   swapAndPop(curSLPCoordi_, remove_index, last_index);
   swapAndPop(curSLPWireLengthGrads_, remove_index, last_index);
   swapAndPop(curSLPDensityGrads_, remove_index, last_index);
+  swapAndPop(curSLPTimingGrads_, remove_index, last_index);
+  swapAndPop(curSLPRoutabilityGrads_, remove_index, last_index);
   swapAndPop(curSLPSumGrads_, remove_index, last_index);
   swapAndPop(nextSLPCoordi_, remove_index, last_index);
   swapAndPop(nextSLPWireLengthGrads_, remove_index, last_index);
   swapAndPop(nextSLPDensityGrads_, remove_index, last_index);
+  swapAndPop(nextSLPTimingGrads_, remove_index, last_index);
+  swapAndPop(nextSLPRoutabilityGrads_, remove_index, last_index);
   swapAndPop(nextSLPSumGrads_, remove_index, last_index);
   swapAndPop(prevSLPCoordi_, remove_index, last_index);
   swapAndPop(prevSLPWireLengthGrads_, remove_index, last_index);
   swapAndPop(prevSLPDensityGrads_, remove_index, last_index);
+  swapAndPop(prevSLPTimingGrads_, remove_index, last_index);
+  swapAndPop(prevSLPRoutabilityGrads_, remove_index, last_index);
   swapAndPop(prevSLPSumGrads_, remove_index, last_index);
   swapAndPop(curCoordi_, remove_index, last_index);
   swapAndPop(nextCoordi_, remove_index, last_index);
@@ -4134,14 +4622,20 @@ void NesterovBase::appendParallelVectors()
   curSLPCoordi_.emplace_back();
   curSLPWireLengthGrads_.emplace_back();
   curSLPDensityGrads_.emplace_back();
+  curSLPTimingGrads_.emplace_back();
+  curSLPRoutabilityGrads_.emplace_back();
   curSLPSumGrads_.emplace_back();
   nextSLPCoordi_.emplace_back();
   nextSLPWireLengthGrads_.emplace_back();
   nextSLPDensityGrads_.emplace_back();
+  nextSLPTimingGrads_.emplace_back();
+  nextSLPRoutabilityGrads_.emplace_back();
   nextSLPSumGrads_.emplace_back();
   prevSLPCoordi_.emplace_back();
   prevSLPWireLengthGrads_.emplace_back();
   prevSLPDensityGrads_.emplace_back();
+  prevSLPTimingGrads_.emplace_back();
+  prevSLPRoutabilityGrads_.emplace_back();
   prevSLPSumGrads_.emplace_back();
   curCoordi_.emplace_back();
   nextCoordi_.emplace_back();
@@ -4214,16 +4708,20 @@ void NesterovBase::writeGCellVectorsToCSV(const std::string& filename,
     add_header("curSLPCoordi");
     add_header("curSLPWireLengthGrads");
     add_header("curSLPDensityGrads");
+    add_header("curSLPTimingGrads");
+    add_header("curSLPRoutabilityGrads");
     add_header("curSLPSumGrads");
 
-    add_header("nextSLPCoordi");
     add_header("nextSLPWireLengthGrads");
     add_header("nextSLPDensityGrads");
+    add_header("nextSLPTimingGrads");
+    add_header("nextSLPRoutabilityGrads");
     add_header("nextSLPSumGrads");
 
-    add_header("prevSLPCoordi");
     add_header("prevSLPWireLengthGrads");
     add_header("prevSLPDensityGrads");
+    add_header("prevSLPTimingGrads");
+    add_header("prevSLPRoutabilityGrads");
     add_header("prevSLPSumGrads");
 
     add_header("curCoordi");
@@ -4253,16 +4751,22 @@ void NesterovBase::writeGCellVectorsToCSV(const std::string& filename,
     add_value(curSLPCoordi_);
     add_value(curSLPWireLengthGrads_);
     add_value(curSLPDensityGrads_);
+    add_value(curSLPTimingGrads_);
+    add_value(curSLPRoutabilityGrads_);
     add_value(curSLPSumGrads_);
 
     add_value(nextSLPCoordi_);
     add_value(nextSLPWireLengthGrads_);
     add_value(nextSLPDensityGrads_);
+    add_value(nextSLPTimingGrads_);
+    add_value(nextSLPRoutabilityGrads_);
     add_value(nextSLPSumGrads_);
 
     add_value(prevSLPCoordi_);
     add_value(prevSLPWireLengthGrads_);
     add_value(prevSLPDensityGrads_);
+    add_value(prevSLPTimingGrads_);
+    add_value(prevSLPRoutabilityGrads_);
     add_value(prevSLPSumGrads_);
 
     add_value(curCoordi_);
@@ -4405,5 +4909,420 @@ static float getSecondNorm(const std::vector<FloatPoint>& a)
     norm += coordi.x * coordi.x + coordi.y * coordi.y;
   }
   return std::sqrt(norm / (2.0 * a.size()));
+}
+
+// TimingPass functionality merged from timingBase.cpp
+
+std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
+    int top_n,
+    NesterovBaseCommon& nbc)
+{
+  std::vector<ViolatingPath> violating_paths;
+  // Filter parameters for finding path ends.
+  // nullptr means no restriction on that filter dimension.
+  sta::ExceptionFrom* from = nullptr;      // No from-pin filter
+  sta::ExceptionThruSeq* thrus = nullptr;  // No thru-pin filter
+  sta::ExceptionTo* to = nullptr;          // No to-pin filter
+  bool unconstrained = false;  // Only report unconstrained endpoints
+
+  sta_->ensureGraph();
+  sta_->searchPreamble();
+  sta_->ensureLevelized();
+
+  sta::SceneSeq scenes = sta_->scenes();
+  // Use max() to consider both min (setup) and max (hold) delay analysis
+  const sta::MinMaxAll* delay_min_max = sta::MinMaxAll::max();
+
+  // How many paths to find per path group
+  int group_path_count = top_n;
+  // Limit to 1 worst paths per unique endpoint pin for now
+  int endpoint_path_count = 1;
+  bool unique_pins = false;   // Don't filter for unique pins
+  bool unique_edges = false;  // Don't filter for unique edges
+  float slack_min = -1e30f;   // Capture all paths (no lower bound)
+  float slack_max = nbVars_.timing_pass_slack_upper;
+  bool sort_by_slack = true;  // Sort results by slack (most negative first)
+
+  // Empty path_groups means search all path groups (e.g., max, min, etc.)
+  sta::StringSeq path_groups;
+  bool setup = true;      // Include setup timing paths
+  bool hold = false;      // Exclude hold timing paths
+  bool recovery = false;  // Exclude recovery paths
+  bool removal = false;   // Exclude removal paths
+  bool clk_gating_setup = false;
+  bool clk_gating_hold = false;
+
+  // Query STA for path ends matching our filter criteria
+  // This returns paths sorted by slack (most critical first)
+  debugPrint(log_,
+             GPL,
+             "timing",
+             1,
+             "gradientPass: About to run findPathEnds");
+  if (sta_ == nullptr) {
+    debugPrint(log_, GPL, "timing", 1, "gradientPass: sta_ was null");
+    return violating_paths;
+  }
+
+  sta::PathEndSeq ends = sta_->findPathEnds(from,
+                                            thrus,
+                                            to,
+                                            unconstrained,
+                                            scenes,
+                                            delay_min_max,
+                                            group_path_count,
+                                            endpoint_path_count,
+                                            unique_pins,
+                                            unique_edges,
+                                            slack_min,
+                                            slack_max,
+                                            sort_by_slack,
+                                            path_groups,
+                                            setup,
+                                            hold,
+                                            recovery,
+                                            removal,
+                                            clk_gating_setup,
+                                            clk_gating_hold);
+  debugPrint(log_,
+             GPL,
+             "timing",
+             1,
+             "gradientPass: Ran findPathEnds, found {} ends.",
+             ends.size());
+
+
+  // Get the database network adapter for converting between OpenSTA and OpenDB
+  // objects
+  sta::dbNetwork* network = sta_->getDbNetwork();
+
+  // Iterate through each path endpoint found by STA
+  const sta::Slack zero_slack = 0.0;
+  sta::Slack wns = 0.0;
+  sta::Slack tns = 0.0;
+  sta::Slack asl = 0.0;
+  for (sta::PathEnd* end : ends) {
+    // Slack is negative for violating paths, positive for meeting timing.
+    // We only query paths with slack <= slack_upper (typically <= 0).
+    sta::Slack slack = end->slack(sta_);
+    tns = tns + std::min(slack, zero_slack);
+    asl = asl + (slack / ends.size());
+    if(std::min(slack, zero_slack) < wns){
+      wns = slack;
+    }
+
+    // Skip paths with infinite slack (shouldn't happen with slack_max=0,
+    // but guards against edge cases)
+    if (sta::fuzzyInf(slack)) {
+      continue;
+    }
+
+    // Create a violating path record for this endpoint
+    ViolatingPath violating_path;
+    violating_path.slack = slack;
+
+    // Walk backwards through the path from endpoint to source
+    // Each Path object represents a timing point in the path
+    sta::Path* path = end->path();
+    std::vector<size_t> gCell_indices;
+
+    while (path != nullptr) {
+      // Get the pin at this timing point in the path
+      const sta::Pin* path_pin = path->pin(sta_);
+
+      // Convert OpenSTA Pin* to OpenDB objects.
+      // The network adapter can extract any of: dbITerm, dbBTerm, or dbModITerm
+      odb::dbITerm* iterm = nullptr;
+      odb::dbBTerm* bterm = nullptr;
+      odb::dbModITerm* moditerm = nullptr;
+      network->staToDb(path_pin, iterm, bterm, moditerm);
+
+      // Try to find the corresponding GPin in the NesterovBase
+      GPin* gPin = nullptr;
+      if (iterm != nullptr) {
+        // Internal pin (connected to an instance)
+        gPin = nbc.dbToNb(iterm);
+      } else if (bterm != nullptr) {
+        // Boundary pin (top-level input/output port)
+        gPin = nbc.dbToNb(bterm);
+      }
+      // moditerm pins (hierarchical) are not yet supported
+
+      // If we found a GPin, extract its GCell and convert to index
+      if (gPin != nullptr) {
+        GCell* gCell = gPin->getGCell();
+        if (gCell != nullptr) {
+          // Get the unique index of this GCell in the placement grid
+          size_t gCell_index = nbc.getGCellIndex(gCell);
+          gCell_indices.push_back(gCell_index);
+        }
+      }
+
+      // Move to the previous timing point in the path (towards the source)
+      path = path->prevPath();
+    }
+
+    // Store the sequence of GCell indices for this violating path
+    violating_path.gCellIndexSequence = std::move(gCell_indices);
+    violating_paths.push_back(violating_path);
+  }
+  debugPrint(log_,
+             GPL,
+             "timing",
+             1,
+             "TNS: {}, WNS: {}, ASL: {}",
+             tns, wns, asl);
+
+  return violating_paths;
+}
+
+void gpl::NesterovBase::queryTimingViolations(NesterovBaseCommon& nbc)
+{
+  // Query STA for violating paths and store them
+  violating_paths_ = getViolatingPaths(nbVars_.timing_pass_top_n, nbc);
+}
+
+void gpl::NesterovBase::runTimingPassGradient(NesterovBaseCommon& nbc,
+                                              NesterovBaseVars& nbv,
+                                              std::vector<FloatPoint>& grad)
+{
+  int inf_cnt = 0;
+  int nan_cnt = 0;
+  for (const auto& path : violating_paths_) {
+    const auto& gCell_indices = path.gCellIndexSequence;
+    if (gCell_indices.size() < 2) {
+      continue;
+    }
+
+    debugPrint(log_,
+               GPL,
+               "timing",
+               2,
+               "runTimingPassGradient: Slack: {}, Path Length: {}",
+               path.slack,
+               gCell_indices.size());
+
+    GCell& end1 = nbc.getGCell(gCell_indices.front());
+    GCell& end2 = nbc.getGCell(gCell_indices.back());
+
+    const float end1_x = end1.cx();
+    const float end1_y = end1.cy();
+    const float end2_x = end2.cx();
+    const float end2_y = end2.cy();
+
+    // if (std::abs(path.slack) > kMinSlackThreshold_) {
+    //   continue;
+    // }
+
+    // Weight function: exp(-sharpness * (slack + offset))
+    // Negative slack (violation) increases weight; zero slack gives weight =
+    // exp(-offset).
+    const float slack_weight
+        = exp(-1.0f * nbv.timing_pass_slack_sharpness
+              * (path.slack + nbv.timing_pass_slack_offset));
+
+    for (size_t i = 0; i < gCell_indices.size(); ++i) {
+      const size_t cell_idx = gCell_indices[i];
+      GCell& cell = nbc.getGCell(cell_idx);
+
+      const FloatPoint cell_pos{static_cast<float>(cell.cx()),
+                                static_cast<float>(cell.cy())};
+      const FloatPoint end1_pos{end1_x, end1_y};
+      const FloatPoint end2_pos{end2_x, end2_y};
+
+      const bool is_endpoint = (i == 0 || i == gCell_indices.size() - 1);
+
+      FloatPoint force = calculateTimingGradientValue(
+          cell_pos, end1_pos, end2_pos, slack_weight,
+          nbv.timing_pass_end_to_end_weight,
+          nbv.timing_pass_proj_weight,
+          gCell_indices.size(), is_endpoint, i);
+
+      if(std::isnan(force.x) || std::isnan(force.y)){
+        nan_cnt++;
+        continue;
+      }
+      if(std::isinf(force.x) || std::isinf(force.y)){
+        inf_cnt++;
+        continue;
+      }
+
+      grad[cell_idx] = grad[cell_idx] + force;
+    }
+  }
+  if(nan_cnt != 0 || inf_cnt != 0){
+    log_->warn(GPL, 350, "runTimingPassGradient: Skipped {} Gradient Updates due to {} NaNs and {} Infs", nan_cnt + inf_cnt, nan_cnt, inf_cnt);
+  }
+
+}
+
+FloatPoint NesterovBase::calculateTimingGradientValue(
+    const FloatPoint& cell_pos,
+    const FloatPoint& end1_pos,
+    const FloatPoint& end2_pos,
+    float slack_weight,
+    float end_to_end_weight,
+    float proj_weight,
+    size_t path_length,
+    bool is_endpoint,
+    size_t cell_index) const
+{
+  FloatPoint force(0.0f, 0.0f);
+
+  // Endpoint attraction force calc
+  if (end_to_end_weight > 0.0f && is_endpoint) {
+    // FIXME: This relies on the fact that a - a = 0
+    const FloatPoint to_end1{end1_pos.x - cell_pos.x, end1_pos.y - cell_pos.y};
+    const FloatPoint to_end2{end2_pos.x - cell_pos.x, end2_pos.y - cell_pos.y};
+    const float force_weight = end_to_end_weight * slack_weight;
+    force = (to_end1 + to_end2) * force_weight;
+  }
+
+  // Projection force calc
+  if (proj_weight > 0.0f && path_length > 2 && !is_endpoint) {
+    const FloatPoint e1_to_e2_vec{end2_pos.x - end1_pos.x, end2_pos.y - end1_pos.y};
+    float position_scaling_factor = float(cell_index) / float(path_length);
+    FloatPoint point_to_attract_cell_to = end1_pos + (e1_to_e2_vec * position_scaling_factor); // TODO: Not sure if it will be obvious what this does
+    force = FloatPoint(point_to_attract_cell_to - cell_pos) * float(proj_weight * slack_weight); // FIXME: maybe normalize this
+
+
+
+    // Old calculation was a bit silly due to not accounting for intermediate cells not actually being in-between endpoints, so it has been replaced
+    // const FloatPoint proj_from_end1
+    //     = proj_vector(cell_pos, end1_pos, end2_pos);
+    // const FloatPoint from_cell_to_proj
+    //     = proj_from_end1 + (end1_pos - cell_pos);
+    // const float dist_sq = from_cell_to_proj.x * from_cell_to_proj.x
+    //                       + from_cell_to_proj.y * from_cell_to_proj.y;
+    // const float proj_scaled_force = proj_weight * slack_weight * dist_sq;
+    // force = force + (from_cell_to_proj * proj_scaled_force);
+  }
+
+  return force;
+}
+
+FloatPoint NesterovBase::getTimingGradient(const GCell* gCell) const
+{
+  FloatPoint timing_gradient(0.0f, 0.0f);
+
+  if(!npVars_->timingDrivenMode){
+    return timing_gradient;
+  }
+
+  if (gCell == nullptr || sta_ == nullptr) {
+    return timing_gradient;
+  }
+
+  const size_t target_index = nbc_->getGCellIndex(gCell);
+
+  for (const auto& path : violating_paths_) {
+    const auto& gCell_indices = path.gCellIndexSequence;
+    if (gCell_indices.size() < 2) {
+      continue;
+    }
+
+    // Check if this GCell is in the violating path
+    auto it
+        = std::find(gCell_indices.begin(), gCell_indices.end(), target_index);
+    if (it == gCell_indices.end()) {
+      continue;
+    }
+
+    GCell& end1 = nbc_->getGCell(gCell_indices.front());
+    GCell& end2 = nbc_->getGCell(gCell_indices.back());
+
+    const float end1_x = end1.cx();
+    const float end1_y = end1.cy();
+    const float end2_x = end2.cx();
+    const float end2_y = end2.cy();
+
+    if (std::abs(path.slack) > kMinSlackThreshold_) {
+      continue;
+    }
+
+    // Weight function: exp(-sharpness * (slack + offset))
+    const float slack_weight
+        = exp(-1.0f * nbVars_.timing_pass_slack_sharpness
+              * (path.slack + nbVars_.timing_pass_slack_offset));
+
+    const size_t i = std::distance(gCell_indices.begin(), it);
+    const bool is_endpoint = (i == 0 || i == gCell_indices.size() - 1);
+
+    const FloatPoint cell_pos{static_cast<float>(gCell->cx()),
+                              static_cast<float>(gCell->cy())};
+    const FloatPoint end1_pos{end1_x, end1_y};
+    const FloatPoint end2_pos{end2_x, end2_y};
+
+    FloatPoint timing_gradient_new = calculateTimingGradientValue(
+        cell_pos, end1_pos, end2_pos, slack_weight,
+        nbVars_.timing_pass_end_to_end_weight,
+        nbVars_.timing_pass_proj_weight,
+        gCell_indices.size(), is_endpoint, i);
+
+    if(std::isnan(timing_gradient.x) || std::isnan(timing_gradient.y)){
+      log_->warn(GPL, 351, "getTimingGradient: NaN value detected\n"
+      "  Cell Position:       ({}, {})\n"
+      "  End1 Position:       ({}, {})\n"
+      "  End2 Position:       ({}, {})\n"
+      "  Slack Weight:        {}\n"
+      "  End-to-End Weight:   {}\n"
+      "  Proj Weight:         {}\n"
+      "  Path Length:         {}\n"
+      "  Is Endpoint:         {}\n"
+      "  Index in Path:       {}\n",
+      cell_pos.x, cell_pos.y,
+      end1_pos.x, end1_pos.y,
+      end2_pos.x, end2_pos.y,
+      slack_weight,
+      nbVars_.timing_pass_end_to_end_weight,
+      nbVars_.timing_pass_proj_weight,
+      gCell_indices.size(),
+                  is_endpoint,
+                  i);
+      continue;
+    }
+    if(std::isinf(timing_gradient.x) || std::isinf(timing_gradient.y)){
+      log_->warn(GPL, 352, "getTimingGradient: Inf value detected\n"
+      "  Cell Position:       ({}, {})\n"
+      "  End1 Position:       ({}, {})\n"
+      "  End2 Position:       ({}, {})\n"
+      "  Slack Weight:        {}\n"
+      "  End-to-End Weight:   {}\n"
+      "  Proj Weight:         {}\n"
+      "  Path Length:         {}\n"
+      "  Is Endpoint:         {}\n"
+      "  Index in Path:       {}\n",
+      cell_pos.x, cell_pos.y,
+      end1_pos.x, end1_pos.y,
+      end2_pos.x, end2_pos.y,
+      slack_weight,
+      nbVars_.timing_pass_end_to_end_weight,
+      nbVars_.timing_pass_proj_weight,
+      gCell_indices.size(),
+                  is_endpoint,
+                  i);
+      continue;
+    }
+    timing_gradient = timing_gradient + timing_gradient_new;
+  }
+
+  return timing_gradient;
+}
+
+void NesterovBase::updateSTA()
+{
+  if (sta_ != nullptr && est_ != nullptr) {
+    // Determine parasitics source based on whether global routes exist
+    est::ParasiticsSrc parasitics_src = est::ParasiticsSrc::kPlacement;
+    grt::GlobalRouter* global_router = est_->getGlobalRouter();
+    if (global_router != nullptr && global_router->haveRoutes()) {
+      parasitics_src = est::ParasiticsSrc::kGlobalRouting;
+    }
+    // Estimate parasitics directly without using the resizer
+    est_->estimateParasitics(parasitics_src);
+  }
+  else{
+    debugPrint(log_, GPL, "timing", 1, "Could not update STA, est or sta were null");
+  }
 }
 }  // namespace gpl

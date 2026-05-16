@@ -33,9 +33,10 @@ using utl::GPL;
 Replace::Replace(odb::dbDatabase* odb,
                  sta::dbSta* sta,
                  rsz::Resizer* resizer,
+                 est::EstimateParasitics* est,
                  grt::GlobalRouter* router,
                  utl::Logger* logger)
-    : db_(odb), sta_(sta), rs_(resizer), fr_(router), log_(logger)
+    : db_(odb), sta_(sta), rs_(resizer), est_(est), fr_(router), log_(logger)
 {
   graphics_ = std::make_unique<GraphicsNone>();
 }
@@ -258,9 +259,10 @@ bool Replace::initNesterovPlace(const PlaceOptions& options,
     nbc_ = std::make_shared<NesterovBaseCommon>(
         nbVars, pbc_, log_, threads, clusters_);
 
-    for (const auto& pb : pbVec_) {
-      nbVec_.push_back(std::make_shared<NesterovBase>(nbVars, pb, nbc_, log_));
-    }
+     for (const auto& pb : pbVec_) {
+       nbVec_.push_back(
+           std::make_shared<NesterovBase>(nbVars, pb, nbc_, log_, est_, sta_));
+     }
   }
 
   if (!rb_) {
@@ -299,6 +301,7 @@ bool Replace::initNesterovPlace(const PlaceOptions& options,
                                           nbVec_,
                                           rb_,
                                           tb_,
+                                          sta_,
                                           graphics_->MakeNew(log_),
                                           log_);
   }
@@ -319,8 +322,37 @@ int Replace::doNesterovPlace(const int threads,
 
   log_->info(GPL, 84, "---- Execute Nesterov Global Placement.");
   if (options.timingDrivenMode) {
+    log_->info(GPL,
+               88,
+               "Timing driven mode enabled. timing_gradpass parameters: "
+               "top_n={}, proj_weight={}, end_to_end_weight={}, "
+               "slack_sharpness={}, slack_offset={}, slack_upper={}, sta_run_interval={}, first_iter={}",
+               options.timingGradPassTopN,
+               options.timingGradPassProjWeight,
+               options.timingGradPassEndToEndWeight,
+               options.timingGradPassSlackSharpness,
+               options.timingGradPassSlackOffset,
+               options.timingGradPassSlackUpper,
+               options.timingGradPassStaRunInterval,
+               options.timingGradPassFirstIter);
+  }
+
+  if (options.timingDrivenMode) {
     rs_->resizeSlackPreamble();
   }
+
+  log_->info(GPL,
+             355,
+             "Routability gradient pass parameters: "
+             "sharpness={}, weight={}, range={}, offset={}, "
+             "first_iter={}, run_interval={}, use_grt={}",
+             options.routabilityGradPassSharpness,
+             options.routabilityGradPassWeight,
+             options.routabilityGradPassRange,
+             options.routabilityGradPassOffset,
+             options.routabilityGradPassFirstIter,
+             options.routabilityGradPassRunInterval,
+             options.routabilityGradPassUseGrt);
 
   auto start = std::chrono::high_resolution_clock::now();
 

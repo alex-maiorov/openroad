@@ -13,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -88,6 +89,8 @@ void GraphicsImpl::debugForNesterovPlace(
   if (debug_on_) {
     initCharts();
     addDisplayControl(kDrawInstances, true);
+    addDisplayControl(kDrawTimingPaths, true);
+    addDisplayControl(kDrawTimingGradientArrows, true);
     gui::Gui::get()->registerRenderer(this);
 
     if (debug_inst) {
@@ -346,6 +349,121 @@ void GraphicsImpl::drawSingleGCell(const GCell* gCell,
   painter.drawRect({xl, yl, xh, yh});
 }
 
+void GraphicsImpl::drawTimingPaths(gui::Painter& painter)
+{
+  if (!np_ || !np_->getNpVars().timingDrivenMode) {
+    return;
+  }
+
+  // Draw centerlines between path endpoints for all violating paths.
+  // Single color, no slack-based coloring.
+  painter.setPen(gui::Painter::kMagenta, true);
+
+  for (const auto& nb : nbVec_) {
+    for (const auto& path : nb->getViolatingPathsStored()) {
+      if (path.gCellIndexSequence.size() < 2) {
+        continue;
+      }
+
+      const size_t first_idx = path.gCellIndexSequence.front();
+      const size_t last_idx = path.gCellIndexSequence.back();
+
+      if (first_idx >= nbc_->getGCells().size()
+          || last_idx >= nbc_->getGCells().size()) {
+        continue;
+      }
+
+      GCell* end1 = nbc_->getGCellByIndex(first_idx);
+      GCell* end2 = nbc_->getGCellByIndex(last_idx);
+
+      // Centerline
+      painter.drawLine(end1->dCx(), end1->dCy(), end2->dCx(), end2->dCy());
+
+      // Endpoint markers
+      const int r1 = std::max(3, std::min(end1->dx(), end1->dy()) / 12);
+      const int r2 = std::max(3, std::min(end2->dx(), end2->dy()) / 12);
+      painter.drawCircle(end1->dCx(), end1->dCy(), r1);
+      painter.drawCircle(end2->dCx(), end2->dCy(), r2);
+    }
+  }
+}
+
+void GraphicsImpl::drawTimingGradientArrows(gui::Painter& painter)
+{
+  if (!np_ || !np_->getNpVars().timingDrivenMode) {
+    return;
+  }
+
+  // Collect all unique GCell indices that participate in violating paths
+  std::unordered_set<size_t> path_cell_indices;
+  for (const auto& nb : nbVec_) {
+    for (const auto& path : nb->getViolatingPathsStored()) {
+      for (size_t idx : path.gCellIndexSequence) {
+        if (idx < nbc_->getGCells().size()) {
+          path_cell_indices.insert(idx);
+        }
+      }
+    }
+  }
+
+  if (path_cell_indices.empty()) {
+    return;
+  }
+
+  // Compute timing gradient for each path cell, aggregated across all NBs
+  struct CellGrad
+  {
+    FloatPoint grad;
+    GCell* cell;
+  };
+  std::vector<CellGrad> cell_grads;
+  cell_grads.reserve(path_cell_indices.size());
+
+  for (size_t idx : path_cell_indices) {
+    GCell* cell = nbc_->getGCellByIndex(idx);
+    FloatPoint grad(0, 0);
+    for (const auto& nb : nbVec_) {
+      const FloatPoint nb_grad = nb->getTimingGradient(cell);
+      grad.x += nb_grad.x;
+      grad.y += nb_grad.y;
+    }
+    cell_grads.push_back({grad, cell});
+  }
+
+  // Find max magnitude for uniform scaling
+  float max_mag = 0;
+  for (const auto& cg : cell_grads) {
+    const float mag = std::hypot(cg.grad.x, cg.grad.y);
+    if (mag > max_mag) {
+      max_mag = mag;
+    }
+  }
+
+  if (max_mag <= std::numeric_limits<float>::epsilon()) {
+    return;
+  }
+
+  // Draw arrows
+  painter.setPen(gui::Painter::kMagenta, true);
+  for (const auto& cg : cell_grads) {
+    const float mag = std::hypot(cg.grad.x, cg.grad.y);
+    if (mag <= std::numeric_limits<float>::epsilon()) {
+      continue;
+    }
+
+    const int cx = cg.cell->dCx();
+    const int cy = cg.cell->dCy();
+    const int max_len = std::max(1, std::min(cg.cell->dx(), cg.cell->dy()));
+    const float target_len = 0.45f * static_cast<float>(max_len);
+
+    const float dx = cg.grad.x / max_mag * target_len;
+    const float dy = cg.grad.y / max_mag * target_len;
+
+    painter.drawLine(
+        cx, cy, cx + static_cast<int>(dx), cy + static_cast<int>(dy));
+  }
+}
+
 void GraphicsImpl::drawNesterov(gui::Painter& painter)
 {
   drawBounds(painter);
@@ -398,6 +516,11 @@ void GraphicsImpl::drawNesterov(gui::Painter& painter)
     }
   }
 
+  // Draw timing path centerlines between violating path endpoints
+  if (checkDisplayControl(kDrawTimingPaths)) {
+    drawTimingPaths(painter);
+  }
+
   // Draw lines to neighbors
   if (selected_ != kInvalidIndex && nbc_->getGCellByIndex(selected_)) {
     painter.setPen(gui::Painter::kYellow, true);
@@ -440,14 +563,19 @@ void GraphicsImpl::drawNesterov(gui::Painter& painter)
 
     // Determine the maximum magnitude for proper scaling
     const float wl_magnitude = std::hypot(wlGrad.x, wlGrad.y);
+    FloatPoint timingGrad(0, 0);
+    if (np_->getNpVars().timingDrivenMode) {
+      timingGrad = nbVec_[nb_index]->getTimingGradient(gcell);
+    }
     const float densityPenalty = nbVec_[nb_index]->getDensityPenalty();
     const float density_magnitude = std::hypot(densityPenalty * densityGrad.x,
                                                densityPenalty * densityGrad.y);
+    const float timing_magnitude = std::hypot(timingGrad.x, timingGrad.y);
     const float overall_x = wlGrad.x + (densityPenalty * densityGrad.x);
     const float overall_y = wlGrad.y + (densityPenalty * densityGrad.y);
     const float overall_magnitude = std::hypot(overall_x, overall_y);
-    const float max_magnitude
-        = std::max({wl_magnitude, density_magnitude, overall_magnitude});
+    const float max_magnitude = std::max(
+        {wl_magnitude, density_magnitude, timing_magnitude, overall_magnitude});
 
     auto scaleVector = [&](float vx, float vy) -> std::pair<float, float> {
       const float magnitude = std::hypot(vx, vy);
@@ -484,6 +612,20 @@ void GraphicsImpl::drawNesterov(gui::Painter& painter)
       painter.drawLine(
           cx, cy, cx + static_cast<int>(dx), cy + static_cast<int>(dy));
     }
+
+    // Draw Timing gradient line (if timing driven mode active)
+    if (np_->getNpVars().timingDrivenMode) {
+      auto [dx, dy] = scaleVector(timingGrad.x, timingGrad.y);
+      painter.setPen(gui::Painter::kMagenta,
+                     true);  // Use magenta for Timing gradient
+      painter.drawLine(
+          cx, cy, cx + static_cast<int>(dx), cy + static_cast<int>(dy));
+    }
+  }
+
+  // Draw per-cell timing gradient arrows
+  if (checkDisplayControl(kDrawTimingGradientArrows)) {
+    drawTimingGradientArrows(painter);
   }
 
   // Draw field lines
@@ -565,9 +707,36 @@ void GraphicsImpl::reportSelected()
                     densityPenalty * densityGrad.x,
                     densityPenalty * densityGrad.y,
                     densityPenalty);
+
+    FloatPoint timingGrad(0, 0);
+    if (np_->getNpVars().timingDrivenMode) {
+      timingGrad = nbVec_[nb_index]->getTimingGradient(gcell);
+      logger_->report(
+          "  timing ({: .2e}, {: .2e})", timingGrad.x, timingGrad.y);
+
+      // Report violating path info for this cell
+      int paths_through = 0;
+      float worst_slack = 0.0f;
+      for (const auto& path : nbVec_[nb_index]->getViolatingPathsStored()) {
+        const auto& indices = path.gCellIndexSequence;
+        if (std::find(indices.begin(), indices.end(), selected_)
+            != indices.end()) {
+          paths_through++;
+          if (path.slack < worst_slack) {
+            worst_slack = path.slack;
+          }
+        }
+      }
+      if (paths_through > 0) {
+        logger_->report("  on {} violating path(s), worst slack: {:.3e}",
+                        paths_through,
+                        worst_slack);
+      }
+    }
+
     logger_->report("  overall ({: .2e}, {: .2e})",
-                    wlGrad.x + densityPenalty * densityGrad.x,
-                    wlGrad.y + densityPenalty * densityGrad.y);
+                    wlGrad.x + densityPenalty * densityGrad.x + timingGrad.x,
+                    wlGrad.y + densityPenalty * densityGrad.y + timingGrad.y);
   }
 }
 

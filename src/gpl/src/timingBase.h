@@ -7,6 +7,10 @@
 #include <memory>
 #include <vector>
 
+#include "db_sta/dbSta.hh"
+#include "sta/Sta.hh"
+#include "utl/Logger.h"
+
 namespace grt {
 class GlobalRouter;
 }
@@ -15,12 +19,16 @@ namespace rsz {
 class Resizer;
 }
 
+namespace sta {
+class Sta;
+}
+
 namespace utl {
 class Logger;
 }
 
 namespace gpl {
-
+using utl::GPL;
 class NesterovBaseCommon;
 class GNet;
 
@@ -43,6 +51,9 @@ class TimingBase
 
   void setTimingNetWeightMax(float max);
 
+  grt::GlobalRouter* getGlobalRouter() const { return grt_; }
+  rsz::Resizer* getResizer() const { return rs_; }
+
   // updateNetWeight.
   // True: successfully reweighted gnets
   // False: no slacks found
@@ -59,5 +70,4 @@ class TimingBase
   float net_weight_max_ = 5;
   void initTimingOverflowChk();
 };
-
 }  // namespace gpl

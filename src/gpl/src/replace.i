@@ -73,6 +73,23 @@ static gpl::PlaceOptions getOptions(
   checkKey(keys, "-init_density_penalty", options.initDensityPenaltyFactor);
   checkKey(keys, "-init_wirelength_coef", options.initWireLengthCoef);
   checkKey(keys, "-reference_hpwl", options.referenceHpwl);
+  checkKey(keys, "-timing_gradpass_top_n", options.timingGradPassTopN);
+  checkKey(keys, "-timing_gradpass_proj_weight", options.timingGradPassProjWeight);
+  checkKey(
+      keys, "-timing_gradpass_end_to_end_weight", options.timingGradPassEndToEndWeight);
+   checkKey(
+       keys, "-timing_gradpass_slack_sharpness", options.timingGradPassSlackSharpness);
+   checkKey(keys, "-timing_gradpass_slack_offset", options.timingGradPassSlackOffset);
+    checkKey(keys, "-timing_gradpass_slack_upper", options.timingGradPassSlackUpper);
+    checkKey(keys, "-timing_gradpass_sta_run_interval", options.timingGradPassStaRunInterval);
+    checkKey(keys, "-timing_gradpass_first_iter", options.timingGradPassFirstIter);
+    checkKey(keys, "-routability_gradpass_sharpness", options.routabilityGradPassSharpness);
+    checkKey(keys, "-routability_gradpass_weight", options.routabilityGradPassWeight);
+    checkKey(keys, "-routability_gradpass_range", options.routabilityGradPassRange);
+    checkKey(keys, "-routability_gradpass_offset", options.routabilityGradPassOffset);
+    checkKey(keys, "-routability_gradpass_first_iter", options.routabilityGradPassFirstIter);
+    checkKey(keys, "-routability_gradpass_run_interval", options.routabilityGradPassRunInterval);
+    checkFlag(flags, "-routability_gradpass_use_grt", options.routabilityGradPassUseGrt);
 
   if (auto it = keys.find("-density"); it != keys.end()) {
     if (it->second == "uniform") {

@@ -20,12 +20,16 @@
 #include <vector>
 
 #include "boost/unordered/unordered_flat_map.hpp"
+#include "db_sta/dbSta.hh"
 #include "gpl/Replace.h"
 #include "odb/db.h"
 #include "placerBase.h"
 #include "point.h"
 #include "routeBase.h"
+#include "est/EstimateParasitics.h"
+#include "sta/Sta.hh"
 #include "utl/Logger.h"
+
 namespace odb {
 class dbInst;
 class dbITerm;
@@ -36,6 +40,11 @@ class dbNet;
 namespace utl {
 class Logger;
 }
+
+namespace sta {
+class Sta;
+class dbSta;
+}  // namespace sta
 
 namespace gpl {
 
@@ -742,6 +751,12 @@ inline std::vector<Bin>& BinGrid::getBins()
   return bins_;
 }
 
+struct ViolatingPath
+{
+  std::vector<size_t> gCellIndexSequence;
+  float slack;
+};
+
 struct NesterovBaseVars
 {
   NesterovBaseVars(const PlaceOptions& options);
@@ -755,6 +770,25 @@ struct NesterovBaseVars
 
   const float minPhiCoef;
   float maxPhiCoef;  // may be updated after initialization
+
+  // Timing gradient pass parameters
+  const int timing_pass_top_n;
+  const float timing_pass_proj_weight;
+  const float timing_pass_end_to_end_weight;
+  const float timing_pass_slack_sharpness;
+  const float timing_pass_slack_offset;
+  const float timing_pass_slack_upper;
+  const int timing_pass_sta_run_interval;
+  const int timing_pass_first_iter;
+
+  // Routability gradient pass parameters
+  const float routability_pass_sharpness;
+  const float routability_pass_weight;
+  const float routability_pass_range;
+  const float routability_pass_offset;
+  const int routability_pass_first_iter;
+  const int routability_pass_run_interval;
+  const bool routability_pass_use_grt;
 
   static constexpr float minWireLengthForceBar = -300;
 };
@@ -782,8 +816,11 @@ struct NesterovPlaceVars
   int timingDrivenIterCounter = 0;
   const bool routability_driven_mode;
   const bool disableRevertIfDiverge;
-
   bool debug = false;
+  int timingGradPassStaRunInterval;
+  int timingGradPassFirstIter;
+  int routabilityGradPassFirstIter;
+  int routabilityGradPassRunInterval;
   int debug_pause_iterations = 10;
   int debug_update_iterations = 10;
   bool debug_draw_bins = true;
@@ -876,6 +913,12 @@ class NesterovBaseCommon
   GCell& getGCell(size_t index);
   size_t getGCellIndex(const GCell* gCell) const;
 
+  GNet& getGNet(size_t index);
+  size_t getGNetIndex(const GNet* gNet) const;
+
+  GPin& getGPin(size_t index);
+  size_t getGPinIndex(const GPin* gPin) const;
+
   void printGCells();
   void printGPins();
 
@@ -944,7 +987,9 @@ class NesterovBase
   NesterovBase(NesterovBaseVars nbVars,
                std::shared_ptr<PlacerBase> pb,
                std::shared_ptr<NesterovBaseCommon> nbc,
-               utl::Logger* log);
+               utl::Logger* log,
+               est::EstimateParasitics* est,
+               sta::dbSta* sta = nullptr);
   ~NesterovBase();
 
   GCell& getFillerGCell(size_t index);
@@ -958,6 +1003,8 @@ class NesterovBase
 
   float getWireLengthGradSum() const { return wireLengthGradSum_; }
   float getDensityGradSum() const { return densityGradSum_; }
+  float getTimingGradSum() const { return timingGradSum_; }
+  float getRoutabilityGradSum() const { return routabilityGradSum_; }
 
   // update gCells with cx, cy
   void updateGCellCenterLocation(const std::vector<FloatPoint>& coordis);
@@ -1036,10 +1083,21 @@ class NesterovBase
 
   FloatPoint getDensityGradient(const GCell* gCell) const;
 
+  FloatPoint getTimingPreconditioner(const GCell* gCell) const;
+
+  FloatPoint getTimingGradient(const GCell* gCell) const;
+
+  FloatPoint getRoutabilityPreconditioner(const GCell* gCell) const;
+
+  FloatPoint getRoutabilityGradient(const GCell* gCell) const;
+
   // update electrostatic field within Bin
   void updateDensityFieldBin();
 
   BinGrid& getBinGrid() { return bg_; }
+
+  NesterovBaseVars& getNbVars() { return nbVars_; }
+  const NesterovBaseVars& getNbVars() const { return nbVars_; }
 
   // Nesterov Loop
   void initDensity1();
@@ -1054,6 +1112,8 @@ class NesterovBase
   void updateGradients(std::vector<FloatPoint>& sumGrads,
                        std::vector<FloatPoint>& wireLengthGrads,
                        std::vector<FloatPoint>& densityGrads,
+                       std::vector<FloatPoint>& timingGrads,
+                       std::vector<FloatPoint>& routabilityGrads,
                        float wlCoeffX,
                        float wlCoeffY);
 
@@ -1066,6 +1126,8 @@ class NesterovBase
                             std::vector<FloatPoint>& sumGrads,
                             std::vector<FloatPoint>& wireLengthGrads,
                             std::vector<FloatPoint>& densityGrads,
+                            std::vector<FloatPoint>& timingGrads,
+                            std::vector<FloatPoint>& routabilityGrads,
                             float wlCoeffX,
                             float wlCoeffY);
 
@@ -1147,11 +1209,37 @@ class NesterovBase
 
   odb::dbGroup* getGroup() const { return pb_->getGroup(); }
 
+  void updateSTA();
+
+  void runTimingPassGradient(NesterovBaseCommon& nbc,
+                             NesterovBaseVars& nbv,
+                             std::vector<FloatPoint>& grad);
+
+  // Populate routability tile congestion data for gradient computation.
+  // Uses RUDY or GRT depending on nbv.routability_pass_use_grt.
+   void runRoutabilityGradient();
+   std::optional<float> getTileCongestion(int tile_x, int tile_y) const;
+   std::pair<int, int> getTileCoordsFromCellCoords(int cell_x, int cell_y) const;
+   std::pair<int, int> getCellCoordsFromTileCoords(int tile_x, int tile_y) const;
+
+  // Query STA for violating paths and store them in violating_paths_
+  void queryTimingViolations(NesterovBaseCommon& nbc);
+
+  // Access the already-stored violating paths (no STA query).
+  const std::vector<ViolatingPath>& getViolatingPathsStored() const
+  {
+    return violating_paths_;
+  }
+
+  std::vector<ViolatingPath> getViolatingPaths(int top_n,
+                                               NesterovBaseCommon& nbc);
+
  private:
   NesterovBaseVars nbVars_;
   std::shared_ptr<PlacerBase> pb_;
   std::shared_ptr<NesterovBaseCommon> nbc_;
   utl::Logger* log_ = nullptr;
+  est::EstimateParasitics* est_ = nullptr;
 
   BinGrid bg_;
   std::unique_ptr<FFT> fft_;
@@ -1181,14 +1269,22 @@ class NesterovBase
     FloatPoint curSLPCoordi;
     FloatPoint curSLPWireLengthGrads;
     FloatPoint curSLPDensityGrads;
+    FloatPoint curSLPTimingGrads;
+    FloatPoint curSLPRoutabilityGrads;
     FloatPoint curSLPSumGrads;
+
     FloatPoint nextSLPCoordi;
     FloatPoint nextSLPWireLengthGrads;
     FloatPoint nextSLPDensityGrads;
+    FloatPoint nextSLPTimingGrads;
+    FloatPoint nextSLPRoutabilityGrads;
     FloatPoint nextSLPSumGrads;
+
     FloatPoint prevSLPCoordi;
     FloatPoint prevSLPWireLengthGrads;
     FloatPoint prevSLPDensityGrads;
+    FloatPoint prevSLPTimingGrads;
+    FloatPoint prevSLPRoutabilityGrads;
     FloatPoint prevSLPSumGrads;
     FloatPoint curCoordi;
     FloatPoint nextCoordi;
@@ -1218,18 +1314,24 @@ class NesterovBase
   std::vector<FloatPoint> curSLPCoordi_;
   std::vector<FloatPoint> curSLPWireLengthGrads_;
   std::vector<FloatPoint> curSLPDensityGrads_;
+  std::vector<FloatPoint> curSLPTimingGrads_;
+  std::vector<FloatPoint> curSLPRoutabilityGrads_;
   std::vector<FloatPoint> curSLPSumGrads_;
 
   // y0_st, y0_dst, y0_wdst, y0_pdst
   std::vector<FloatPoint> nextSLPCoordi_;
   std::vector<FloatPoint> nextSLPWireLengthGrads_;
   std::vector<FloatPoint> nextSLPDensityGrads_;
+  std::vector<FloatPoint> nextSLPTimingGrads_;
+  std::vector<FloatPoint> nextSLPRoutabilityGrads_;
   std::vector<FloatPoint> nextSLPSumGrads_;
 
   // z_st, z_dst, z_wdst, z_pdst
   std::vector<FloatPoint> prevSLPCoordi_;
   std::vector<FloatPoint> prevSLPWireLengthGrads_;
   std::vector<FloatPoint> prevSLPDensityGrads_;
+  std::vector<FloatPoint> prevSLPTimingGrads_;
+  std::vector<FloatPoint> prevSLPRoutabilityGrads_;
   std::vector<FloatPoint> prevSLPSumGrads_;
 
   // x_st and x0_st
@@ -1255,12 +1357,16 @@ class NesterovBase
 
   float wireLengthGradSum_ = 0;
   float densityGradSum_ = 0;
+  float timingGradSum_ = 0;
+  float routabilityGradSum_ = 0;
 
   // opt_phi_cof
   float densityPenalty_ = 0;
 
   // base_wcof
   float baseWireLengthCoef_ = 0;
+  float wireLengthCoefX_ = 0;
+  float wireLengthCoefY_ = 0;
 
   // phi is described in ePlace paper.
   float sum_overflow_ = 0;
@@ -1282,6 +1388,42 @@ class NesterovBase
   bool reprint_iter_header_ = false;
 
   void initFillerGCells();
+
+  // Store timing gradients here. Make sure to zero them in the constructor
+  std::vector<FloatPoint> timingGrads_;
+
+  // Store routability gradients here. Make sure to zero them in the constructor
+  std::vector<FloatPoint> routabilityGrads_;
+
+  // Routability tile congestion data for gradient computation.
+  // Populated by runRoutabilityGradient(), consumed by getRoutabilityGradient().
+  std::vector<float> routability_tile_congestion_;
+  int routability_tile_cnt_x_ = 0;
+  int routability_tile_cnt_y_ = 0;
+  int routability_tile_size_ = 0;
+  int routability_grid_lx_ = 0;
+  int routability_grid_ly_ = 0;
+
+  // Helper to compute the timing gradient force for a cell on a violating path.
+  // Performs the mathematical gradient calculation (endpoint attraction and
+  // projection force) without NaN/Inf checks (caller handles those).
+  FloatPoint calculateTimingGradientValue(const FloatPoint& cell_pos,
+                                          const FloatPoint& end1_pos,
+                                          const FloatPoint& end2_pos,
+                                          float slack_weight,
+                                          float end_to_end_weight,
+                                          float proj_weight,
+                                          size_t path_length,
+                                          bool is_endpoint,
+                                          size_t cell_index) const;
+
+ private:
+  // TimingPass member variables - now in nbVars_
+  sta::dbSta* sta_ = nullptr;
+  static constexpr float kMinSlackThreshold_ = 1e-3f;
+
+  // Store violating paths queried from STA (queried once per iteration)
+  std::vector<ViolatingPath> violating_paths_;
 };
 
 inline std::vector<Bin>& NesterovBase::getBins()

@@ -17,25 +17,33 @@
 #include <vector>
 
 #include "AbstractGraphics.h"
+#include "db_sta/dbSta.hh"
 #include "nesterovBase.h"
 #include "odb/db.h"
 #include "placerBase.h"
 #include "routeBase.h"
+#include "sta/Sta.hh"
 #include "timingBase.h"
 #include "utl/Logger.h"
+
+namespace sta {
+class Sta;
+class dbSta;
+}  // namespace sta
 
 namespace gpl {
 using utl::GPL;
 
 NesterovPlace::NesterovPlace(const NesterovPlaceVars& npVars,
-                             const std::shared_ptr<PlacerBaseCommon>& pbc,
-                             const std::shared_ptr<NesterovBaseCommon>& nbc,
-                             std::vector<std::shared_ptr<PlacerBase>>& pbVec,
-                             std::vector<std::shared_ptr<NesterovBase>>& nbVec,
-                             std::shared_ptr<RouteBase> rb,
-                             std::shared_ptr<TimingBase> tb,
-                             std::unique_ptr<gpl::AbstractGraphics> graphics,
-                             utl::Logger* log)
+                              const std::shared_ptr<PlacerBaseCommon>& pbc,
+                              const std::shared_ptr<NesterovBaseCommon>& nbc,
+                              std::vector<std::shared_ptr<PlacerBase>>& pbVec,
+                              std::vector<std::shared_ptr<NesterovBase>>& nbVec,
+                              std::shared_ptr<RouteBase> rb,
+                              std::shared_ptr<TimingBase> tb,
+                              sta::dbSta* sta,
+                              std::unique_ptr<gpl::AbstractGraphics> graphics,
+                              utl::Logger* log)
     : npVars_(npVars)
 {
   pbc_ = pbc;
@@ -44,7 +52,10 @@ NesterovPlace::NesterovPlace(const NesterovPlaceVars& npVars,
   nbVec_ = nbVec;
   rb_ = std::move(rb);
   tb_ = std::move(tb);
+  sta_ = sta;
   log_ = log;
+  // Timing pass parameters are now in NesterovBaseVars (nbVars_)
+  // which is passed during NesterovBase initialization
 
   db_cbk_ = std::make_unique<nesterovDbCbk>(this);
   nbc_->setCbk(db_cbk_.get());
@@ -551,6 +562,40 @@ void NesterovPlace::runTimingDriven(int iter,
   }
 }
 
+void NesterovPlace::runTimingPass(int iter,
+                                   const std::string& timing_driven_dir,
+                                   int routability_driven_revert_count,
+                                   int& timing_driven_count,
+                                   int64_t& td_accumulated_delta_area,
+                                   bool is_routability_gpl_iter)
+{
+
+  if (npVars_.timingDrivenMode) {
+    updateDb();
+
+
+
+    // Query STA and store violating paths for later gradient computation
+    // This is called once per tp_sta_run_interval iterations
+    if (iter >= npVars_.timingGradPassFirstIter &&
+        ((iter - npVars_.timingGradPassFirstIter) % npVars_.timingGradPassStaRunInterval) == 0) {
+      log_->info(GPL,
+                 103,
+                 "Timing-pass iteration {}",
+                 ++npVars_.timingDrivenIterCounter);
+      for (auto& nb : nbVec_) {
+        nb->updateSTA();
+        updateDb();
+        nb->queryTimingViolations(*nbc_);
+      }
+      ++timing_driven_count;
+    }
+
+
+    updateDb();
+  }
+}
+
 bool NesterovPlace::isDiverged(float& diverge_snapshot_WlCoefX,
                                float& diverge_snapshot_WlCoefY,
                                bool& is_diverge_snapshot_saved)
@@ -808,6 +853,83 @@ void NesterovPlace::runRoutability(int iter,
         routability_gif_key_ = -1;
       }
     }
+  }
+}
+
+void NesterovPlace::runAllRoutabilityGradients(
+    int iter,
+    int timing_driven_count,
+    const std::string& routability_driven_dir,
+    int routability_driven_revert_count)
+{
+  // Gate on routability-driven mode (matching the timing pattern where
+  // runTimingPass is gated on npVars_.timingDrivenMode).
+  if (!npVars_.routability_driven_mode) {
+    return;
+  }
+
+  // Self-gating: runRoutabilityGradient inside each NesterovBase checks
+  // routability_pass_weight > 0.0f and iter >= routability_pass_first_iter.
+  // If no NB has the gradient feature active, this is a no-op per NB.
+
+  // Graphics: save density and congestion heatmap snapshots (same pattern as
+  // runRoutability, but operating on data from the gradient pass).
+  if (graphics_ && graphics_->enabled() && npVars_.debug_generate_images) {
+    updateDb();
+    const std::string label = fmt::format("Iter {} |R: {} |T: {}",
+                                          iter,
+                                          routability_driven_revert_count,
+                                          timing_driven_count);
+
+    graphics_->saveLabeledImage(
+        fmt::format("{}/density_routability_{:05d}.png",
+                    routability_driven_dir,
+                    iter),
+        label,
+        "Heat Maps/Placement Density");
+
+    graphics_->saveLabeledImage(
+        fmt::format(
+            "{}/rudy_routability_{:05d}.png", routability_driven_dir, iter),
+        label,
+        "Heat Maps/Estimated Congestion (RUDY)");
+
+    odb::Rect region;
+    const int width_px = 500;
+    const odb::Rect bbox
+        = pbc_->db()->getChip()->getBlock()->getBBox()->getBox();
+    const int max_dim = std::max(bbox.dx(), bbox.dy());
+    const double dbu_per_pixel = static_cast<double>(max_dim) / 1000.0;
+    const int delay = 20;
+    const std::string label_name
+        = fmt::format("frame_label_routability_{}", iter);
+
+    if (routability_gif_key_ == -1) {
+      log_->report("start routability gif at iter {}", iter);
+      const std::string gif_path
+          = fmt::format("{}/routability.gif", routability_driven_dir);
+      routability_gif_key_ = graphics_->gifStart(gif_path);
+    }
+
+    graphics_->addFrameLabel(bbox, label, label_name);
+    graphics_->setDisplayControl("Heat Maps/Estimated Congestion (RUDY)",
+                                 true);
+    graphics_->gifAddFrame(
+        routability_gif_key_, region, width_px, dbu_per_pixel, delay);
+    graphics_->setDisplayControl("Heat Maps/Estimated Congestion (RUDY)",
+                                 false);
+    graphics_->deleteLabel(label_name);
+  }
+
+  // Refresh tile congestion data: call each NB's runRoutabilityGradient.
+  // This populates the tile congestion map that getRoutabilityGradient()
+  // reads inside updateGradients(). Each NB self-gates on weight/iter.
+  for (auto& nb : nbVec_) {
+    nb->runRoutabilityGradient();
+  }
+
+  if (graphics_ && graphics_->enabled()) {
+    graphics_->addRoutabilityIter(iter, /*revert=*/false);
   }
 }
 
@@ -1097,12 +1219,13 @@ int NesterovPlace::doNesterovPlace(int start_iter)
       ++npVars_.maxNesterovIter;
     }
 
-    runTimingDriven(nesterov_iter,
-                    timing_driven_dir,
-                    routability_driven_revert_count,
-                    timing_driven_count,
-                    td_accumulated_delta_area,
-                    is_routability_gpl_iter);
+
+    runTimingPass(nesterov_iter,
+                  timing_driven_dir,
+                  routability_driven_revert_count,
+                  timing_driven_count,
+                  td_accumulated_delta_area,
+                  is_routability_gpl_iter);
 
     if (isDiverged(diverge_snapshot_WlCoefX,
                    diverge_snapshot_WlCoefY,
@@ -1110,24 +1233,20 @@ int NesterovPlace::doNesterovPlace(int start_iter)
       break;
     }
 
-    routabilitySnapshot(nesterov_iter,
-                        curA,
-                        routability_driven_dir,
-                        routability_driven_revert_count,
-                        timing_driven_count,
-                        is_routability_snapshot_saved,
-                        route_snapshot_WlCoefX,
-                        route_snapshot_WlCoefY,
-                        route_snapshotA);
+    // routabilitySnapshot(nesterov_iter,
+    //                     curA,
+    //                     routability_driven_dir,
+    //                     routability_driven_revert_count,
+    //                     timing_driven_count,
+    //                     is_routability_snapshot_saved,
+    //                     route_snapshot_WlCoefX,
+    //                     route_snapshot_WlCoefY,
+    //                     route_snapshotA);
 
-    runRoutability(nesterov_iter,
-                   timing_driven_count,
-                   routability_driven_dir,
-                   route_snapshotA,
-                   route_snapshot_WlCoefX,
-                   route_snapshot_WlCoefY,
-                   routability_driven_revert_count,
-                   curA);
+    runAllRoutabilityGradients(nesterov_iter,
+                               timing_driven_count,
+                               routability_driven_dir,
+                               routability_driven_revert_count);
 
     if (isConverged(nesterov_iter, routability_gpl_iter_count_)) {
       break;
@@ -1221,6 +1340,7 @@ void NesterovPlace::updateDb()
 
 // divergence detection on
 // Wirelength / density gradient calculation
+// FIXME: add the timing and routability stuff
 void NesterovPlace::checkInvalidValues(float wireLengthGradSum,
                                        float densityGradSum)
 {

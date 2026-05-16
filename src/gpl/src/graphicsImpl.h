@@ -168,6 +168,9 @@ class GraphicsImpl : public gpl::AbstractGraphics,
   NesterovPlace* np_ = nullptr;
   static constexpr size_t kInvalidIndex = std::numeric_limits<size_t>::max();
   static constexpr const char* kDrawInstances = "Draw GPL Cells";
+  static constexpr const char* kDrawTimingPaths = "Draw Timing Centerlines";
+  static constexpr const char* kDrawTimingGradientArrows
+      = "Draw Timing Gradient Arrows";
   size_t selected_ = kInvalidIndex;
   size_t nb_selected_index_ = kInvalidIndex;
   bool draw_bins_ = false;
@@ -188,6 +191,8 @@ class GraphicsImpl : public gpl::AbstractGraphics,
   void drawInitial(gui::Painter& painter);
   void drawMBFF(gui::Painter& painter);
   void drawBounds(gui::Painter& painter);
+  void drawTimingPaths(gui::Painter& painter);
+  void drawTimingGradientArrows(gui::Painter& painter);
   void reportSelected();
 };
 

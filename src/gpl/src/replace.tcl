@@ -37,7 +37,22 @@ sta::define_cmd_args "global_placement" {\
     [-pad_right pad_right]\
     [-disable_revert_if_diverge]\
     [-disable_pin_density_adjust]\
-    [-enable_routing_congestion]
+    [-enable_routing_congestion]\
+    [-timing_gradpass_top_n timing_gradpass_top_n]\
+    [-timing_gradpass_proj_weight timing_gradpass_proj_weight]\
+    [-timing_gradpass_end_to_end_weight timing_gradpass_end_to_end_weight]\
+     [-timing_gradpass_slack_sharpness timing_gradpass_slack_sharpness]\
+     [-timing_gradpass_slack_offset timing_gradpass_slack_offset]\
+     [-timing_gradpass_slack_upper timing_gradpass_slack_upper]\
+     [-timing_gradpass_sta_run_interval timing_gradpass_sta_run_interval]\
+     [-timing_gradpass_first_iter timing_gradpass_first_iter]\
+     [-routability_gradpass_sharpness routability_gradpass_sharpness]\
+     [-routability_gradpass_weight routability_gradpass_weight]\
+     [-routability_gradpass_range routability_gradpass_range]\
+     [-routability_gradpass_offset routability_gradpass_offset]\
+     [-routability_gradpass_first_iter routability_gradpass_first_iter]\
+     [-routability_gradpass_run_interval routability_gradpass_run_interval]\
+     [-routability_gradpass_use_grt]
 }
 
 proc global_placement { args } {
@@ -57,8 +72,23 @@ proc global_placement { args } {
       -timing_driven_net_weight_max \
       -timing_driven_nets_percentage \
       -keep_resize_below_overflow \
-      -pad_left -pad_right} \
-    flags {-skip_initial_place \
+      -pad_left -pad_right \
+      -timing_gradpass_top_n \
+      -timing_gradpass_proj_weight \
+      -timing_gradpass_end_to_end_weight \
+       -timing_gradpass_slack_sharpness \
+       -timing_gradpass_slack_offset \
+       -timing_gradpass_slack_upper \
+       -timing_gradpass_sta_run_interval \
+        -timing_gradpass_first_iter \
+        -routability_gradpass_sharpness \
+        -routability_gradpass_weight \
+        -routability_gradpass_range \
+        -routability_gradpass_offset \
+        -routability_gradpass_first_iter \
+        -routability_gradpass_run_interval} \
+     flags {-skip_initial_place \
+
       -force_center_initial_place \
       -skip_nesterov_place \
       -timing_driven \
@@ -68,7 +98,8 @@ proc global_placement { args } {
       -incremental \
       -disable_revert_if_diverge \
       -disable_pin_density_adjust \
-      -enable_routing_congestion}
+       -enable_routing_congestion \
+       -routability_gradpass_use_grt}
 
   sta::check_argc_eq0 "global_placement" $args
 

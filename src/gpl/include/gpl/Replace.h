@@ -16,6 +16,10 @@ namespace sta {
 class dbSta;
 }
 
+namespace est {
+class EstimateParasitics;
+}
+
 namespace grt {
 class GlobalRouter;
 }
@@ -93,6 +97,25 @@ struct PlaceOptions
   int padLeft = 0;
   int padRight = 0;
 
+  // TimingPass parameters for gradient-based timing optimization
+   int timingGradPassTopN = 10;
+   float timingGradPassProjWeight = 1.0F;
+   float timingGradPassEndToEndWeight = 1.0F;
+   float timingGradPassSlackSharpness = 1.0F;
+   float timingGradPassSlackOffset = 0.0F;
+   float timingGradPassSlackUpper = 0.0F;
+   int timingGradPassStaRunInterval = 10;
+   int timingGradPassFirstIter = 0;
+
+  // RoutabilityGradPass parameters for gradient-based routability optimization
+   float routabilityGradPassSharpness = 1.0F;
+   float routabilityGradPassWeight = 1.0F;
+   float routabilityGradPassRange = 1.0F;
+   float routabilityGradPassOffset = 0.0F;
+   int routabilityGradPassFirstIter = 0;
+   int routabilityGradPassRunInterval = 10;
+   bool routabilityGradPassUseGrt = false;
+
   void skipIo();
   void validate(utl::Logger* log);
 };
@@ -104,6 +127,7 @@ class Replace
   Replace(odb::dbDatabase* odb,
           sta::dbSta* sta,
           rsz::Resizer* resizer,
+          est::EstimateParasitics* est,
           grt::GlobalRouter* router,
           utl::Logger* logger);
 
@@ -151,6 +175,7 @@ class Replace
   odb::dbDatabase* db_ = nullptr;
   sta::dbSta* sta_ = nullptr;
   rsz::Resizer* rs_ = nullptr;
+  est::EstimateParasitics* est_ = nullptr;
   grt::GlobalRouter* fr_ = nullptr;
   utl::Logger* log_ = nullptr;
 

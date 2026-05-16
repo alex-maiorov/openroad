@@ -2,6 +2,7 @@
 // Copyright (c) 2018-2025, The OpenROAD Authors
 
 #include "timingBase.h"
+#include "nesterovBase.h"
 
 #include <algorithm>
 #include <cmath>
@@ -10,18 +11,29 @@
 #include <memory>
 #include <utility>
 #include <vector>
+#include <format>
+#include <string>
+#include <thread>
 
+#include "db_sta/dbNetwork.hh"
+#include "db_sta/dbSta.hh"
+#include "sta/Mode.hh"
 #include "grt/GlobalRouter.h"
-#include "nesterovBase.h"
 #include "placerBase.h"
 #include "rsz/Resizer.hh"
 #include "sta/Fuzzy.hh"
+#include "sta/MinMax.hh"
 #include "sta/NetworkClass.hh"
+#include "sta/PathEnd.hh"
+#include "sta/PathGroup.hh"
+#include "sta/Search.hh"
+#include "sta/Sta.hh"
 #include "utl/Logger.h"
 
 namespace gpl {
 
 using utl::GPL;
+using namespace sta;
 
 // TimingBase
 TimingBase::TimingBase() = default;
@@ -193,5 +205,6 @@ bool TimingBase::executeTimingDriven(bool run_journal_restore)
              weighted_net_count);
   return true;
 }
+
 
 }  // namespace gpl
