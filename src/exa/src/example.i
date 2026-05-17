@@ -24,6 +24,13 @@ make_instance_cmd(const char* name)
   example->makeInstance(name);
 }
 
+void
+exercise_db_log_cmd()
+{
+  exa::Example *example = ord::OpenRoad::openRoad()->getExample();
+  example->exerciseDbLog();
+}
+
 void set_debug_cmd()
 {
   exa::Example *example = ord::OpenRoad::openRoad()->getExample();
