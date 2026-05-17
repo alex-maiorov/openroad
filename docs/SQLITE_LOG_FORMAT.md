@@ -79,6 +79,7 @@ key in other tables into a human-readable three-letter code.
 CREATE TABLE IF NOT EXISTS table_list (
     tool_id      INTEGER,
     message_id   INTEGER,
+    table_name   TEXT,
     column_types TEXT,
     column_names TEXT,
     PRIMARY KEY (tool_id, message_id)
@@ -93,21 +94,22 @@ without parsing individual `CREATE TABLE` statements.
 |---------------|---------|-------------|
 | `tool_id`     | INTEGER | Foreign key into `tool_names`. |
 | `message_id`  | INTEGER | The `id` parameter of the `logToDb`/`logToDbBulk` call. |
+| `table_name`  | TEXT    | The user-provided name of the data table. |
 | `column_types`| TEXT    | Comma-separated SQLite type names, e.g. `"INTEGER,REAL"`. |
 | `column_names`| TEXT    | Comma-separated column names, matched positionally to `column_types`. |
 
 **Example rows** (from the EXA module's `exerciseDbLog()`):
 
-| tool_id | message_id | column_types          | column_names |
-|---------|------------|-----------------------|--------------|
-| 10      | 6          | INTEGER               | value        |
-| 10      | 7          | REAL                  | ratio        |
-| 10      | 8          | INTEGER,REAL          | id,weight    |
-| 10      | 9          | INTEGER,INTEGER,INTEGER | x,y,z      |
-| 10      | 10         | INTEGER,REAL          | id,val       |
-| 10      | 11         | INTEGER               | code         |
-| 10      | 12         | INTEGER,INTEGER,INTEGER | x,y,z      |
-| 10      | 15         | INTEGER               | toggle       |
+| tool_id | message_id | table_name | column_types          | column_names |
+|---------|------------|------------|-----------------------|--------------|
+| 10      | 6          | `my_value` | INTEGER               | value        |
+| 10      | 7          | `my_ratio` | REAL                  | ratio        |
+| 10      | 8          | `my_weights`| INTEGER,REAL          | id,weight    |
+| 10      | 9          | `my_coords`| INTEGER,INTEGER,INTEGER | x,y,z      |
+| 10      | 10         | `bulk_data`| INTEGER,REAL          | id,val       |
+| 10      | 11         | `my_codes` | INTEGER               | code         |
+| 10      | 12         | `more_coords`| INTEGER,INTEGER,INTEGER | x,y,z      |
+| 10      | 15         | `toggles`  | INTEGER               | toggle       |
 
 ### 1.3 `metadata`
 
@@ -140,7 +142,7 @@ tool_id | key          | value
 10      | description  | trivial fake usage of the db log infrastructure
 ```
 
-Metadata rows are submitted via `logger->logMetadata(tool, key, value)`
+Metadata rows are submitted via `logger->logToDbMetadata(tool, key, value)`
 from C++ code and are drained to the database by the backend thread in
 batches (one transaction per drain cycle).
 
@@ -151,23 +153,17 @@ batches (one transaction per drain cycle).
 ### 2.1 Naming Convention
 
 Every `logToDb` or `logToDbBulk` call site with a unique `(tool, id)`
-pair creates a **single data table**.  The table name is:
-
-```
-{TOOL_NAME}_{MESSAGE_ID}
-```
-
-where `TOOL_NAME` is the three-letter uppercase code from `tool_names`
-and `MESSAGE_ID` is the integer `id` parameter.
+pair creates a **single data table**.  The table name is now provided by the user
+as a string literal in the logging call.
 
 **Examples:**
 
 | `logToDb` call (conceptual) | Tool | ID | Table name |
 |---|---|---|---|
-| `logToDb<"value">(EXA, 6, 42)` | EXA | 6 | `EXA_6` |
-| `logToDb<"ratio">(EXA, 7, 3.14)` | EXA | 7 | `EXA_7` |
-| `logToDbBulk<"id,val">(EXA, 10, ...)` | EXA | 10 | `EXA_10` |
-| `logToDb<"code">(CGT, 1, 0xabcd)` | CGT | 1 | `CGT_1` |
+| `logToDb<"value">(EXA, 6, "my_value", 42)` | EXA | 6 | `my_value` |
+| `logToDb<"ratio">(EXA, 7, "my_ratio", 3.14)` | EXA | 7 | `my_ratio` |
+| `logToDbBulk<"id,val">(EXA, 10, "bulk_data", ...)` | EXA | 10 | `bulk_data` |
+| `logToDb<"code">(CGT, 1, "my_codes", 0xabcd)` | CGT | 1 | `my_codes` |
 
 The `id` field is clamped to the range `[0, 9999]`.
 
@@ -227,33 +223,33 @@ logger_->logToDb<"id,weight">(utl::EXA, 8, 1, 1.0);
 Given the `exerciseDbLog()` calls in the EXA module, here is what the
 data tables contain:
 
-**`EXA_6`** — single INTEGER column, single row:
+**`my_value`** — single INTEGER column, single row:
 ```sql
-sqlite> SELECT * FROM EXA_6;
+sqlite> SELECT * FROM my_value;
 value
 -----
 42
 ```
 
-**`EXA_7`** — single REAL column, single row:
+**`my_ratio`** — single REAL column, single row:
 ```sql
-sqlite> SELECT * FROM EXA_7;
+sqlite> SELECT * FROM my_ratio;
 ratio
 -----
 3.14
 ```
 
-**`EXA_8`** — two columns (INTEGER, REAL), single row:
+**`my_weights`** — two columns (INTEGER, REAL), single row:
 ```sql
-sqlite> SELECT * FROM EXA_8;
+sqlite> SELECT * FROM my_weights;
 id          weight
 ----------  ------
 1           1.0
 ```
 
-**`EXA_10`** — two columns, bulk-loaded with 5 rows:
+**`bulk_data`** — two columns, bulk-loaded with 5 rows:
 ```sql
-sqlite> SELECT * FROM EXA_10;
+sqlite> SELECT * FROM bulk_data;
 id          val
 ----------  ----------
 101         1.1
@@ -263,9 +259,9 @@ id          val
 105         5.5
 ```
 
-**`EXA_12`** — three INTEGER columns, bulk-loaded with 4 rows:
+**`more_coords`** — three INTEGER columns, bulk-loaded with 4 rows:
 ```sql
-sqlite> SELECT * FROM EXA_12;
+sqlite> SELECT * FROM more_coords;
 x           y           z
 ----------  ----------  ----------
 0           10          100
@@ -280,7 +276,7 @@ x           y           z
 
 | Aspect | `logToDb` | `logToDbBulk` |
 |--------|-----------|---------------|
-| Signature | `logToDb<Header>(tool, id, args...)` | `logToDbBulk<Header>(tool, id, count, iters...)` |
+| Signature | `logToDb<Header>(tool, id, tableName, args...)` | `logToDbBulk<Header>(tool, id, tableName, count, iters...)` |
 | Input | Individual values (variadic) | One iterator per column + `count` |
 | Rows per call | 1 | `count` |
 | Value types | Integral or floating-point | Must be **arithmetic** (stricter check) |
@@ -308,7 +304,7 @@ logger_->startLogDb("/path/to/db.log");
 5. The `tool_names` table is populated with all known tools via
    `INSERT OR REPLACE`.
 6. `db_ready_` is set to `true` and `startLogDb()` returns.
-7. **From this point**, any `logToDb`/`logToDbBulk`/`logMetadata` call
+7. **From this point**, any `logToDb`/`logToDbBulk`/`logToDbMetadata` call
    will enqueue data.  Before this point, such calls silently return.
 
 ### 4.2 Runtime
@@ -409,22 +405,23 @@ consistent snapshot without blocking the writer.  The WAL file
 Start by reading `table_list` joined with `tool_names`:
 
 ```sql
-SELECT tn.name, tl.message_id, tl.column_types, tl.column_names
+SELECT tl.table_name, tl.column_types, tl.column_names
 FROM table_list tl
 JOIN tool_names tn ON tl.tool_id = tn.tool_id
 ORDER BY tn.name, tl.message_id;
 ```
 
-This tells you every data table's name (`{name}_{message_id}`), its
+This tells you every data table's name, its
 column names, and their SQLite types.
 
 ### 6.2 Query a specific table
 
 ```sql
-SELECT * FROM EXA_10;
+SELECT * FROM bulk_data;
 ```
 
-The column names are always the ones recorded in `table_list`.
+The column names are always the ones recorded in `table_list`. You should
+query the table using the `table_name` from `table_list`.
 
 ### 6.3 Handle missing tables
 
@@ -451,14 +448,13 @@ conn.row_factory = sqlite3.Row
 
 # Discover tables
 rows = conn.execute("""
-    SELECT tn.name, tl.message_id, tl.column_types, tl.column_names
-    FROM table_list tl
-    JOIN tool_names tn ON tl.tool_id = tn.tool_id
-    ORDER BY tn.name, tl.message_id
+    SELECT table_name, column_types, column_names
+    FROM table_list
+    ORDER BY table_name
 """).fetchall()
 
 for r in rows:
-    table = f"{r['name']}_{r['message_id']}"
+    table = r['table_name']
     print(f"{table}: columns={r['column_names']} types={r['column_types']}")
     data = conn.execute(f"SELECT * FROM [{table}]").fetchall()
     for row in data:
@@ -471,7 +467,7 @@ for r in rows:
 
 | Property | Constraint |
 |----------|-----------|
-| Table name format | `{TOOL_NAME}_{id}`, e.g. `EXA_6` |
+| Table name format | User-provided string, e.g. `my_table` |
 | `id` range | `[0, 9999]` |
 | Column types | Only `INTEGER` and `REAL` |
 | Header characters | Only `a-z`, `A-Z`, `0-9`, `_`, `,`, ` ` (space) |
