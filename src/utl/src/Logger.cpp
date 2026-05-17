@@ -214,12 +214,12 @@ std::optional<std::shared_ptr<AbstractQueue>> Logger::logToDbFindQueue(SchemaKey
 SchemaInfo Logger::logToDbBuildSchemaInfo(
     sqlite3* db,
     SchemaKey key,
+    const std::string& table_name,
     std::string_view header,
     const std::vector<SQLiteType>& types)
 {
   SchemaInfo info;
-  info.table_name
-      = std::string(tool_names_[key.tool]) + "_" + std::to_string(key.id);
+  info.table_name = table_name;
   info.columns = build_columns_from_runtime(header, types);
 
   // Build and execute CREATE TABLE IF NOT EXISTS in one shot.
@@ -253,9 +253,10 @@ SchemaInfo Logger::logToDbBuildSchemaInfo(
     col_names += info.columns[i].name;
   }
   char* tbl_sql = sqlite3_mprintf(
-      "INSERT OR REPLACE INTO table_list VALUES (%d, %d, %Q, %Q)",
+      "INSERT OR REPLACE INTO table_list VALUES (%d, %d, %Q, %Q, %Q)",
       static_cast<int>(key.tool),
       key.id,
+      info.table_name.c_str(),
       col_types.c_str(),
       col_names.c_str());
   if (tbl_sql) {
@@ -284,6 +285,7 @@ void Logger::logToDbRegisterQueue(SchemaKey key,
 
 SchemaInfo Logger::syncCreateTable(
     SchemaKey key,
+    const char* table_name,
     std::string_view header,
     const std::vector<SQLiteType>& types)
 {
@@ -293,7 +295,7 @@ SchemaInfo Logger::syncCreateTable(
   {
     std::lock_guard<std::mutex> lock(create_table_mutex_);
     create_table_queue_.push_back(
-        {key, std::string(header), types, std::move(promise)});
+        {key, table_name, std::string(header), types, std::move(promise)});
   }
 
   // Block until the backend thread processes this command.
@@ -347,7 +349,7 @@ void Logger::logDbLoop()
                 "tool_id INTEGER PRIMARY KEY, name TEXT)",
                 "tool_names")
       || !exec_sql("CREATE TABLE IF NOT EXISTS table_list ("
-                   "tool_id INTEGER, message_id INTEGER,"
+                   "tool_id INTEGER, message_id INTEGER, table_name TEXT,"
                    " column_types TEXT, column_names TEXT,"
                    " PRIMARY KEY(tool_id, message_id))",
                    "table_list")
@@ -412,10 +414,10 @@ void Logger::logDbLoop()
         std::lock_guard<std::mutex> lock(create_table_mutex_);
         pending_ct.swap(create_table_queue_);
       }
-      for (auto& cmd : pending_ct) {
+       for (auto& cmd : pending_ct) {
         try {
           SchemaInfo info = logToDbBuildSchemaInfo(
-              db_, cmd.key, cmd.header, cmd.types);
+              db_, cmd.key, cmd.table_name, cmd.header, cmd.types);
           cmd.result_promise.set_value(std::move(info));
         } catch (...) {
           // Propagate any exception (e.g. from this->error()) to the
@@ -539,7 +541,7 @@ void Logger::logDbLoop()
       for (auto& cmd : pending_ct) {
         try {
           SchemaInfo info = logToDbBuildSchemaInfo(
-              db_, cmd.key, cmd.header, cmd.types);
+              db_, cmd.key, cmd.table_name, cmd.header, cmd.types);
           cmd.result_promise.set_value(std::move(info));
         } catch (...) {
           cmd.result_promise.set_exception(std::current_exception());

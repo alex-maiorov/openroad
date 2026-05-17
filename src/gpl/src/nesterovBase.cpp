@@ -5105,11 +5105,11 @@ void gpl::NesterovBase::queryTimingViolations(NesterovBaseCommon& nbc)
   }
   
   log_->logToDbBulk<"PathId,Slack,Iter">(
-    utl::GPL, 803, slacks_path_id.size(),
+    utl::GPL, 803, "gpl_path_slacks", slacks_path_id.size(),
     slacks_path_id.begin(), slacks_slack.begin(), slacks_iter.begin());
     
   log_->logToDbBulk<"PathId,CellId,Iter">(
-    utl::GPL, 804, nodes_path_id.size(),
+    utl::GPL, 804, "gpl_path_cells", nodes_path_id.size(),
     nodes_path_id.begin(), nodes_cell_id.begin(), nodes_iter.begin());
 }
 
@@ -5385,13 +5385,13 @@ void gpl::NesterovBase::dumpCellStaticInfo() {
   }
 
   log_->logToDbBulk<"CellId,Width,Height,IsMacro,IsLocked">(
-    utl::GPL, 810, nb_gcells_.size(),
+    utl::GPL, 810, "gpl_cell_static_info", nb_gcells_.size(),
     cell_ids.begin(), width.begin(), height.begin(), is_macro.begin(), is_locked.begin());
 }
 
 void gpl::NesterovBase::dumpBaseIterationScalars(int iter) {
   log_->logToDb<"Iter,StepLength,DensityPenalty,WlCoefX,WlCoefY,BaseWlCoef,SumOverflow">(
-    utl::GPL, 811, iter, stepLength_, densityPenalty_, wireLengthCoefX_, wireLengthCoefY_, baseWireLengthCoef_, sum_overflow_unscaled_);
+    utl::GPL, 811, "gpl_iteration_scalars", iter, stepLength_, densityPenalty_, wireLengthCoefX_, wireLengthCoefY_, baseWireLengthCoef_, sum_overflow_unscaled_);
 }
 
 void gpl::NesterovBase::dumpBinGrid(int iter) {
@@ -5411,7 +5411,7 @@ void gpl::NesterovBase::dumpBinGrid(int iter) {
   }
 
   log_->logToDbBulk<"Iter,BinIdx,ElectroFieldX,ElectroFieldY,Density">(
-    utl::GPL, 812, num_bins,
+    utl::GPL, 812, "gpl_bin_grid", num_bins,
     iters.begin(), bin_idx.begin(), electro_x.begin(), electro_y.begin(), density.begin());
 }
 
@@ -5432,7 +5432,7 @@ void gpl::NesterovBase::dumpCellDenseGradients(int iter) {
   }
 
   log_->logToDbBulk<"Iter,CellId,PosX,PosY,WlX,WlY">(
-    utl::GPL, 813, nb_gcells_.size(), 
+    utl::GPL, 813, "gpl_cell_dense_gradients", nb_gcells_.size(), 
     iters.begin(), ids.begin(), pos_x.begin(), pos_y.begin(), wl_x.begin(), wl_y.begin());
 }
 
@@ -5453,7 +5453,7 @@ void gpl::NesterovBase::dumpCellSparseTiming(int iter) {
 
   if (!ids.empty()) {
     log_->logToDbBulk<"Iter,CellId,TimX,TimY">(
-      utl::GPL, 814, ids.size(),
+      utl::GPL, 814, "gpl_cell_timing_gradients", ids.size(),
       iters.begin(), ids.begin(), tim_x.begin(), tim_y.begin());
   }
 }
@@ -5475,7 +5475,7 @@ void gpl::NesterovBase::dumpCellSparseRoutability(int iter) {
 
   if (!ids.empty()) {
     log_->logToDbBulk<"Iter,CellId,RtX,RtY">(
-      utl::GPL, 815, ids.size(),
+      utl::GPL, 815, "gpl_cell_routability_gradients", ids.size(),
       iters.begin(), ids.begin(), rt_x.begin(), rt_y.begin());
   }
 }

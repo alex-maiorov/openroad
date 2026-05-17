@@ -319,6 +319,7 @@ struct NewSchemaCommand {
 // the backend has executed the DDL.
 struct CreateTableCommand {
   SchemaKey key;
+  std::string table_name;
   std::string header;
   std::vector<SQLiteType> types;
   std::promise<SchemaInfo> result_promise;
@@ -589,7 +590,7 @@ class Logger
   // for a (tool, id) pair.  The template body is intentionally thin:
   // compile-time checks live here, all runtime logic is in the .cpp.
   template <FixedString Header, typename... RawArgs>
-  std::optional<size_t> logToDb(ToolId tool, int id, RawArgs&&... raw_args)
+  std::optional<size_t> logToDb(ToolId tool, int id, const char* tableName, RawArgs&&... raw_args)
   {
     // If database logging is not running, silently skip.
     if (!db_ready_) {
@@ -622,6 +623,7 @@ class Logger
       // --- SLOW PATH: send CreateTableCommand to backend, create TypedQueue, register ---
       SchemaInfo info = syncCreateTable(
           key,
+          tableName,
           std::string_view(Header.data),
           std::vector<SQLiteType>(types_arr.begin(), types_arr.end()));
       auto queue = std::make_shared<TypedQueue<std::decay_t<RawArgs>...>>(std::move(info));
@@ -645,10 +647,9 @@ class Logger
   }
 
   // Bulk version of logToDb: takes one iterator per column and pushes
-  // 'count' tuples assembled from *iters++ in lockstep.
-  // Move semantics — caller transfers ownership of the pointed-to values.
+  // 'count' rows at once.
   template <FixedString Header, typename... InputIters>
-  std::optional<size_t> logToDbBulk(ToolId tool, int id, size_t count, InputIters... iters)
+  std::optional<size_t> logToDbBulk(ToolId tool, int id, const char* tableName, size_t count, InputIters... iters)
   {
     // If database logging is not running, silently skip.
     if (!db_ready_) {
@@ -684,6 +685,7 @@ class Logger
     if (!queue_opt.has_value()) {
       SchemaInfo info = syncCreateTable(
           key,
+          tableName,
           std::string_view(Header.data),
           std::vector<SQLiteType>(types_arr.begin(), types_arr.end()));
       auto queue = std::make_shared<TypedQueue<iter_val_t<InputIters>...>>(
@@ -924,9 +926,10 @@ class Logger
   // Implemented in Logger.cpp.
   std::optional<std::shared_ptr<AbstractQueue>> logToDbFindQueue(SchemaKey key);
   SchemaInfo logToDbBuildSchemaInfo(sqlite3* db,
-                                     SchemaKey key,
-                                     std::string_view header,
-                                     const std::vector<SQLiteType>& types);
+                                    SchemaKey key,
+                                    const std::string& table_name,
+                                    std::string_view header,
+                                    const std::vector<SQLiteType>& types);
   void logToDbRegisterQueue(SchemaKey key,
                              std::shared_ptr<AbstractQueue> queue);
 
@@ -934,6 +937,7 @@ class Logger
   // the table has been created and the SchemaInfo is returned.  Called
   // from logToDb / logToDbBulk slow paths.
   SchemaInfo syncCreateTable(SchemaKey key,
+                              const char* table_name,
                               std::string_view header,
                               const std::vector<SQLiteType>& types);
 
