@@ -924,13 +924,14 @@ size_t Logger::getDbLogPerChannelMaxMem() const
   return db_log_per_channel_max_mem_;
 }
 
-void Logger::logMetadata(ToolId tool, std::string key, std::string value)
+std::optional<size_t> Logger::logToDbMetadata(ToolId tool, std::string key, std::string value)
 {
   if (!db_ready_) {
-    return;
+    return std::nullopt;
   }
   std::lock_guard<std::mutex> lock(metadata_queue_mutex_);
   metadata_queue_.emplace(tool, std::move(key), std::move(value));
+  return 1;
 }
 
 bool Logger::drainMetadataQueue()

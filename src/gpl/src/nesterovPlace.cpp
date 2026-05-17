@@ -1118,21 +1118,21 @@ int NesterovPlace::doNesterovPlace(int start_iter)
 {
   static bool metadata_logged = false;
   if (!metadata_logged) {
-    log_->logMetadata(utl::GPL, "maxNesterovIter", std::to_string(npVars_.maxNesterovIter));
-    log_->logMetadata(utl::GPL, "maxBackTrack", std::to_string(npVars_.maxBackTrack));
-    log_->logMetadata(utl::GPL, "initDensityPenalty", std::to_string(npVars_.initDensityPenalty));
-    log_->logMetadata(utl::GPL, "initWireLengthCoef", std::to_string(npVars_.initWireLengthCoef));
-    log_->logMetadata(utl::GPL, "targetOverflow", std::to_string(npVars_.targetOverflow));
-    log_->logMetadata(utl::GPL, "minPreconditioner", std::to_string(npVars_.minPreconditioner));
-    log_->logMetadata(utl::GPL, "initialPrevCoordiUpdateCoef", std::to_string(npVars_.initialPrevCoordiUpdateCoef));
-    log_->logMetadata(utl::GPL, "referenceHpwl", std::to_string(npVars_.referenceHpwl));
-    log_->logMetadata(utl::GPL, "routability_end_overflow", std::to_string(npVars_.routability_end_overflow));
-    log_->logMetadata(utl::GPL, "routability_snapshot_overflow", std::to_string(npVars_.routability_snapshot_overflow));
-    log_->logMetadata(utl::GPL, "keepResizeBelowOverflow", std::to_string(npVars_.keepResizeBelowOverflow));
-    log_->logMetadata(utl::GPL, "timingDrivenMode", std::to_string(npVars_.timingDrivenMode));
-    log_->logMetadata(utl::GPL, "routability_driven_mode", std::to_string(npVars_.routability_driven_mode));
-    log_->logMetadata(utl::GPL, "timingGradPassStaRunInterval", std::to_string(npVars_.timingGradPassStaRunInterval));
-    log_->logMetadata(utl::GPL, "timingGradPassFirstIter", std::to_string(npVars_.timingGradPassFirstIter));
+    log_->logToDbMetadata(utl::GPL, "maxNesterovIter", std::to_string(npVars_.maxNesterovIter));
+    log_->logToDbMetadata(utl::GPL, "maxBackTrack", std::to_string(npVars_.maxBackTrack));
+    log_->logToDbMetadata(utl::GPL, "initDensityPenalty", std::to_string(npVars_.initDensityPenalty));
+    log_->logToDbMetadata(utl::GPL, "initWireLengthCoef", std::to_string(npVars_.initWireLengthCoef));
+    log_->logToDbMetadata(utl::GPL, "targetOverflow", std::to_string(npVars_.targetOverflow));
+    log_->logToDbMetadata(utl::GPL, "minPreconditioner", std::to_string(npVars_.minPreconditioner));
+    log_->logToDbMetadata(utl::GPL, "initialPrevCoordiUpdateCoef", std::to_string(npVars_.initialPrevCoordiUpdateCoef));
+    log_->logToDbMetadata(utl::GPL, "referenceHpwl", std::to_string(npVars_.referenceHpwl));
+    log_->logToDbMetadata(utl::GPL, "routability_end_overflow", std::to_string(npVars_.routability_end_overflow));
+    log_->logToDbMetadata(utl::GPL, "routability_snapshot_overflow", std::to_string(npVars_.routability_snapshot_overflow));
+    log_->logToDbMetadata(utl::GPL, "keepResizeBelowOverflow", std::to_string(npVars_.keepResizeBelowOverflow));
+    log_->logToDbMetadata(utl::GPL, "timingDrivenMode", std::to_string(npVars_.timingDrivenMode));
+    log_->logToDbMetadata(utl::GPL, "routability_driven_mode", std::to_string(npVars_.routability_driven_mode));
+    log_->logToDbMetadata(utl::GPL, "timingGradPassStaRunInterval", std::to_string(npVars_.timingGradPassStaRunInterval));
+    log_->logToDbMetadata(utl::GPL, "timingGradPassFirstIter", std::to_string(npVars_.timingGradPassFirstIter));
     metadata_logged = true;
   }
 

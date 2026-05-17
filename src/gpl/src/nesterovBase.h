@@ -1212,6 +1212,14 @@ class NesterovBase
   void updateSTA();
   void dumpGradientsToDb(int iter);
 
+  void dumpStaticMetadata();
+  void dumpCellStaticInfo();
+  void dumpBaseIterationScalars(int iter);
+  void dumpBinGrid(int iter);
+  void dumpCellDenseGradients(int iter);
+  void dumpCellSparseTiming(int iter);
+  void dumpCellSparseRoutability(int iter);
+
   void runTimingPassGradient(NesterovBaseCommon& nbc,
                              NesterovBaseVars& nbv,
                              std::vector<FloatPoint>& grad);
@@ -1387,6 +1395,7 @@ class NesterovBase
   int iter_ = 0;
   bool isConverged_ = false;
   bool reprint_iter_header_ = false;
+  bool has_logged_static_ = false;
 
   void initFillerGCells();
 

@@ -589,11 +589,11 @@ class Logger
   // for a (tool, id) pair.  The template body is intentionally thin:
   // compile-time checks live here, all runtime logic is in the .cpp.
   template <FixedString Header, typename... RawArgs>
-  void logToDb(ToolId tool, int id, RawArgs&&... raw_args)
+  std::optional<size_t> logToDb(ToolId tool, int id, RawArgs&&... raw_args)
   {
     // If database logging is not running, silently skip.
     if (!db_ready_) {
-      return;
+      return std::nullopt;
     }
 
     static_assert(
@@ -614,7 +614,7 @@ class Logger
 
     // If this (tool, id) pair has been explicitly disabled, skip silently.
     if (!isDbLogEnabled(key)) {
-      return;
+      return std::nullopt;
     }
 
     auto queue_opt = logToDbFindQueue(key);
@@ -629,7 +629,7 @@ class Logger
       // Re-fetch after registration so the data is pushed.
       queue_opt = logToDbFindQueue(key);
       if (!queue_opt.has_value()) {
-        return;
+        return std::nullopt;
       }
     }
 
@@ -641,17 +641,18 @@ class Logger
         // forwarded arguments so the queue owns the data.
         std::tuple<std::decay_t<RawArgs>...>(std::forward<RawArgs>(raw_args)...),
         log_db_running_);
+    return 1;
   }
 
   // Bulk version of logToDb: takes one iterator per column and pushes
   // 'count' tuples assembled from *iters++ in lockstep.
   // Move semantics — caller transfers ownership of the pointed-to values.
   template <FixedString Header, typename... InputIters>
-  void logToDbBulk(ToolId tool, int id, size_t count, InputIters... iters)
+  std::optional<size_t> logToDbBulk(ToolId tool, int id, size_t count, InputIters... iters)
   {
     // If database logging is not running, silently skip.
     if (!db_ready_) {
-      return;
+      return std::nullopt;
     }
 
     static_assert(
@@ -676,7 +677,7 @@ class Logger
 
     SchemaKey key{tool, id};
     if (!isDbLogEnabled(key)) {
-      return;
+      return std::nullopt;
     }
 
     auto queue_opt = logToDbFindQueue(key);
@@ -691,7 +692,7 @@ class Logger
       // Re-fetch after registration so the batch can be pushed.
       queue_opt = logToDbFindQueue(key);
       if (!queue_opt.has_value()) {
-        return;
+        return std::nullopt;
       }
     }
 
@@ -701,13 +702,14 @@ class Logger
       typed->push(
           std::make_tuple(std::move(*iters++)...), log_db_running_);
     }
+    return count;
   }
 
   // Enqueue a metadata row (tool, key, value) for the backend to write
   // to the 'metadata' table (both key and value are TEXT).
   // Thread-safe; uses a mutex-guarded std::queue.
   // Silently drops data if the database backend has not started yet.
-  void logMetadata(ToolId tool, std::string key, std::string value);
+  std::optional<size_t> logToDbMetadata(ToolId tool, std::string key, std::string value);
 #endif
 
   void addSink(spdlog::sink_ptr sink);

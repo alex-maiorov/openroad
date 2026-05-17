@@ -5358,40 +5358,137 @@ void NesterovBase::updateSTA()
 }
 }  // namespace gpl
 
-void gpl::NesterovBase::dumpGradientsToDb(int iter) {
+void gpl::NesterovBase::dumpStaticMetadata() {
+  std::string region_name = pb_->getGroup() ? pb_->getGroup()->getName() : "core";
+  log_->logToDbMetadata(utl::GPL, "region_" + region_name + "_binCntX", std::to_string(bg_.getBinCntX()));
+  log_->logToDbMetadata(utl::GPL, "region_" + region_name + "_binCntY", std::to_string(bg_.getBinCntY()));
+  log_->logToDbMetadata(utl::GPL, "region_" + region_name + "_binSizeX", std::to_string(bg_.getBinSizeX()));
+  log_->logToDbMetadata(utl::GPL, "region_" + region_name + "_binSizeY", std::to_string(bg_.getBinSizeY()));
+  log_->logToDbMetadata(utl::GPL, "region_" + region_name + "_lx", std::to_string(bg_.lx()));
+  log_->logToDbMetadata(utl::GPL, "region_" + region_name + "_ly", std::to_string(bg_.ly()));
+}
+
+void gpl::NesterovBase::dumpCellStaticInfo() {
+  std::vector<int> cell_ids(nb_gcells_.size());
+  std::vector<float> width(nb_gcells_.size());
+  std::vector<float> height(nb_gcells_.size());
+  std::vector<int> is_macro(nb_gcells_.size());
+  std::vector<int> is_locked(nb_gcells_.size());
+
+  for (size_t i = 0; i < nb_gcells_.size(); i++) {
+    cell_ids[i] = i;
+    GCell* gcell = nb_gcells_[i];
+    width[i] = gcell->dx();
+    height[i] = gcell->dy();
+    is_macro[i] = gcell->isMacroInstance() ? 1 : 0;
+    is_locked[i] = gcell->isLocked() ? 1 : 0;
+  }
+
+  log_->logToDbBulk<"CellId,Width,Height,IsMacro,IsLocked">(
+    utl::GPL, 810, nb_gcells_.size(),
+    cell_ids.begin(), width.begin(), height.begin(), is_macro.begin(), is_locked.begin());
+}
+
+void gpl::NesterovBase::dumpBaseIterationScalars(int iter) {
+  log_->logToDb<"Iter,StepLength,DensityPenalty,WlCoefX,WlCoefY,BaseWlCoef,SumOverflow">(
+    utl::GPL, 811, iter, stepLength_, densityPenalty_, wireLengthCoefX_, wireLengthCoefY_, baseWireLengthCoef_, sum_overflow_unscaled_);
+}
+
+void gpl::NesterovBase::dumpBinGrid(int iter) {
+  const std::vector<Bin>& bins = bg_.getBinsConst();
+  size_t num_bins = bins.size();
+  std::vector<int> iters(num_bins, iter);
+  std::vector<int> bin_idx(num_bins);
+  std::vector<float> electro_x(num_bins);
+  std::vector<float> electro_y(num_bins);
+  std::vector<float> density(num_bins);
+
+  for (size_t i = 0; i < num_bins; i++) {
+    bin_idx[i] = i;
+    electro_x[i] = bins[i].electroFieldX();
+    electro_y[i] = bins[i].electroFieldY();
+    density[i] = bins[i].getDensity();
+  }
+
+  log_->logToDbBulk<"Iter,BinIdx,ElectroFieldX,ElectroFieldY,Density">(
+    utl::GPL, 812, num_bins,
+    iters.begin(), bin_idx.begin(), electro_x.begin(), electro_y.begin(), density.begin());
+}
+
+void gpl::NesterovBase::dumpCellDenseGradients(int iter) {
   std::vector<int> iters(nb_gcells_.size(), iter);
   std::vector<int> ids(nb_gcells_.size());
-  for (size_t i = 0; i < nb_gcells_.size(); i++) {
-    ids[i] = i;
-  }
-  
   std::vector<float> pos_x(nb_gcells_.size());
   std::vector<float> pos_y(nb_gcells_.size());
   std::vector<float> wl_x(nb_gcells_.size());
   std::vector<float> wl_y(nb_gcells_.size());
-  std::vector<float> den_x(nb_gcells_.size());
-  std::vector<float> den_y(nb_gcells_.size());
-  std::vector<float> tim_x(nb_gcells_.size());
-  std::vector<float> tim_y(nb_gcells_.size());
-  std::vector<float> rt_x(nb_gcells_.size());
-  std::vector<float> rt_y(nb_gcells_.size());
-  
+
   for (size_t i = 0; i < nb_gcells_.size(); i++) {
+    ids[i] = i;
     pos_x[i] = curSLPCoordi_[i].x;
     pos_y[i] = curSLPCoordi_[i].y;
     wl_x[i] = curSLPWireLengthGrads_[i].x;
     wl_y[i] = curSLPWireLengthGrads_[i].y;
-    den_x[i] = curSLPDensityGrads_[i].x;
-    den_y[i] = curSLPDensityGrads_[i].y;
-    tim_x[i] = curSLPTimingGrads_[i].x;
-    tim_y[i] = curSLPTimingGrads_[i].y;
-    rt_x[i] = curSLPRoutabilityGrads_[i].x;
-    rt_y[i] = curSLPRoutabilityGrads_[i].y;
   }
 
-  log_->logToDbBulk<"Iter,CellId,PosX,PosY,WlX,WlY,DenX,DenY,TimX,TimY,RtX,RtY">(
-    utl::GPL, 802, nb_gcells_.size(), 
-    iters.begin(), ids.begin(), pos_x.begin(), pos_y.begin(),
-    wl_x.begin(), wl_y.begin(), den_x.begin(), den_y.begin(),
-    tim_x.begin(), tim_y.begin(), rt_x.begin(), rt_y.begin());
+  log_->logToDbBulk<"Iter,CellId,PosX,PosY,WlX,WlY">(
+    utl::GPL, 813, nb_gcells_.size(), 
+    iters.begin(), ids.begin(), pos_x.begin(), pos_y.begin(), wl_x.begin(), wl_y.begin());
+}
+
+void gpl::NesterovBase::dumpCellSparseTiming(int iter) {
+  std::vector<int> iters;
+  std::vector<int> ids;
+  std::vector<float> tim_x;
+  std::vector<float> tim_y;
+
+  for (size_t i = 0; i < nb_gcells_.size(); i++) {
+    if (curSLPTimingGrads_[i].x != 0.0f || curSLPTimingGrads_[i].y != 0.0f) {
+      iters.push_back(iter);
+      ids.push_back(i);
+      tim_x.push_back(curSLPTimingGrads_[i].x);
+      tim_y.push_back(curSLPTimingGrads_[i].y);
+    }
+  }
+
+  if (!ids.empty()) {
+    log_->logToDbBulk<"Iter,CellId,TimX,TimY">(
+      utl::GPL, 814, ids.size(),
+      iters.begin(), ids.begin(), tim_x.begin(), tim_y.begin());
+  }
+}
+
+void gpl::NesterovBase::dumpCellSparseRoutability(int iter) {
+  std::vector<int> iters;
+  std::vector<int> ids;
+  std::vector<float> rt_x;
+  std::vector<float> rt_y;
+
+  for (size_t i = 0; i < nb_gcells_.size(); i++) {
+    if (curSLPRoutabilityGrads_[i].x != 0.0f || curSLPRoutabilityGrads_[i].y != 0.0f) {
+      iters.push_back(iter);
+      ids.push_back(i);
+      rt_x.push_back(curSLPRoutabilityGrads_[i].x);
+      rt_y.push_back(curSLPRoutabilityGrads_[i].y);
+    }
+  }
+
+  if (!ids.empty()) {
+    log_->logToDbBulk<"Iter,CellId,RtX,RtY">(
+      utl::GPL, 815, ids.size(),
+      iters.begin(), ids.begin(), rt_x.begin(), rt_y.begin());
+  }
+}
+
+void gpl::NesterovBase::dumpGradientsToDb(int iter) {
+  if (!has_logged_static_) {
+    dumpStaticMetadata();
+    dumpCellStaticInfo();
+    has_logged_static_ = true;
+  }
+  dumpBaseIterationScalars(iter);
+  dumpBinGrid(iter);
+  dumpCellDenseGradients(iter);
+  dumpCellSparseTiming(iter);
+  dumpCellSparseRoutability(iter);
 }
