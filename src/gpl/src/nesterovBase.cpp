@@ -5025,8 +5025,10 @@ std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
     // Each Path object represents a timing point in the path
     sta::Path* path = end->path();
     std::vector<size_t> gCell_indices;
+    std::vector<float> slacks;
 
     while (path != nullptr) {
+      slacks.push_back(path->slack(sta_));
       // Get the pin at this timing point in the path
       const sta::Pin* path_pin = path->pin(sta_);
 
@@ -5062,8 +5064,13 @@ std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
       path = path->prevPath();
     }
 
+    // Reverse to get Source -> Sink order
+    std::reverse(gCell_indices.begin(), gCell_indices.end());
+    std::reverse(slacks.begin(), slacks.end());
+
     // Store the sequence of GCell indices for this violating path
     violating_path.gCellIndexSequence = std::move(gCell_indices);
+    violating_path.slacks = std::move(slacks);
     violating_paths.push_back(violating_path);
   }
   debugPrint(log_,
@@ -5090,6 +5097,8 @@ void gpl::NesterovBase::queryTimingViolations(NesterovBaseCommon& nbc)
   std::vector<int> nodes_path_id;
   std::vector<int> nodes_cell_id;
   std::vector<int> nodes_iter;
+  std::vector<int> nodes_path_seq;
+  std::vector<float> nodes_slack;
   
   for (const auto& path : violating_paths_) {
     int path_id = base_path_id++;
@@ -5097,20 +5106,23 @@ void gpl::NesterovBase::queryTimingViolations(NesterovBaseCommon& nbc)
     slacks_slack.push_back(path.slack);
     slacks_iter.push_back(iter_);
     
-    for (size_t cell_idx : path.gCellIndexSequence) {
+    for (size_t i = 0; i < path.gCellIndexSequence.size(); ++i) {
       nodes_path_id.push_back(path_id);
-      nodes_cell_id.push_back(cell_idx);
+      nodes_cell_id.push_back(path.gCellIndexSequence[i]);
       nodes_iter.push_back(iter_);
+      nodes_path_seq.push_back(i);
+      nodes_slack.push_back(path.slacks[i]);
     }
   }
   
   log_->logToDbBulk<"PathId,Slack,Iter">(
     utl::GPL, 803, "gpl_path_slacks", slacks_path_id.size(),
     slacks_path_id.begin(), slacks_slack.begin(), slacks_iter.begin());
-    
-  log_->logToDbBulk<"PathId,CellId,Iter">(
+
+  log_->logToDbBulk<"PathId,CellId,Iter,PathSeq,Slack">(
     utl::GPL, 804, "gpl_path_cells", nodes_path_id.size(),
-    nodes_path_id.begin(), nodes_cell_id.begin(), nodes_iter.begin());
+    nodes_path_id.begin(), nodes_cell_id.begin(), nodes_iter.begin(), 
+    nodes_path_seq.begin(), nodes_slack.begin());
 }
 
 void gpl::NesterovBase::runTimingPassGradient(NesterovBaseCommon& nbc,

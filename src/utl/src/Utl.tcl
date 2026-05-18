@@ -199,7 +199,7 @@ proc set_db_log_enabled { args } {
   sta::check_argc_eq3 "set_db_log_enabled" $args
   lassign $args tool id enabled
   sta::check_integer "set_db_log_enabled" $id
-  utl::set_db_log_enabled $tool $id $enabled
+  utl::set_db_log_enabled $tool $id [string is true -strict $enabled]
 }
 
 sta::define_cmd_args "get_db_log_enabled" { tool id }
