@@ -754,6 +754,7 @@ inline std::vector<Bin>& BinGrid::getBins()
 struct ViolatingPath
 {
   std::vector<size_t> gCellIndexSequence;
+  std::vector<float> slacks;
   float slack;
 };
 
