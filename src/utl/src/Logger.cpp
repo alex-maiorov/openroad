@@ -3,10 +3,12 @@
 
 #include "utl/Logger.h"
 
+#include <sqlite3.h>
+
 #include <algorithm>
 #include <atomic>
-#include <cstdint>
 #include <chrono>
+#include <cstdint>
 #include <fstream>
 #include <memory>
 #include <ostream>
@@ -16,7 +18,6 @@
 #include <string_view>
 #include <thread>
 #include <utility>
-#include <sqlite3.h>
 
 #include "CommandLineProgress.h"
 #include "utl/Metrics.h"
@@ -120,24 +121,28 @@ void Logger::startLogDb(const char* filename)
 
   if (!db_ready_) {
     // Backend failed to open the database.
-    std::string err_msg = db_start_error_.empty()
-                              ? "unknown error"
-                              : db_start_error_;
+    std::string err_msg
+        = db_start_error_.empty() ? "unknown error" : db_start_error_;
     log_db_running_ = false;
     if (log_db_thread_.joinable()) {
       log_db_thread_.join();
     }
-    this->error(UTL, 109, "Failed to open SQLite database {}: {}",
-                filename, err_msg);
+    this->error(
+        UTL, 109, "Failed to open SQLite database {}: {}", filename, err_msg);
   }
+  this->info(UTL, 117, "Logging to database: {}", filename);
 }
 
 void Logger::stopLogDb()
 {
+  if (!log_db_running_) {
+    return;
+  }
   log_db_running_ = false;
   if (log_db_thread_.joinable()) {
     log_db_thread_.join();
   }
+  this->info(UTL, 118, "Stopping database logging.");
   // All SQLite operations (drain, close) are handled inside the backend
   // thread (logDbLoop).  Nothing more to do here.
 }
@@ -148,7 +153,8 @@ void Logger::stopLogDb()
 
 namespace {
 
-const char* sqlite_type_name(utl::SQLiteType t) {
+const char* sqlite_type_name(utl::SQLiteType t)
+{
   switch (t) {
     case utl::SQLiteType::INTEGER:
       return "INTEGER";
@@ -160,30 +166,40 @@ const char* sqlite_type_name(utl::SQLiteType t) {
 
 // Split a comma-separated header string into individual column names,
 // trimming leading/trailing whitespace from each.
-std::vector<std::string> split_header(std::string_view header) {
+std::vector<std::string> split_header(std::string_view header)
+{
   std::vector<std::string> fields;
   const char* cur = header.data();
   const char* end = cur + header.size();
   while (cur < end) {
     // Skip leading spaces
-    while (cur < end && *cur == ' ') ++cur;
+    while (cur < end && *cur == ' ') {
+      ++cur;
+    }
     const char* start = cur;
     // Find next comma or end
-    while (cur < end && *cur != ',') ++cur;
+    while (cur < end && *cur != ',') {
+      ++cur;
+    }
     // Trim trailing spaces
     const char* stop = cur;
-    while (stop > start && *(stop - 1) == ' ') --stop;
+    while (stop > start && *(stop - 1) == ' ') {
+      --stop;
+    }
     if (stop > start || (!fields.empty() && stop == start)) {
       fields.emplace_back(start, stop - start);
     }
-    if (cur < end) ++cur;  // skip comma
+    if (cur < end) {
+      ++cur;  // skip comma
+    }
   }
   return fields;
 }
 
 std::vector<ColumnDefinition> build_columns_from_runtime(
     std::string_view header,
-    const std::vector<SQLiteType>& types) {
+    const std::vector<SQLiteType>& types)
+{
   auto names = split_header(header);
   // Safety: if counts don't match, pad with "unknown"
   std::vector<ColumnDefinition> cols;
@@ -201,7 +217,8 @@ std::vector<ColumnDefinition> build_columns_from_runtime(
 // logToDb helpers  (called by the thin template in Logger.h)
 // ---------------------------------------------------------------------------
 
-std::optional<std::shared_ptr<AbstractQueue>> Logger::logToDbFindQueue(SchemaKey key)
+std::optional<std::shared_ptr<AbstractQueue>> Logger::logToDbFindQueue(
+    SchemaKey key)
 {
   auto map = schema_registry_.get_map();
   auto it = map->find(key);
@@ -211,23 +228,30 @@ std::optional<std::shared_ptr<AbstractQueue>> Logger::logToDbFindQueue(SchemaKey
   return std::nullopt;
 }
 
-SchemaInfo Logger::logToDbBuildSchemaInfo(
-    sqlite3* db,
-    SchemaKey key,
-    const std::string& table_name,
-    std::string_view header,
-    const std::vector<SQLiteType>& types)
+SchemaInfo Logger::logToDbBuildSchemaInfo(sqlite3* db,
+                                          SchemaKey key,
+                                          const std::string& table_name,
+                                          std::string_view header,
+                                          const std::vector<SQLiteType>& types)
 {
   SchemaInfo info;
   info.table_name = table_name;
   info.columns = build_columns_from_runtime(header, types);
 
+  this->info(UTL,
+             121,
+             "Creating database table {} for {}-{}.",
+             info.table_name,
+             tool_names_[key.tool],
+             key.id);
+
   // Build and execute CREATE TABLE IF NOT EXISTS in one shot.
   std::string create_sql
       = "CREATE TABLE IF NOT EXISTS " + info.table_name + " (";
   for (size_t i = 0; i < info.columns.size(); ++i) {
-    if (i > 0)
+    if (i > 0) {
       create_sql += ", ";
+    }
     create_sql
         += info.columns[i].name + " " + sqlite_type_name(info.columns[i].type);
   }
@@ -238,8 +262,11 @@ SchemaInfo Logger::logToDbBuildSchemaInfo(
   if (rc != SQLITE_OK) {
     std::string err_str = err_msg ? err_msg : "unknown";
     sqlite3_free(err_msg);
-    this->error(UTL, 110, "SQLite error creating table '{}': {}",
-                info.table_name, err_str);
+    this->error(UTL,
+                110,
+                "SQLite error creating table '{}': {}",
+                info.table_name,
+                err_str);
   }
 
   // Insert into table_list to track this registered schema.
@@ -272,8 +299,14 @@ SchemaInfo Logger::logToDbBuildSchemaInfo(
 }
 
 void Logger::logToDbRegisterQueue(SchemaKey key,
-                                   std::shared_ptr<AbstractQueue> queue)
+                                  std::shared_ptr<AbstractQueue> queue)
 {
+  this->info(UTL,
+             120,
+             "Registered schema for {}-{} on table {}.",
+             tool_names_[key.tool],
+             key.id,
+             queue->schema_info().table_name);
   auto registered = schema_registry_.register_schema(key, std::move(queue));
 
   if (log_db_running_.load(std::memory_order_acquire)) {
@@ -283,11 +316,10 @@ void Logger::logToDbRegisterQueue(SchemaKey key,
   }
 }
 
-SchemaInfo Logger::syncCreateTable(
-    SchemaKey key,
-    const char* table_name,
-    std::string_view header,
-    const std::vector<SQLiteType>& types)
+SchemaInfo Logger::syncCreateTable(SchemaKey key,
+                                   const char* table_name,
+                                   std::string_view header,
+                                   const std::vector<SQLiteType>& types)
 {
   auto promise = std::promise<SchemaInfo>();
   auto future = promise.get_future();
@@ -311,7 +343,8 @@ void Logger::logDbLoop()
   // ==================================================================
   // Startup: Open the SQLite database and create system tables.
   // ==================================================================
-  int rc = sqlite3_open_v2(db_filename_.c_str(), &db_,
+  int rc = sqlite3_open_v2(db_filename_.c_str(),
+                           &db_,
                            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
                            nullptr);
   if (rc != SQLITE_OK) {
@@ -369,9 +402,10 @@ void Logger::logDbLoop()
 
   // Populate tool_names table.
   for (int i = 0; i < ToolId::SIZE; ++i) {
-    std::string insert = fmt::format(
-        "INSERT OR REPLACE INTO tool_names VALUES ({}, '{}')",
-        i, tool_names_[i]);
+    std::string insert
+        = fmt::format("INSERT OR REPLACE INTO tool_names VALUES ({}, '{}')",
+                      i,
+                      tool_names_[i]);
     char* err = nullptr;
     if (sqlite3_exec(db_, insert.c_str(), nullptr, nullptr, &err)
         != SQLITE_OK) {
@@ -401,7 +435,8 @@ void Logger::logDbLoop()
   // Main loop
   // ==================================================================
   // Local registry for the backend thread: SchemaKey -> AbstractQueue
-  std::unordered_map<SchemaKey, std::shared_ptr<AbstractQueue>, SchemaKeyHasher> local_registry;
+  std::unordered_map<SchemaKey, std::shared_ptr<AbstractQueue>, SchemaKeyHasher>
+      local_registry;
 
   while (log_db_running_.load(std::memory_order_acquire)) {
     bool did_work = false;
@@ -414,7 +449,7 @@ void Logger::logDbLoop()
         std::lock_guard<std::mutex> lock(create_table_mutex_);
         pending_ct.swap(create_table_queue_);
       }
-       for (auto& cmd : pending_ct) {
+      for (auto& cmd : pending_ct) {
         try {
           SchemaInfo info = logToDbBuildSchemaInfo(
               db_, cmd.key, cmd.table_name, cmd.header, cmd.types);
@@ -455,8 +490,7 @@ void Logger::logDbLoop()
     // --- Phase 4: Schedule and drain queues ---
     size_t total_mem = 0;
     for (auto& entry : local_registry) {
-      total_mem += entry.second->approx_size()
-                   * entry.second->row_size_bytes();
+      total_mem += entry.second->approx_size() * entry.second->row_size_bytes();
     }
 
     bool drained_some = false;
@@ -464,9 +498,8 @@ void Logger::logDbLoop()
     // --- Global pressure: fully drain the largest queue ---
     bool global_pressure = false;
     if (db_log_global_max_mem_ > 0) {
-      const size_t global_limit
-          = static_cast<size_t>(db_log_global_max_mem_
-                                * k_queue_mem_high_water_mark);
+      const size_t global_limit = static_cast<size_t>(
+          db_log_global_max_mem_ * k_queue_mem_high_water_mark);
       global_pressure = (total_mem >= global_limit);
     }
 
@@ -474,8 +507,8 @@ void Logger::logDbLoop()
       AbstractQueue* largest_q = nullptr;
       size_t largest_bytes = 0;
       for (auto& entry : local_registry) {
-        const size_t bytes = entry.second->approx_size()
-                             * entry.second->row_size_bytes();
+        const size_t bytes
+            = entry.second->approx_size() * entry.second->row_size_bytes();
         if (bytes > largest_bytes) {
           largest_bytes = bytes;
           largest_q = entry.second.get();
@@ -493,15 +526,12 @@ void Logger::logDbLoop()
         }
 
         auto& q = entry.second;
-        const size_t channel_bytes
-            = q->approx_size() * q->row_size_bytes();
-        const size_t channel_limit
-            = static_cast<size_t>(db_log_per_channel_max_mem_
-                                  * k_queue_mem_high_water_mark);
+        const size_t channel_bytes = q->approx_size() * q->row_size_bytes();
+        const size_t channel_limit = static_cast<size_t>(
+            db_log_per_channel_max_mem_ * k_queue_mem_high_water_mark);
 
         if (channel_bytes >= channel_limit) {
-          const size_t bytes_to_clear
-              = channel_bytes - channel_limit + 1;
+          const size_t bytes_to_clear = channel_bytes - channel_limit + 1;
           const size_t row_size = q->row_size_bytes();
           const size_t rows_to_clear
               = (bytes_to_clear + row_size - 1) / row_size;
@@ -513,8 +543,7 @@ void Logger::logDbLoop()
       if (!drained_some) {
         // --- Round-robin: fully clear every queue ---
         for (auto& entry : local_registry) {
-          drained_some
-              |= (entry.second->drain_to_db(db_, SIZE_MAX) > 0);
+          drained_some |= (entry.second->drain_to_db(db_, SIZE_MAX) > 0);
         }
       }
       did_work |= drained_some;
@@ -576,7 +605,8 @@ void Logger::logDbLoop()
     return work;
   };
 
-  while (drain_all()) {}
+  while (drain_all()) {
+  }
 
   // Destroy queues before closing so TypedQueue destructors can finalize
   // their prepared statements.
@@ -926,7 +956,9 @@ size_t Logger::getDbLogPerChannelMaxMem() const
   return db_log_per_channel_max_mem_;
 }
 
-std::optional<size_t> Logger::logToDbMetadata(ToolId tool, std::string key, std::string value)
+std::optional<size_t> Logger::logToDbMetadata(ToolId tool,
+                                              std::string key,
+                                              std::string value)
 {
   if (!db_ready_) {
     return std::nullopt;
@@ -954,22 +986,25 @@ bool Logger::drainMetadataQueue()
     auto [mtool, mkey, mval] = std::move(local_meta.front());
     local_meta.pop();
 
-    char* sql = sqlite3_mprintf(
-        "INSERT INTO metadata VALUES (%d, %Q, %Q)",
-        static_cast<int>(mtool), mkey.c_str(), mval.c_str());
+    char* sql = sqlite3_mprintf("INSERT INTO metadata VALUES (%d, %Q, %Q)",
+                                static_cast<int>(mtool),
+                                mkey.c_str(),
+                                mval.c_str());
     int rc = sqlite3_exec(db_, sql, nullptr, nullptr, nullptr);
     sqlite3_free(sql);
 
     if (rc != SQLITE_OK) {
-      this->warn(UTL, 116,
+      this->warn(UTL,
+                 116,
                  "Failed to insert metadata row for tool={} key='{}': {}",
-                 static_cast<int>(mtool), mkey, sqlite3_errmsg(db_));
+                 static_cast<int>(mtool),
+                 mkey,
+                 sqlite3_errmsg(db_));
       meta_ok = false;
       break;
     }
   }
-  sqlite3_exec(db_, meta_ok ? "COMMIT" : "ROLLBACK",
-               nullptr, nullptr, nullptr);
+  sqlite3_exec(db_, meta_ok ? "COMMIT" : "ROLLBACK", nullptr, nullptr, nullptr);
   return true;
 }
 
@@ -981,6 +1016,8 @@ bool Logger::isDbLogEnabled(SchemaKey key) const
 
 void Logger::setDbLogEnabled(ToolId tool, int id, bool enabled)
 {
+  this->info(UTL, 119, "Database logging for {}-{} is {}.",
+             tool_names_[tool], id, enabled ? "enabled" : "disabled");
   SchemaKey key{tool, id};
   std::lock_guard<std::mutex> lock(db_log_enabled_mutex_);
   if (enabled) {

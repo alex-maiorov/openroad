@@ -143,16 +143,16 @@ size_t get_db_log_per_channel_max_mem()
   return logger->getDbLogPerChannelMaxMem();
 }
 
-void set_db_log_enabled(ToolId tool, int id, bool enabled)
+void set_db_log_enabled(const std::string& tool, int id, bool enabled)
 {
   utl::Logger* logger = ord::getLogger();
-  logger->setDbLogEnabled(tool, id, enabled);
+  logger->setDbLogEnabled(utl::Logger::findToolId(tool.c_str()), id, enabled);
 }
 
-bool get_db_log_enabled(ToolId tool, int id)
+bool get_db_log_enabled(const std::string& tool, int id)
 {
   utl::Logger* logger = ord::getLogger();
-  return logger->getDbLogEnabled(tool, id);
+  return logger->getDbLogEnabled(utl::Logger::findToolId(tool.c_str()), id);
 }
 
 } // namespace
