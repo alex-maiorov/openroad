@@ -7,11 +7,16 @@ class GplPreprocessor:
     """Library module for preprocessing GPL database logs."""
     
     @staticmethod
-    def run(db_path: str):
+    def run(db_path: str, force_rebuild=False):
         """Perform preprocessing on the database at the given path."""
         print(f"Opening {db_path} for R/W preprocessing...")
         conn = sqlite3.connect(db_path)
         
+        if force_rebuild:
+            print("Force rebuild requested. Dropping existing derived tables...")
+            conn.execute("DROP TABLE IF EXISTS gpl_derived_gradients")
+            conn.commit()
+            
         # Check if table already exists
         cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='gpl_derived_gradients'")
         if cursor.fetchone():
@@ -27,8 +32,13 @@ class GplPreprocessor:
         df_timing = pd.read_sql_query("SELECT * FROM gpl_cell_timing_gradients", conn)
         print(f"  Read {len(df_timing)} rows.")
         
-        print("Merging tables...")
-        df = pd.merge(df_dense, df_timing, on=['Iter', 'CellId'], suffixes=('_wl', '_tim'))
+        print("Merging tables (using LEFT join because timing gradients are sparse)...")
+        # Use a left merge to preserve all dense gradients. Missing timing gradients imply 0 force.
+        df = pd.merge(df_dense, df_timing, on=['Iter', 'CellId'], how='left')
+        
+        # Fill missing sparse gradients with 0
+        df['TimX'] = df['TimX'].fillna(0.0)
+        df['TimY'] = df['TimY'].fillna(0.0)
         
         print("Calculating derived metrics...")
         df['mag_wl'] = np.sqrt(df['WlX']**2 + df['WlY']**2)

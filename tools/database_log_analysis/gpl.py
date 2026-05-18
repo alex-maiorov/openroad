@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from typing import Tuple, Dict
+from typing import Tuple, Dict, List, Optional
 from .core import AnalysisModule
 
 class GplAnalysis(AnalysisModule):
@@ -8,7 +8,36 @@ class GplAnalysis(AnalysisModule):
     Analysis module for the GPL (Global Placer) tool.
     Provides access to Nesterov placement metrics, gradients, and bin grids
     as Pandas DataFrames along with column descriptions.
+    
+    NOTE ON SPARSITY:
+    Routability and timing gradients are sparse by design. A missing record in
+    these tables for a given (Iteration, CellId) implicitly means the gradient
+    force was exactly zero for that step.
     """
+
+    def _build_filter_query(self, table_name: str, iter_range: Optional[Tuple[int, int]] = None, 
+                            cell_range: Optional[Tuple[int, int]] = None, 
+                            cell_ids: Optional[List[int]] = None) -> str:
+        """Helper to build a SQL query with chunking/filtering."""
+        query = f"SELECT * FROM [{table_name}]"
+        conditions = []
+        
+        if iter_range:
+            conditions.append(f"Iter >= {iter_range[0]} AND Iter <= {iter_range[1]}")
+            
+        if cell_range:
+            conditions.append(f"CellId >= {cell_range[0]} AND CellId <= {cell_range[1]}")
+            
+        if cell_ids is not None:
+            if len(cell_ids) == 0:
+                return f"SELECT * FROM [{table_name}] WHERE 1=0"
+            ids_str = ",".join(map(str, cell_ids))
+            conditions.append(f"CellId IN ({ids_str})")
+            
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+            
+        return query
 
     @property
     def iteration_scalars(self) -> Tuple[pd.DataFrame, Dict[str, str]]:
@@ -27,12 +56,12 @@ class GplAnalysis(AnalysisModule):
         }
         return df, desc
 
-    @property
-    def bin_grid(self) -> Tuple[pd.DataFrame, Dict[str, str]]:
+    def get_bin_grid(self, iter_range: Optional[Tuple[int, int]] = None) -> Tuple[pd.DataFrame, Dict[str, str]]:
         """
-        Raw Data: Bin grid state at various iterations.
+        Raw Data: Bin grid state at various iterations (Supports piece-wise loading).
         """
-        df = self.db.get_table("gpl_bin_grid")
+        sql = self._build_filter_query("gpl_bin_grid", iter_range=iter_range)
+        df = self.db.query(sql)
         desc = {
             "Iter": "The Nesterov iteration number",
             "BinIdx": "Flat index of the bin",
@@ -57,12 +86,14 @@ class GplAnalysis(AnalysisModule):
         }
         return df, desc
 
-    @property
-    def cell_dense_gradients(self) -> Tuple[pd.DataFrame, Dict[str, str]]:
+    def get_cell_dense_gradients(self, iter_range: Optional[Tuple[int, int]] = None,
+                                 cell_range: Optional[Tuple[int, int]] = None,
+                                 cell_ids: Optional[List[int]] = None) -> Tuple[pd.DataFrame, Dict[str, str]]:
         """
-        Raw Data: Dense gradient components for cells across iterations.
+        Raw Data: Dense gradient components for cells across iterations (Supports piece-wise loading).
         """
-        df = self.db.get_table("gpl_cell_dense_gradients")
+        sql = self._build_filter_query("gpl_cell_dense_gradients", iter_range, cell_range, cell_ids)
+        df = self.db.query(sql)
         desc = {
             "Iter": "The Nesterov iteration number",
             "CellId": "The index of the cell in the placer",
@@ -73,13 +104,16 @@ class GplAnalysis(AnalysisModule):
         }
         return df, desc
 
-    @property
-    def cell_timing_gradients(self) -> Tuple[pd.DataFrame, Dict[str, str]]:
+    def get_cell_timing_gradients(self, iter_range: Optional[Tuple[int, int]] = None,
+                                  cell_range: Optional[Tuple[int, int]] = None,
+                                  cell_ids: Optional[List[int]] = None) -> Tuple[pd.DataFrame, Dict[str, str]]:
         """
-        Raw Data: Sparse timing gradient components.
+        Raw Data: Sparse timing gradient components (Supports piece-wise loading).
+        NOTE: Missing records imply 0.0 force for that iteration/cell.
         """
         try:
-            df = self.db.get_table("gpl_cell_timing_gradients")
+            sql = self._build_filter_query("gpl_cell_timing_gradients", iter_range, cell_range, cell_ids)
+            df = self.db.query(sql)
         except ValueError:
             df = pd.DataFrame()
             
@@ -91,13 +125,16 @@ class GplAnalysis(AnalysisModule):
         }
         return df, desc
 
-    @property
-    def cell_routability_gradients(self) -> Tuple[pd.DataFrame, Dict[str, str]]:
+    def get_cell_routability_gradients(self, iter_range: Optional[Tuple[int, int]] = None,
+                                       cell_range: Optional[Tuple[int, int]] = None,
+                                       cell_ids: Optional[List[int]] = None) -> Tuple[pd.DataFrame, Dict[str, str]]:
         """
-        Raw Data: Sparse routability gradient components.
+        Raw Data: Sparse routability gradient components (Supports piece-wise loading).
+        NOTE: Missing records imply 0.0 force for that iteration/cell.
         """
         try:
-            df = self.db.get_table("gpl_cell_routability_gradients")
+            sql = self._build_filter_query("gpl_cell_routability_gradients", iter_range, cell_range, cell_ids)
+            df = self.db.query(sql)
         except ValueError:
             df = pd.DataFrame()
             
@@ -109,13 +146,16 @@ class GplAnalysis(AnalysisModule):
         }
         return df, desc
 
-    @property
-    def cell_derived_gradients(self) -> Tuple[pd.DataFrame, Dict[str, str]]:
+    def get_cell_derived_gradients(self, iter_range: Optional[Tuple[int, int]] = None,
+                                   cell_range: Optional[Tuple[int, int]] = None,
+                                   cell_ids: Optional[List[int]] = None) -> Tuple[pd.DataFrame, Dict[str, str]]:
         """
         Derived Data: Precomputed gradient metrics (magnitudes, dot products, opposition).
+        Supports piece-wise loading to prevent OOM on 22M+ rows.
         """
         try:
-            df = self.db.get_table("gpl_derived_gradients")
+            sql = self._build_filter_query("gpl_derived_gradients", iter_range, cell_range, cell_ids)
+            df = self.db.query(sql)
         except ValueError:
             df = pd.DataFrame()
             
@@ -175,12 +215,15 @@ class GplAnalysis(AnalysisModule):
         }
         return df, desc
 
-    def get_cell_movements(self) -> Tuple[pd.DataFrame, Dict[str, str]]:
+    def get_cell_movements(self, iter_range: Optional[Tuple[int, int]] = None,
+                           cell_range: Optional[Tuple[int, int]] = None,
+                           cell_ids: Optional[List[int]] = None) -> Tuple[pd.DataFrame, Dict[str, str]]:
         """
         Derived Data: Computes the displacement of each cell between iterations.
         Calculates DeltaX, DeltaY, and Euclidean Distance moved using NumPy vectorization.
+        Supports piece-wise loading.
         """
-        df, _ = self.cell_dense_gradients
+        df, _ = self.get_cell_dense_gradients(iter_range, cell_range, cell_ids)
         if df.empty:
             return df, {}
             
@@ -239,9 +282,11 @@ class GplAnalysis(AnalysisModule):
         res[f"{prefix}UnitY"] = unit_y
         return res
 
-    def get_wl_gradient_vectors(self) -> Tuple[pd.DataFrame, Dict[str, str]]:
-        """Computes magnitude and unit vectors for Wirelength gradients."""
-        df, _ = self.cell_dense_gradients
+    def get_wl_gradient_vectors(self, iter_range: Optional[Tuple[int, int]] = None,
+                                cell_range: Optional[Tuple[int, int]] = None,
+                                cell_ids: Optional[List[int]] = None) -> Tuple[pd.DataFrame, Dict[str, str]]:
+        """Computes magnitude and unit vectors for Wirelength gradients. Supports piece-wise loading."""
+        df, _ = self.get_cell_dense_gradients(iter_range, cell_range, cell_ids)
         if df.empty: return df, {}
         res = self._get_gradient_vectors_helper(df.copy(), "WlX", "WlY", "Wl")
         desc = {
@@ -253,9 +298,11 @@ class GplAnalysis(AnalysisModule):
         }
         return res, desc
 
-    def get_tim_gradient_vectors(self) -> Tuple[pd.DataFrame, Dict[str, str]]:
-        """Computes magnitude and unit vectors for Timing gradients."""
-        df, _ = self.cell_timing_gradients
+    def get_tim_gradient_vectors(self, iter_range: Optional[Tuple[int, int]] = None,
+                                 cell_range: Optional[Tuple[int, int]] = None,
+                                 cell_ids: Optional[List[int]] = None) -> Tuple[pd.DataFrame, Dict[str, str]]:
+        """Computes magnitude and unit vectors for Timing gradients. Supports piece-wise loading."""
+        df, _ = self.get_cell_timing_gradients(iter_range, cell_range, cell_ids)
         if df.empty: return df, {}
         res = self._get_gradient_vectors_helper(df.copy(), "TimX", "TimY", "Tim")
         desc = {
@@ -267,19 +314,23 @@ class GplAnalysis(AnalysisModule):
         }
         return res, desc
 
-    def get_estimated_density_forces(self, region_name: str = "core") -> Tuple[pd.DataFrame, Dict[str, str]]:
+    def get_estimated_density_forces(self, iter_range: Optional[Tuple[int, int]] = None,
+                                     cell_range: Optional[Tuple[int, int]] = None,
+                                     cell_ids: Optional[List[int]] = None,
+                                     region_name: str = "core") -> Tuple[pd.DataFrame, Dict[str, str]]:
         """
         Derived Data: Estimates the density force applied to each cell using a 
         Summed Area Table (Integral Image) approach for O(1) force calculation per cell.
         This is thousands of times faster than the iterative overlap method.
+        Supports piece-wise loading.
         """
-        # 1. Get all necessary data
-        cells_df, _ = self.cell_dense_gradients
+        # 1. Get all necessary data (filtered)
+        cells_df, _ = self.get_cell_dense_gradients(iter_range, cell_range, cell_ids)
         if cells_df.empty:
             return pd.DataFrame(), {}
         
         static_df, _ = self.cell_static_info
-        bins_df, _ = self.bin_grid
+        bins_df, _ = self.get_bin_grid(iter_range)
         scalars_df, _ = self.iteration_scalars
         
         # Metadata
@@ -378,9 +429,12 @@ class GplAnalysis(AnalysisModule):
         }
         return res, desc
 
-    def get_density_force_vectors(self, region_name: str = "core") -> Tuple[pd.DataFrame, Dict[str, str]]:
-        """Computes magnitude and unit vectors for Estimated Density Forces."""
-        res, _ = self.get_estimated_density_forces(region_name)
+    def get_density_force_vectors(self, iter_range: Optional[Tuple[int, int]] = None,
+                                  cell_range: Optional[Tuple[int, int]] = None,
+                                  cell_ids: Optional[List[int]] = None,
+                                  region_name: str = "core") -> Tuple[pd.DataFrame, Dict[str, str]]:
+        """Computes magnitude and unit vectors for Estimated Density Forces. Supports piece-wise loading."""
+        res, _ = self.get_estimated_density_forces(iter_range, cell_range, cell_ids, region_name)
         if res.empty: return res, {}
         mag = res["EstDensityForceMag"].values
         mask = mag > 0
@@ -396,11 +450,12 @@ class GplAnalysis(AnalysisModule):
         }
         return res, desc
 
-    def get_bin_analytics(self) -> Tuple[pd.DataFrame, Dict[str, str]]:
+    def get_bin_analytics(self, iter_range: Optional[Tuple[int, int]] = None) -> Tuple[pd.DataFrame, Dict[str, str]]:
         """
         Derived Data: Aggregates bin density per iteration to find max, mean, and std density.
+        Supports piece-wise loading.
         """
-        df, _ = self.bin_grid
+        df, _ = self.get_bin_grid(iter_range)
         if df.empty: return df, {}
         agg_df = df.groupby("Iter")["Density"].agg(
             MaxDensity='max', MeanDensity='mean', StdDensity='std'
@@ -413,11 +468,15 @@ class GplAnalysis(AnalysisModule):
         }
         return agg_df, desc
 
-    def get_cell_bin_mapping(self, region_name: str = "core") -> Tuple[pd.DataFrame, Dict[str, str]]:
+    def get_cell_bin_mapping(self, iter_range: Optional[Tuple[int, int]] = None,
+                             cell_range: Optional[Tuple[int, int]] = None,
+                             cell_ids: Optional[List[int]] = None,
+                             region_name: str = "core") -> Tuple[pd.DataFrame, Dict[str, str]]:
         """
         Derived Data: Calculates which bin index each cell falls into at each iteration.
+        Supports piece-wise loading.
         """
-        df, _ = self.cell_dense_gradients
+        df, _ = self.get_cell_dense_gradients(iter_range, cell_range, cell_ids)
         if df.empty: return df, {}
         try:
             lx = float(self.db.get_metadata(f"region_{region_name}_lx")[0])
@@ -453,5 +512,51 @@ class GplAnalysis(AnalysisModule):
             "MinSlack": "The worst (minimum) slack among all logged paths",
             "MaxSlack": "The best (maximum) slack among all logged paths",
             "MeanSlack": "The average slack among all logged paths"
+        }
+        return agg_df, desc
+
+    def get_critical_path_evolution(self, top_k: int = 20) -> pd.DataFrame:
+        """
+        Workflow: Identifies any PathId that was among the worst 'top_k' at ANY point
+        in the placement, and returns its full history across all iterations.
+        """
+        df_slacks, _ = self.path_slacks
+        if df_slacks.empty:
+            return pd.DataFrame()
+
+        # 1. Identify "at any point" worst paths
+        # We find paths that appear in the bottom K for any iteration
+        def get_worst_in_iter(group):
+            return group.nsmallest(top_k, "Slack")["PathId"]
+
+        worst_series = df_slacks.groupby("Iter").apply(get_worst_in_iter, include_groups=False)
+        # Convert to numpy and flatten to handle any DataFrame/Series ambiguity from apply()
+        worst_path_ids = np.unique(worst_series.values)
+        
+        # 2. Extract full history for these specific paths
+        history = df_slacks[df_slacks["PathId"].isin(worst_path_ids)].copy()
+        return history.sort_values(["PathId", "Iter"])
+
+    def get_gradient_balance_stats(self, iter_range: Optional[Tuple[int, int]] = None) -> Tuple[pd.DataFrame, Dict[str, str]]:
+        """
+        Derived Data: Calculates the ratio and statistics of Timing vs Wirelength gradients.
+        Helps identify if timing forces are being drowned out or are too aggressive.
+        """
+        df, _ = self.get_cell_derived_gradients(iter_range=iter_range)
+        if df.empty: return df, {}
+        
+        # Calculate ratio, handling zeros
+        df['ratio_tim_wl'] = np.where(df['mag_wl'] > 0, df['mag_tim'] / df['mag_wl'], 0.0)
+        
+        agg_df = df.groupby("Iter")['ratio_tim_wl'].agg(
+            MeanRatio='mean', MedianRatio='median', MaxRatio='max', StdRatio='std'
+        ).reset_index()
+        
+        desc = {
+            "Iter": "The Nesterov iteration number",
+            "MeanRatio": "Average ratio of Timing Gradient magnitude to WL Gradient magnitude",
+            "MedianRatio": "Median ratio of Timing vs WL magnitude",
+            "MaxRatio": "Maximum ratio observed in any cell",
+            "StdRatio": "Standard deviation of the force ratio"
         }
         return agg_df, desc
