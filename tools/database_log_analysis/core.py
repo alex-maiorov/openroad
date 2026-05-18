@@ -15,12 +15,22 @@ class DatabaseLog:
     def _cache_schema(self):
         """Load available tables and metadata from the system tables using raw sqlite3."""
         self.tables = {}
+        # Load from table_list
         try:
             rows = self.conn.execute("SELECT table_name, column_names FROM table_list").fetchall()
             for r in rows:
                 self.tables[r['table_name']] = r['column_names'].split(',')
         except sqlite3.OperationalError:
             pass # DB might be completely empty or missing system tables
+        
+        # Scan sqlite_master for any other tables not in table_list
+        cursor = self.conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN (SELECT table_name FROM table_list)")
+        for r in cursor:
+            table_name = r['name']
+            # Get column names
+            col_cursor = self.conn.execute(f"PRAGMA table_info('{table_name}')")
+            cols = [c['name'] for c in col_cursor]
+            self.tables[table_name] = cols
             
         self.metadata = {}
         try:

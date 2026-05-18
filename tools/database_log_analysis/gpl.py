@@ -110,6 +110,27 @@ class GplAnalysis(AnalysisModule):
         return df, desc
 
     @property
+    def cell_derived_gradients(self) -> Tuple[pd.DataFrame, Dict[str, str]]:
+        """
+        Derived Data: Precomputed gradient metrics (magnitudes, dot products, opposition).
+        """
+        try:
+            df = self.db.get_table("gpl_derived_gradients")
+        except ValueError:
+            df = pd.DataFrame()
+            
+        desc = {
+            "Iter": "The Nesterov iteration number",
+            "CellId": "The index of the cell in the placer",
+            "mag_wl": "Magnitude of the Wirelength gradient",
+            "mag_tim": "Magnitude of the Timing gradient",
+            "dot_wl_tim": "Dot product of WL and Timing gradients",
+            "opposition": "Measure of conflict between WL and Timing forces"
+        }
+        return df, desc
+
+
+    @property
     def path_slacks(self) -> Tuple[pd.DataFrame, Dict[str, str]]:
         """
         Raw Data: Slack for timing paths.
@@ -163,13 +184,24 @@ class GplAnalysis(AnalysisModule):
         if df.empty:
             return df, {}
             
-        # Sort by cell and then by iteration for accurate diffs
+        # Ensure we work with a copy and sorted data
         df = df.sort_values(by=["CellId", "Iter"])
         
-        # Calculate diffs within each cell's group
-        df["DeltaX"] = df.groupby("CellId")["PosX"].diff().fillna(0.0)
-        df["DeltaY"] = df.groupby("CellId")["PosY"].diff().fillna(0.0)
-        df["Distance"] = np.sqrt(df["DeltaX"]**2 + df["DeltaY"]**2)
+        # Calculate diffs using numpy to avoid groupby overhead
+        mask = df["CellId"].values[1:] == df["CellId"].values[:-1]
+        
+        pos_x = df["PosX"].values
+        pos_y = df["PosY"].values
+        
+        delta_x = np.zeros_like(pos_x)
+        delta_y = np.zeros_like(pos_y)
+        
+        delta_x[1:][mask] = pos_x[1:][mask] - pos_x[:-1][mask]
+        delta_y[1:][mask] = pos_y[1:][mask] - pos_y[:-1][mask]
+        
+        df["DeltaX"] = delta_x
+        df["DeltaY"] = delta_y
+        df["Distance"] = np.sqrt(delta_x**2 + delta_y**2)
         
         desc = {
             "Iter": "The Nesterov iteration number",
@@ -184,12 +216,28 @@ class GplAnalysis(AnalysisModule):
         return df[["Iter", "CellId", "PosX", "PosY", "DeltaX", "DeltaY", "Distance"]], desc
 
     def _get_gradient_vectors_helper(self, df: pd.DataFrame, x_col: str, y_col: str, prefix: str) -> pd.DataFrame:
-        """Helper to compute magnitude and unit vector components."""
-        mag = np.sqrt(df[x_col]**2 + df[y_col]**2)
-        df[f"{prefix}Mag"] = mag
-        df[f"{prefix}UnitX"] = np.where(mag > 0, df[x_col] / mag, 0.0)
-        df[f"{prefix}UnitY"] = np.where(mag > 0, df[y_col] / mag, 0.0)
-        return df
+        """Helper to compute magnitude and unit vector components using NumPy."""
+        if df.empty:
+            return df
+        
+        x = df[x_col].values
+        y = df[y_col].values
+        mag = np.sqrt(x**2 + y**2)
+        
+        # Create result DataFrame
+        res = df.copy()
+        res[f"{prefix}Mag"] = mag
+        
+        # Vectorized unit vector calculation
+        mask = mag > 0
+        unit_x = np.zeros_like(x)
+        unit_y = np.zeros_like(y)
+        unit_x[mask] = x[mask] / mag[mask]
+        unit_y[mask] = y[mask] / mag[mask]
+        
+        res[f"{prefix}UnitX"] = unit_x
+        res[f"{prefix}UnitY"] = unit_y
+        return res
 
     def get_wl_gradient_vectors(self) -> Tuple[pd.DataFrame, Dict[str, str]]:
         """Computes magnitude and unit vectors for Wirelength gradients."""
@@ -219,15 +267,125 @@ class GplAnalysis(AnalysisModule):
         }
         return res, desc
 
+    def get_estimated_density_forces(self, region_name: str = "core") -> Tuple[pd.DataFrame, Dict[str, str]]:
+        """
+        Derived Data: Estimates the density force applied to each cell using a 
+        Summed Area Table (Integral Image) approach for O(1) force calculation per cell.
+        This is thousands of times faster than the iterative overlap method.
+        """
+        # 1. Get all necessary data
+        cells_df, _ = self.cell_dense_gradients
+        if cells_df.empty:
+            return pd.DataFrame(), {}
+        
+        static_df, _ = self.cell_static_info
+        bins_df, _ = self.bin_grid
+        scalars_df, _ = self.iteration_scalars
+        
+        # Metadata
+        try:
+            lx = float(self.db.get_metadata(f"region_{region_name}_lx")[0])
+            ly = float(self.db.get_metadata(f"region_{region_name}_ly")[0])
+            bin_size_x = float(self.db.get_metadata(f"region_{region_name}_binSizeX")[0])
+            bin_size_y = float(self.db.get_metadata(f"region_{region_name}_binSizeY")[0])
+            bin_cnt_x = int(self.db.get_metadata(f"region_{region_name}_binCntX")[0])
+            bin_cnt_y = int(self.db.get_metadata(f"region_{region_name}_binCntY")[0])
+        except (IndexError, ValueError):
+            raise ValueError(f"Missing electrostatic bin grid metadata for region '{region_name}'.")
+
+        # 2. Build the Integral Image (Prefix Sum) of the Electrostatic Field
+        iters = np.sort(bins_df["Iter"].unique())
+        num_iters = len(iters)
+        iter_to_idx = {it: i for i, it in enumerate(iters)}
+        
+        field_x_grid = np.zeros((num_iters, bin_cnt_y, bin_cnt_x), dtype=np.float32)
+        field_y_grid = np.zeros((num_iters, bin_cnt_y, bin_cnt_x), dtype=np.float32)
+        
+        iter_idxs = np.array([iter_to_idx[it] for it in bins_df["Iter"]])
+        bin_idxs = bins_df["BinIdx"].values
+        bx_idxs = bin_idxs % bin_cnt_x
+        by_idxs = bin_idxs // bin_cnt_x
+        
+        field_x_grid[iter_idxs, by_idxs, bx_idxs] = bins_df["ElectroFieldX"].values
+        field_y_grid[iter_idxs, by_idxs, bx_idxs] = bins_df["ElectroFieldY"].values
+        
+        sat_x = np.zeros((num_iters, bin_cnt_y + 1, bin_cnt_x + 1), dtype=np.float64)
+        sat_y = np.zeros((num_iters, bin_cnt_y + 1, bin_cnt_x + 1), dtype=np.float64)
+        
+        bin_area = bin_size_x * bin_size_y
+        sat_x[:, 1:, 1:] = np.cumsum(np.cumsum(field_x_grid, axis=1), axis=2) * bin_area
+        sat_y[:, 1:, 1:] = np.cumsum(np.cumsum(field_y_grid, axis=1), axis=2) * bin_area
+        
+        # 3. Vectorized Force Calculation
+        cell_info = pd.merge(cells_df, static_df[["CellId", "Width", "Height"]], on="CellId")
+        cell_info = pd.merge(cell_info, scalars_df[["Iter", "DensityPenalty"]], on="Iter")
+        
+        pos_x = cell_info["PosX"].values
+        pos_y = cell_info["PosY"].values
+        width = cell_info["Width"].values
+        height = cell_info["Height"].values
+        penalty = cell_info["DensityPenalty"].values
+        c_iter_idxs = np.array([iter_to_idx[it] for it in cell_info["Iter"]])
+        
+        c_lx = (pos_x - width/2 - lx) / bin_size_x
+        c_ly = (pos_y - height/2 - ly) / bin_size_y
+        c_ux = (pos_x + width/2 - lx) / bin_size_x
+        c_uy = (pos_y + height/2 - ly) / bin_size_y
+        
+        c_lx = np.clip(c_lx, 0, bin_cnt_x)
+        c_ly = np.clip(c_ly, 0, bin_cnt_y)
+        c_ux = np.clip(c_ux, 0, bin_cnt_x)
+        c_uy = np.clip(c_uy, 0, bin_cnt_y)
+        
+        def interpolate_sat(sat, iter_idx, x, y):
+            ix = np.floor(x).astype(int)
+            iy = np.floor(y).astype(int)
+            fx = x - ix
+            fy = y - iy
+            # Clamp ix, iy for safety
+            ix = np.clip(ix, 0, bin_cnt_x-1)
+            iy = np.clip(iy, 0, bin_cnt_y-1)
+            
+            v00 = sat[iter_idx, iy, ix]
+            v10 = sat[iter_idx, iy, ix+1]
+            v01 = sat[iter_idx, iy+1, ix]
+            v11 = sat[iter_idx, iy+1, ix+1]
+            return (1-fx)*(1-fy)*v00 + fx*(1-fy)*v10 + (1-fx)*fy*v01 + fx*fy*v11
+
+        i_lx_ly_x = interpolate_sat(sat_x, c_iter_idxs, c_lx, c_ly)
+        i_ux_ly_x = interpolate_sat(sat_x, c_iter_idxs, c_ux, c_ly)
+        i_lx_uy_x = interpolate_sat(sat_x, c_iter_idxs, c_lx, c_uy)
+        i_ux_uy_x = interpolate_sat(sat_x, c_iter_idxs, c_ux, c_uy)
+        force_x = (i_ux_uy_x - i_lx_uy_x - i_ux_ly_x + i_lx_ly_x) * penalty
+        
+        i_lx_ly_y = interpolate_sat(sat_y, c_iter_idxs, c_lx, c_ly)
+        i_ux_ly_y = interpolate_sat(sat_y, c_iter_idxs, c_ux, c_ly)
+        i_lx_uy_y = interpolate_sat(sat_y, c_iter_idxs, c_lx, c_uy)
+        i_ux_uy_y = interpolate_sat(sat_y, c_iter_idxs, c_ux, c_uy)
+        force_y = (i_ux_uy_y - i_lx_uy_y - i_ux_ly_y + i_lx_ly_y) * penalty
+        
+        res = cell_info[["Iter", "CellId"]].copy()
+        res["EstDensityForceX"] = force_x.astype(np.float32)
+        res["EstDensityForceY"] = force_y.astype(np.float32)
+        res["EstDensityForceMag"] = np.sqrt(force_x**2 + force_y**2).astype(np.float32)
+        
+        desc = {
+            "Iter": "The Nesterov iteration number",
+            "CellId": "The index of the cell in the placer",
+            "EstDensityForceX": "Estimated density gradient force (X) applied to cell",
+            "EstDensityForceY": "Estimated density gradient force (Y) applied to cell",
+            "EstDensityForceMag": "Magnitude of the estimated density force vector"
+        }
+        return res, desc
+
     def get_density_force_vectors(self, region_name: str = "core") -> Tuple[pd.DataFrame, Dict[str, str]]:
         """Computes magnitude and unit vectors for Estimated Density Forces."""
         res, _ = self.get_estimated_density_forces(region_name)
         if res.empty: return res, {}
-        
-        # Already has Mag, just add units
-        mag = res["EstDensityForceMag"]
-        res["EstDensityForceUnitX"] = np.where(mag > 0, res["EstDensityForceX"] / mag, 0.0)
-        res["EstDensityForceUnitY"] = np.where(mag > 0, res["EstDensityForceY"] / mag, 0.0)
+        mag = res["EstDensityForceMag"].values
+        mask = mag > 0
+        res["EstDensityForceUnitX"] = np.where(mask, res["EstDensityForceX"] / mag, 0.0)
+        res["EstDensityForceUnitY"] = np.where(mask, res["EstDensityForceY"] / mag, 0.0)
         
         desc = {
             "Iter": "The Nesterov iteration number",
@@ -243,184 +401,57 @@ class GplAnalysis(AnalysisModule):
         Derived Data: Aggregates bin density per iteration to find max, mean, and std density.
         """
         df, _ = self.bin_grid
-        if df.empty:
-            return df, {}
-            
-        # Group by iteration and calculate metrics
+        if df.empty: return df, {}
         agg_df = df.groupby("Iter")["Density"].agg(
-            MaxDensity='max',
-            MeanDensity='mean',
-            StdDensity='std'
+            MaxDensity='max', MeanDensity='mean', StdDensity='std'
         ).reset_index()
-        
         desc = {
             "Iter": "The Nesterov iteration number",
             "MaxDensity": "Maximum bin density at this iteration",
             "MeanDensity": "Average bin density across all bins",
-            "StdDensity": "Standard deviation of bin density (measure of evenness)"
+            "StdDensity": "Standard deviation of bin density"
         }
-        
         return agg_df, desc
 
     def get_cell_bin_mapping(self, region_name: str = "core") -> Tuple[pd.DataFrame, Dict[str, str]]:
         """
-        Derived Data: Calculates which bin index each cell falls into at each iteration,
-        using the electrostatic bin grid metadata. Converts string metadata to numerics.
+        Derived Data: Calculates which bin index each cell falls into at each iteration.
         """
         df, _ = self.cell_dense_gradients
-        if df.empty:
-            return df, {}
-            
-        # Fetch metadata and convert from strings to appropriate numeric types
+        if df.empty: return df, {}
         try:
             lx = float(self.db.get_metadata(f"region_{region_name}_lx")[0])
             ly = float(self.db.get_metadata(f"region_{region_name}_ly")[0])
             bin_size_x = float(self.db.get_metadata(f"region_{region_name}_binSizeX")[0])
             bin_size_y = float(self.db.get_metadata(f"region_{region_name}_binSizeY")[0])
             bin_cnt_x = int(self.db.get_metadata(f"region_{region_name}_binCntX")[0])
-        except IndexError:
-            raise ValueError(f"Missing electrostatic bin grid metadata for region '{region_name}'. Have you run GPL with logging enabled?")
+        except:
+            raise ValueError(f"Missing electrostatic bin grid metadata for region '{region_name}'.")
 
-        # Calculate bin X and Y indices using numpy
-        idx_x = np.floor((df["PosX"] - lx) / bin_size_x).astype(int)
-        idx_y = np.floor((df["PosY"] - ly) / bin_size_y).astype(int)
-        
-        # Clamp indices to ensure they fall within the grid limits
-        idx_x = np.clip(idx_x, 0, bin_cnt_x - 1)
-        idx_y = np.maximum(idx_y, 0)
-        
-        # Flat index: y * bin_cnt_x + x
+        idx_x = np.clip(np.floor((df["PosX"].values - lx) / bin_size_x).astype(int), 0, bin_cnt_x - 1)
+        idx_y = np.maximum(np.floor((df["PosY"].values - ly) / bin_size_y).astype(int), 0)
         df["BinIdx"] = idx_y * bin_cnt_x + idx_x
         
         desc = {
             "Iter": "The Nesterov iteration number",
             "CellId": "The index of the cell in the placer",
-            "PosX": "Current X position of the cell",
-            "PosY": "Current Y position of the cell",
-            "BinIdx": "The calculated flat index of the electrostatic bin containing the cell"
+            "BinIdx": "The calculated flat index of the electrostatic bin"
         }
-        
-        return df[["Iter", "CellId", "PosX", "PosY", "BinIdx"]], desc
-
-    def get_estimated_density_forces(self, region_name: str = "core") -> Tuple[pd.DataFrame, Dict[str, str]]:
-        """
-        Derived Data: Estimates the density force applied to each cell by evaluating
-        all bins that the cell overlaps with, weighted by overlap area.
-        """
-        # 1. Get all necessary data
-        cells_df, _ = self.cell_dense_gradients # Iter, CellId, PosX, PosY
-        if cells_df.empty:
-            return pd.DataFrame(), {}
-        
-        static_df, _ = self.cell_static_info # CellId, Width, Height
-        bins_df, _ = self.bin_grid # Iter, BinIdx, ElectroFieldX, ElectroFieldY, Density
-        scalars_df, _ = self.iteration_scalars # Iter, DensityPenalty
-        
-        # Metadata
-        lx = float(self.db.get_metadata(f"region_{region_name}_lx")[0])
-        ly = float(self.db.get_metadata(f"region_{region_name}_ly")[0])
-        bin_size_x = float(self.db.get_metadata(f"region_{region_name}_binSizeX")[0])
-        bin_size_y = float(self.db.get_metadata(f"region_{region_name}_binSizeY")[0])
-        bin_cnt_x = int(self.db.get_metadata(f"region_{region_name}_binCntX")[0])
-        bin_cnt_y = int(self.db.get_metadata(f"region_{region_name}_binCntY")[0])
-        
-        # Merge cell pos and static info
-        cell_info = pd.merge(cells_df, static_df[["CellId", "Width", "Height"]], on="CellId")
-        
-        # Merge penalty
-        cell_info = pd.merge(cell_info, scalars_df[["Iter", "DensityPenalty"]], on="Iter")
-        
-        # Map bins to a searchable format (Iter, BinIdx) -> Field
-        bins_dict = bins_df.set_index(["Iter", "BinIdx"])[["ElectroFieldX", "ElectroFieldY"]].to_dict('index')
-
-        results = []
-        
-        for _, row in cell_info.iterrows():
-            iter_num = row["Iter"]
-            cell_id = row["CellId"]
-            pos_x = row["PosX"]
-            pos_y = row["PosY"]
-            width = row["Width"]
-            height = row["Height"]
-            penalty = row["DensityPenalty"]
-            
-            # Cell bounding box
-            cell_lx = pos_x - width / 2
-            cell_ly = pos_y - height / 2
-            cell_ux = pos_x + width / 2
-            cell_uy = pos_y + height / 2
-            
-            # Bin indices range
-            bin_min_x = np.clip(np.floor((cell_lx - lx) / bin_size_x).astype(int), 0, bin_cnt_x - 1)
-            bin_max_x = np.clip(np.floor((cell_ux - lx) / bin_size_x).astype(int), 0, bin_cnt_x - 1)
-            bin_min_y = np.clip(np.floor((cell_ly - ly) / bin_size_y).astype(int), 0, bin_cnt_y - 1)
-            bin_max_y = np.clip(np.floor((cell_uy - ly) / bin_size_y).astype(int), 0, bin_cnt_y - 1)
-            
-            force_x = 0.0
-            force_y = 0.0
-            
-            for bx in range(bin_min_x, bin_max_x + 1):
-                for by in range(bin_min_y, bin_max_y + 1):
-                    # Bin bounding box
-                    bin_lx = lx + bx * bin_size_x
-                    bin_ly = ly + by * bin_size_y
-                    bin_ux = bin_lx + bin_size_x
-                    bin_uy = bin_ly + bin_size_y
-                    
-                    # Intersection
-                    inter_lx = max(cell_lx, bin_lx)
-                    inter_ly = max(cell_ly, bin_ly)
-                    inter_ux = min(cell_ux, bin_ux)
-                    inter_uy = min(cell_uy, bin_uy)
-                    
-                    overlap_area = max(0, inter_ux - inter_lx) * max(0, inter_uy - inter_ly)
-                    
-                    if overlap_area > 0:
-                        bin_idx = by * bin_cnt_x + bx
-                        field = bins_dict.get((iter_num, bin_idx))
-                        if field:
-                            force_x += field["ElectroFieldX"] * overlap_area * penalty
-                            force_y += field["ElectroFieldY"] * overlap_area * penalty
-            
-            results.append({
-                "Iter": iter_num,
-                "CellId": cell_id,
-                "EstDensityForceX": force_x,
-                "EstDensityForceY": force_y,
-                "EstDensityForceMag": np.sqrt(force_x**2 + force_y**2)
-            })
-        
-        res = pd.DataFrame(results)
-        
-        desc = {
-            "Iter": "The Nesterov iteration number",
-            "CellId": "The index of the cell in the placer",
-            "EstDensityForceX": "Estimated density gradient force (X) applied to cell (sum of overlapped bins)",
-            "EstDensityForceY": "Estimated density gradient force (Y) applied to cell (sum of overlapped bins)",
-            "EstDensityForceMag": "Magnitude of the estimated density force vector"
-        }
-        
-        return res, desc
+        return df[["Iter", "CellId", "BinIdx"]], desc
 
     def get_path_slack_trends(self) -> Tuple[pd.DataFrame, Dict[str, str]]:
         """
         Derived Data: Computes the minimum, maximum, and mean slack across all logged paths per iteration.
         """
         df, _ = self.path_slacks
-        if df.empty:
-            return df, {}
-            
+        if df.empty: return df, {}
         agg_df = df.groupby("Iter")["Slack"].agg(
-            MinSlack='min',
-            MaxSlack='max',
-            MeanSlack='mean'
+            MinSlack='min', MaxSlack='max', MeanSlack='mean'
         ).reset_index()
-        
         desc = {
             "Iter": "The Nesterov iteration number",
             "MinSlack": "The worst (minimum) slack among all logged paths",
             "MaxSlack": "The best (maximum) slack among all logged paths",
             "MeanSlack": "The average slack among all logged paths"
         }
-        
         return agg_df, desc
