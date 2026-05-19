@@ -4,8 +4,6 @@
 include("openroad")
 
 # For Multithread
-# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_FFT2D_PTHREADS=1 -DFFT_2D_MAX_THREADS=16 -O3 ${OpenMP_CXX_FLAGS}")
-
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 
 find_package(Eigen3 REQUIRED)
@@ -40,6 +38,11 @@ add_library(gpl_lib
   src/graphicsNone.cpp
   src/solver.cpp
   src/mbff.cpp
+)
+
+target_compile_definitions(gpl_lib PRIVATE
+  USE_FFT2D_PTHREADS=1
+  FFT2D_MAX_THREADS=16
 )
 
 target_sources(gpl

@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <omp.h>
 #include <utility>
 #include <vector>
 
@@ -11,7 +12,7 @@ namespace gpl {
 class FFT
 {
  public:
-  FFT(int bin_cnt_x, int bin_cnt_y, float bin_size_x, float bin_size_y);
+  FFT(int bin_cnt_x, int bin_cnt_y, float bin_size_x, float bin_size_y, int num_threads);
   ~FFT();
 
   // input func
@@ -52,6 +53,7 @@ class FFT
   int bin_cnt_y_ = 0;
   float bin_size_x_ = 0;
   float bin_size_y_ = 0;
+  int num_threads_ = 1;
 };
 
 //

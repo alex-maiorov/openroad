@@ -12,11 +12,12 @@
 
 namespace gpl {
 
-FFT::FFT(int bin_cnt_x, int bin_cnt_y, float bin_size_x, float bin_size_y)
+FFT::FFT(int bin_cnt_x, int bin_cnt_y, float bin_size_x, float bin_size_y, int num_threads)
     : bin_cnt_X_(bin_cnt_x),
       bin_cnt_y_(bin_cnt_y),
       bin_size_x_(bin_size_x),
-      bin_size_y_(bin_size_y)
+      bin_size_y_(bin_size_y),
+      num_threads_(num_threads)
 {
   bin_density_ = new float*[bin_cnt_X_];
   electro_phi_ = new float*[bin_cnt_X_];
@@ -107,12 +108,15 @@ void FFT::doFFT()
          cs_table_.data());
 
   // Normalizations required to perform the inverse operation
+#pragma omp parallel for num_threads(num_threads_)
   for (int i = 1; i < bin_cnt_X_; i++) {
     bin_density_[i][0] *= 0.5;
   }
+#pragma omp parallel for num_threads(num_threads_)
   for (int i = 1; i < bin_cnt_y_; i++) {
     bin_density_[0][i] *= 0.5;
   }
+#pragma omp parallel for num_threads(num_threads_) collapse(2)
   for (int i = 0; i < bin_cnt_X_; i++) {
     for (int j = 0; j < bin_cnt_y_; j++) {
       bin_density_[i][j] *= 4.0 / bin_cnt_X_ / bin_cnt_y_;
@@ -120,11 +124,11 @@ void FFT::doFFT()
   }
 
   // Solve the PDE in the new basis
+#pragma omp parallel for num_threads(num_threads_) collapse(2)
   for (int i = 0; i < bin_cnt_X_; i++) {
-    float wx = wx_[i];
-    float wx2 = wx_square_[i];
-
     for (int j = 0; j < bin_cnt_y_; j++) {
+      float wx = wx_[i];
+      float wx2 = wx_square_[i];
       float wy = wy_[j];
       float wy2 = wy_square_[j];
 
@@ -136,17 +140,6 @@ void FFT::doFFT()
         // Removes the DC component
         phi = electro_x = electro_y = 0.0f;
       } else {
-        //////////// lutong
-        //  denom =
-        //  wx2 / 4.0 +
-        //  wy2 / 4.0 ;
-        // a_phi = a_den / denom ;
-        ////b_phi = 0 ; // -1.0 * b / denom ;
-        ////a_ex = 0 ; // b_phi * wx ;
-        // a_ex = a_phi * wx / 2.0 ;
-        ////a_ey = 0 ; // b_phi * wy ;
-        // a_ey = a_phi * wy / 2.0 ;
-        ///////////
         phi = density / (wx2 + wy2);
         electro_x = phi * wx;
         electro_y = phi * wy;
@@ -157,6 +150,7 @@ void FFT::doFFT()
       electro_field_y_[i][j] = electro_y;
     }
   }
+
 
   // Inverse DCT
   ddct2d(bin_cnt_X_,

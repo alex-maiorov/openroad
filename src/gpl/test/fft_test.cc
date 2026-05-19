@@ -122,7 +122,7 @@ void print_tables(std::unique_ptr<gpl::FFT>& fft)
 
 TEST(FloatFFTTest, Basic)
 {
-  std::unique_ptr<gpl::FFT> fft(new gpl::FFT(X_MAX, Y_MAX, X_MAX, Y_MAX));
+  std::unique_ptr<gpl::FFT> fft(new gpl::FFT(X_MAX, Y_MAX, X_MAX, Y_MAX, 1));
 
   for (int y = 0; y < Y_MAX; y++) {
     for (int x = 0; x < X_MAX; x++) {

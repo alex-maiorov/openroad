@@ -417,6 +417,7 @@ static void ddxt2d_sub(int n1,
                        float* w);
 static void rdft2d_sub(int n1, int isgn, float** a);
 #ifdef USE_FFT2D_THREADS
+static void* xdft2d0_th(void* p);
 static void* cdft2d_th(void* p);
 static void* ddxt2d0_th(void* p);
 static void* ddxt2d_th(void* p);
@@ -933,7 +934,6 @@ struct fft2d_arg_t
 static void
 xdft2d0_subth(int n1, int n2, int icr, int isgn, float** a, int* ip, float* w)
 {
-  void* xdft2d0_th(void* p);
   fft2d_thread_t th[FFT2D_MAX_THREADS];
   fft2d_arg_t ag[FFT2D_MAX_THREADS];
   int nthread, i;

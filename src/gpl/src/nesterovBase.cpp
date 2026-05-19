@@ -942,47 +942,60 @@ void BinGrid::updateBinsGCellDensityArea(const std::vector<GCellHandle>& cells)
     bin.setFillerArea(0);
   }
 
-  for (auto& cell : cells) {
-    std::pair<int, int> pairX = getDensityMinMaxIdxX(cell);
-    std::pair<int, int> pairY = getDensityMinMaxIdxY(cell);
+  const size_t nbins = bins_.size();
+  const int nthreads = num_threads_;
 
-    // The following function is critical runtime hotspot
-    // for global placer.
-    //
-    if (cell->isInstance()) {
-      // macro should have
-      // scale-down with target-density
-      if (cell->isMacroInstance()) {
+#pragma omp parallel num_threads(nthreads)
+  {
+    std::vector<int64_t> local_inst(nbins, 0);
+    std::vector<int64_t> local_filler(nbins, 0);
+
+#pragma omp for
+    for (int i = 0; i < (int)cells.size(); i++) {
+      const auto& cell = cells[i];
+      std::pair<int, int> pairX = getDensityMinMaxIdxX(cell);
+      std::pair<int, int> pairY = getDensityMinMaxIdxY(cell);
+
+      if (cell->isInstance()) {
+        if (cell->isMacroInstance()) {
+          for (int y = pairY.first; y < pairY.second; y++) {
+            for (int x = pairX.first; x < pairX.second; x++) {
+              const int binIdx = y * binCntX_ + x;
+              const Bin& bin = bins_[binIdx];
+
+              const float scaledAvea = getOverlapDensityArea(bin, cell)
+                                       * cell->getDensityScale()
+                                       * bin.getTargetDensity();
+              local_inst[binIdx] += static_cast<int64_t>(scaledAvea);
+            }
+          }
+        } else if (cell->isStdInstance()) {
+          for (int y = pairY.first; y < pairY.second; y++) {
+            for (int x = pairX.first; x < pairX.second; x++) {
+              const int binIdx = y * binCntX_ + x;
+              const Bin& bin = bins_[binIdx];
+              const float scaledArea
+                  = getOverlapDensityArea(bin, cell) * cell->getDensityScale();
+              local_inst[binIdx] += static_cast<int64_t>(scaledArea);
+            }
+          }
+        }
+      } else if (cell->isFiller()) {
         for (int y = pairY.first; y < pairY.second; y++) {
           for (int x = pairX.first; x < pairX.second; x++) {
-            Bin& bin = bins_[y * binCntX_ + x];
-
-            const float scaledAvea = getOverlapDensityArea(bin, cell)
-                                     * cell->getDensityScale()
-                                     * bin.getTargetDensity();
-            bin.addInstPlacedAreaUnscaled(scaledAvea);
+            const int binIdx = y * binCntX_ + x;
+            const Bin& bin = bins_[binIdx];
+            local_filler[binIdx] += static_cast<int64_t>(
+                getOverlapDensityArea(bin, cell) * cell->getDensityScale());
           }
         }
       }
-      // normal cells
-      else if (cell->isStdInstance()) {
-        for (int y = pairY.first; y < pairY.second; y++) {
-          for (int x = pairX.first; x < pairX.second; x++) {
-            Bin& bin = bins_[y * binCntX_ + x];
-            const float scaledArea
-                = getOverlapDensityArea(bin, cell) * cell->getDensityScale();
-            bin.addInstPlacedAreaUnscaled(scaledArea);
-          }
-        }
-      }
-    } else if (cell->isFiller()) {
-      for (int y = pairY.first; y < pairY.second; y++) {
-        for (int x = pairX.first; x < pairX.second; x++) {
-          Bin& bin = bins_[y * binCntX_ + x];
-          bin.addFillerArea(getOverlapDensityArea(bin, cell)
-                            * cell->getDensityScale());
-        }
-      }
+    }
+
+#pragma omp for
+    for (int i = 0; i < (int)nbins; i++) {
+      bins_[i].addInstPlacedAreaUnscaled(local_inst[i]);
+      bins_[i].addFillerArea(local_filler[i]);
     }
   }
 
@@ -2105,13 +2118,15 @@ NesterovBase::NesterovBase(
   bg_.setBinTargetDensity(targetDensity_);
 
   // update binGrid info
+  bg_.setNumThreads(nbc_->getNumThreads());
   bg_.initBins();
 
   // initialize fft structrue based on bins
   std::unique_ptr<FFT> fft(new FFT(bg_.getBinCntX(),
                                    bg_.getBinCntY(),
                                    bg_.getBinSizeX(),
-                                   bg_.getBinSizeY()));
+                                   bg_.getBinSizeY(),
+                                   nbc_->getNumThreads()));
 
   fft_ = std::move(fft);
 
@@ -3118,7 +3133,6 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
                                    float wlCoeffX,
                                    float wlCoeffY)
 {
-  assert(omp_get_thread_num() == 0);
   if (isConverged_) {
     return;
   }
@@ -3148,19 +3162,17 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
   // runAllRoutabilityGradients() in the outer NesterovPlace loop, so the
   // per-cell gradient calculation below reads already-cached data.
 
-  // TODO: This OpenMP parallel section is causing non-determinism. Consider
-  // revisiting this in the future to restore determinism.
-
-  // #pragma omp parallel for num_threads(nbc_->getNumThreads()) reduction(+ :
-  // wireLengthGradSum_, densityGradSum_, gradSum)
-
-
   // FIXME: Systematize this warning, this is hacky
   int num_nonzero_tim = 0;
   float mean_wl_where_timing_nz = 0.0;
   float mean_tim_where_timing_nz = 0.0;
   const float timing_to_wirelength_warning_thresh = 5.0;
 
+#pragma omp parallel for num_threads(nbc_->getNumThreads()) \
+    reduction(+ : wireLengthGradSum_, densityGradSum_,      \
+              timingGradSum_, routabilityGradSum_, gradSum, \
+              num_nonzero_tim, mean_wl_where_timing_nz,     \
+              mean_tim_where_timing_nz)
   for (size_t i = 0; i < nb_gcells_.size(); i++) {
     GCell* gCell = nb_gcells_.at(i);
     wireLengthGrads[i]
@@ -3222,6 +3234,7 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
 
     gradSum += std::fabs(sumGrads[i].x) + std::fabs(sumGrads[i].y);
   }
+
   mean_wl_where_timing_nz /= num_nonzero_tim;
   mean_tim_where_timing_nz /= num_nonzero_tim;
 
@@ -5132,19 +5145,14 @@ void gpl::NesterovBase::runTimingPassGradient(NesterovBaseCommon& nbc,
 {
   int inf_cnt = 0;
   int nan_cnt = 0;
-  for (const auto& path : violating_paths_) {
+#pragma omp parallel for num_threads(nbc.getNumThreads()) \
+    reduction(+ : nan_cnt, inf_cnt)
+  for (int p = 0; p < (int)violating_paths_.size(); p++) {
+    const auto& path = violating_paths_[p];
     const auto& gCell_indices = path.gCellIndexSequence;
     if (gCell_indices.size() < 2) {
       continue;
     }
-
-    debugPrint(log_,
-               GPL,
-               "timing",
-               2,
-               "runTimingPassGradient: Slack: {}, Path Length: {}",
-               path.slack,
-               gCell_indices.size());
 
     GCell& end1 = nbc.getGCell(gCell_indices.front());
     GCell& end2 = nbc.getGCell(gCell_indices.back());
@@ -5153,10 +5161,6 @@ void gpl::NesterovBase::runTimingPassGradient(NesterovBaseCommon& nbc,
     const float end1_y = end1.cy();
     const float end2_x = end2.cx();
     const float end2_y = end2.cy();
-
-    // if (std::abs(path.slack) > kMinSlackThreshold_) {
-    //   continue;
-    // }
 
     // Weight function: exp(-sharpness * (slack + offset))
     // Negative slack (violation) increases weight; zero slack gives weight =
@@ -5191,7 +5195,10 @@ void gpl::NesterovBase::runTimingPassGradient(NesterovBaseCommon& nbc,
         continue;
       }
 
-      grad[cell_idx] = grad[cell_idx] + force;
+#pragma omp atomic
+      grad[cell_idx].x += force.x;
+#pragma omp atomic
+      grad[cell_idx].y += force.y;
     }
   }
   if(nan_cnt != 0 || inf_cnt != 0){

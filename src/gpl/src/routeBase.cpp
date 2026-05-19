@@ -3,6 +3,7 @@
 
 #include "routeBase.h"
 
+#include <omp.h>
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -402,7 +403,9 @@ void RouteBase::calculateRudyTiles()
   tg_->setTileCnt(x_grids, y_grids);
   tg_->initTiles(rbVars_.useRudy);
 
-  for (auto& tile : tg_->tiles()) {
+#pragma omp parallel for num_threads(nbc_->getNumThreads())
+  for (int i = 0; i < (int)tg_->tiles().size(); i++) {
+    auto& tile = tg_->tiles()[i];
     float ratio = rudy->getTile(tile->x(), tile->y()).getRudy() / 100.0;
 
     // update inflation Ratio
@@ -461,7 +464,9 @@ void RouteBase::updateGrtRoute()
     bool isHorizontalLayer
         = (layer->getDirection() == odb::dbTechLayerDir::HORIZONTAL);
 
-    for (auto& tile : tg_->tiles()) {
+#pragma omp parallel for num_threads(nbc_->getNumThreads())
+    for (int t = 0; t < (int)tg_->tiles().size(); t++) {
+      auto& tile = tg_->tiles()[t];
       float ratio;
       if (i >= min_routing_layer && i <= max_routing_layer) {
         // Check left and down tile
