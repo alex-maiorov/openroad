@@ -1,7 +1,17 @@
 import pandas as pd
 import numpy as np
 from typing import Tuple, Dict, List, Optional
-from .core import AnalysisModule
+
+try:
+    from .core import AnalysisModule
+except ImportError:
+    import os
+    import sys
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(current_dir)
+    if parent_dir not in sys.path:
+        sys.path.insert(0, parent_dir)
+    from database_log_analysis.core import AnalysisModule
 
 class GplAnalysis(AnalysisModule):
     """
@@ -537,70 +547,111 @@ class GplAnalysis(AnalysisModule):
         }
         return agg_df, desc
 
-    def get_critical_path_evolution(self, top_k: int = 20) -> pd.DataFrame:
+    def get_worst_paths_history(self, top_n: int = 10) -> pd.DataFrame:
         """
-        Workflow: Identifies any PathId that was among the worst 'top_k' at ANY point
-        in the placement, and returns its full history across all iterations.
+        Retrieves the full history of slacks for paths that were among the worst 'top_n'
+        at ANY iteration. This is a workflow method that combines slacks and stable signatures.
         """
+        # Get path slacks
         df_slacks, _ = self.path_slacks
+        # Get signature map (PhysicalPathId)
+        df_sig, _ = self.path_signature_map
+
         if df_slacks.empty:
             return pd.DataFrame()
-
-        # 1. Identify "at any point" worst paths
-        # We find paths that appear in the bottom K for any iteration
-        def get_worst_in_iter(group):
-            return group.nsmallest(top_k, "Slack")["PathId"]
-
-        worst_series = df_slacks.groupby("Iter").apply(get_worst_in_iter, include_groups=False)
-        # Convert to numpy and flatten to handle any DataFrame/Series ambiguity from apply()
-        worst_path_ids = np.unique(worst_series.values)
         
-        # 2. Extract full history for these specific paths
-        history = df_slacks[df_slacks["PathId"].isin(worst_path_ids)].copy()
-        return history.sort_values(["PathId", "Iter"])
+        # If signatures are missing, we can't do stable tracking, but we'll return raw if possible
+        if df_sig.empty:
+            print("Warning: path_signature_map is missing. Stable path tracking is disabled.")
+            # Fallback to unstable PathId
+            df = df_slacks.copy()
+            df["PhysicalPathId"] = df["PathId"]
+        else:
+            # Merge slacks with signatures
+            df = pd.merge(df_slacks, df_sig, on=["PathId", "Iter"])
 
-    def get_path_slack_profiles(self, top_k: int = 20) -> Tuple[pd.DataFrame, Dict[str, str]]:
-        """
-        Derived Data: Slack distribution along the sequence of cells in critical paths.
-        Leverages the PathSeq column to reveal which stages of each path are most timing-critical.
-        Useful for identifying whether violations concentrate at the source, middle, or sink of paths.
+        # Identify the PhysicalPathIds that were in the bottom N at some iteration
+        def _get_worst_n_ids(group):
+            return group.nsmallest(top_n, "Slack")["PhysicalPathId"]
+
+        worst_phys_ids = df.groupby("Iter").apply(_get_worst_n_ids, include_groups=False).unique()
         
-        NOTE: Requires the gpl_path_cells table to have PathSeq and Slack columns (new format).
-        If the table uses the old format (PathId, CellId, Iter only), returns empty.
+        # Extract full history for these specific physical paths
+        history = df[df["PhysicalPathId"].isin(worst_phys_ids)].copy()
+        return history.sort_values(["PhysicalPathId", "Iter"])
+
+    def get_path_force_analysis(self, top_n: int = 10) -> pd.DataFrame:
         """
-        path_cells_df, _ = self.path_cells
-        if path_cells_df.empty:
-            return pd.DataFrame(), {}
+        Extracts detailed force/gradient data for every cell participating in the
+        worst 'top_n' paths across all iterations.
+        """
+        # 1. Get the history of worst paths to know which (PathId, Iter) to look at
+        history = self.get_worst_paths_history(top_n=top_n)
+        if history.empty:
+            return pd.DataFrame()
+            
+        # 2. Get the cells for these paths at these iterations
+        all_path_cells, _ = self.path_cells
+        if all_path_cells.empty:
+            return pd.DataFrame()
+            
+        # Merge with history to get PhysicalPathId and filter for only the paths of interest
+        merged_cells = pd.merge(all_path_cells, history[['PathId', 'Iter', 'PhysicalPathId', 'Slack']], 
+                               on=['PathId', 'Iter'], suffixes=('_cell', '_path'))
+        
+        # 3. Get Gradient Data
+        cell_ids = merged_cells['CellId'].unique().tolist()
+        # IMPORTANT: Timing gradients are logged EVERY iteration, while paths are sparse.
+        # We want to see the timing force at every iteration, not just when paths are logged.
+        # So we fetch the full iteration range for these cells.
+        iter_min = history['Iter'].min()
+        iter_max = history['Iter'].max()
+        iter_range = (iter_min, iter_max)
+        
+        wl_df, _ = self.get_wl_gradient_vectors(iter_range=iter_range, cell_ids=cell_ids)
+        tim_df, _ = self.get_tim_gradient_vectors(iter_range=iter_range, cell_ids=cell_ids)
+        dens_df, _ = self.get_density_force_vectors(iter_range=iter_range, cell_ids=cell_ids)
+        
+        # 4. Merge all data
+        # We start with the cross product of (Iter x CellId) from the gradients to fill gaps
+        # OR better: merge gradients together first, then left join the path info.
+        # Since gradients are the "dense" part in time (every iteration).
+        
+        # Merge WL and Timing first (Timing is the core interest)
+        df = pd.merge(wl_df, tim_df, on=['Iter', 'CellId'], how='outer')
+        df = pd.merge(df, dens_df, on=['Iter', 'CellId'], how='left')
+        
+        # Now join the path membership info. 
+        # Note: A cell might belong to DIFFERENT paths. We'll join such that we know 
+        # which path(s) it belongs to. Since path logging is sparse, we "forward fill" 
+        # the path membership for the analysis? 
+        # No, let's keep it simple: join on Iter/CellId. Path info will be sparse.
+        df = pd.merge(df, merged_cells, on=['Iter', 'CellId'], how='left')
+        
+        # Fill NaNs for sparse gradients
+        for col in ['WlMag', 'TimMag', 'EstDensityForceMag', 
+                    'WlUnitX', 'WlUnitY', 'TimUnitX', 'TimUnitY', 
+                    'EstDensityForceUnitX', 'EstDensityForceUnitY']:
+            if col in df.columns:
+                df[col] = df[col].fillna(0.0)
+                
+        # 5. Alignment metrics
+        df['Alignment_Tim_WL'] = df['TimUnitX'] * df['WlUnitX'] + df['TimUnitY'] * df['WlUnitY']
+        df['Alignment_Tim_Dens'] = df['TimUnitX'] * df['EstDensityForceUnitX'] + \
+                                   df['TimUnitY'] * df['EstDensityForceUnitY']
+                                   
+        other_x = df['WlUnitX'] * df['WlMag'] + df['EstDensityForceUnitX'] * df['EstDensityForceMag']
+        other_y = df['WlUnitY'] * df['WlMag'] + df['EstDensityForceUnitY'] * df['EstDensityForceMag']
+        other_mag = np.sqrt(other_x**2 + other_y**2)
+        
+        mask = other_mag > 0
+        df['Opposition_Score'] = 0.0
+        df.loc[mask, 'Opposition_Score'] = -(df.loc[mask, 'TimUnitX'] * (other_x[mask]/other_mag[mask]) + \
+                                            df.loc[mask, 'TimUnitY'] * (other_y[mask]/other_mag[mask]))
+                                            
+        return df
 
-        # Safeguard: check that PathSeq and Slack columns exist (new format)
-        if "PathSeq" not in path_cells_df.columns or "Slack" not in path_cells_df.columns:
-            return pd.DataFrame(), {}
 
-        # Merge with path slacks to identify the worst paths
-        path_slacks_df, _ = self.path_slacks
-        if path_slacks_df.empty:
-            return path_cells_df, {}
-
-        # Identify the top-K worst paths globally (by minimum slack across all iterations)
-        worst_path_ids = (
-            path_slacks_df.groupby("PathId")["Slack"]
-            .min()
-            .nsmallest(top_k)
-            .index
-        )
-
-        # Filter path_cells to only these critical paths
-        profile = path_cells_df[path_cells_df["PathId"].isin(worst_path_ids)].copy()
-        profile = profile.sort_values(["PathId", "Iter", "PathSeq"])
-
-        desc = {
-            "PathId": "Unique ID for the timing path",
-            "CellId": "The index of the cell participating in the path",
-            "Iter": "The Nesterov iteration number",
-            "PathSeq": "Position of the cell in the path (0=source, increasing towards sink)",
-            "Slack": "Per-stage slack at this cell position (ps)"
-        }
-        return profile, desc
 
     def get_cell_criticality(self, agg_metric: str = "mean") -> Tuple[pd.DataFrame, Dict[str, str]]:
         """
