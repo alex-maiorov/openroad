@@ -57,6 +57,12 @@ NesterovPlace::NesterovPlace(const NesterovPlaceVars& npVars,
   // Timing pass parameters are now in NesterovBaseVars (nbVars_)
   // which is passed during NesterovBase initialization
 
+  // TRIVIAL CHANGE FOR VERIFICATION
+  bool trivial_change_for_verification = true;
+  if (trivial_change_for_verification) {
+    log_->info(GPL, 9999, "TRIVIAL CHANGE VERIFIED: {}", trivial_change_for_verification);
+  }
+
   db_cbk_ = std::make_unique<nesterovDbCbk>(this);
   nbc_->setCbk(db_cbk_.get());
   if (npVars_.timingDrivenMode) {
