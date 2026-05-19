@@ -191,6 +191,9 @@ class GplAnalysis(AnalysisModule):
     def path_cells(self) -> Tuple[pd.DataFrame, Dict[str, str]]:
         """
         Raw Data: Cell memberships for timing paths.
+        Each row represents one cell's participation in a timing path at a given iteration.
+        PathSeq indicates the cell's position in the path (0 = source, N-1 = sink).
+        Slack is the per-stage slack at this cell, providing finer granularity than the overall path slack.
         """
         try:
             df = self.db.get_table("gpl_path_cells")
@@ -200,7 +203,9 @@ class GplAnalysis(AnalysisModule):
         desc = {
             "PathId": "Unique ID for the timing path",
             "CellId": "The index of the cell participating in the path",
-            "Iter": "The Nesterov iteration number"
+            "Iter": "The Nesterov iteration number",
+            "PathSeq": "Position of the cell in the path (0=source, increasing towards sink)",
+            "Slack": "Per-stage slack at this cell position (ps)"
         }
         return df, desc
 
@@ -536,6 +541,119 @@ class GplAnalysis(AnalysisModule):
         # 2. Extract full history for these specific paths
         history = df_slacks[df_slacks["PathId"].isin(worst_path_ids)].copy()
         return history.sort_values(["PathId", "Iter"])
+
+    def get_path_slack_profiles(self, top_k: int = 20) -> Tuple[pd.DataFrame, Dict[str, str]]:
+        """
+        Derived Data: Slack distribution along the sequence of cells in critical paths.
+        Leverages the PathSeq column to reveal which stages of each path are most timing-critical.
+        Useful for identifying whether violations concentrate at the source, middle, or sink of paths.
+        
+        NOTE: Requires the gpl_path_cells table to have PathSeq and Slack columns (new format).
+        If the table uses the old format (PathId, CellId, Iter only), returns empty.
+        """
+        path_cells_df, _ = self.path_cells
+        if path_cells_df.empty:
+            return pd.DataFrame(), {}
+
+        # Safeguard: check that PathSeq and Slack columns exist (new format)
+        if "PathSeq" not in path_cells_df.columns or "Slack" not in path_cells_df.columns:
+            return pd.DataFrame(), {}
+
+        # Merge with path slacks to identify the worst paths
+        path_slacks_df, _ = self.path_slacks
+        if path_slacks_df.empty:
+            return path_cells_df, {}
+
+        # Identify the top-K worst paths globally (by minimum slack across all iterations)
+        worst_path_ids = (
+            path_slacks_df.groupby("PathId")["Slack"]
+            .min()
+            .nsmallest(top_k)
+            .index
+        )
+
+        # Filter path_cells to only these critical paths
+        profile = path_cells_df[path_cells_df["PathId"].isin(worst_path_ids)].copy()
+        profile = profile.sort_values(["PathId", "Iter", "PathSeq"])
+
+        desc = {
+            "PathId": "Unique ID for the timing path",
+            "CellId": "The index of the cell participating in the path",
+            "Iter": "The Nesterov iteration number",
+            "PathSeq": "Position of the cell in the path (0=source, increasing towards sink)",
+            "Slack": "Per-stage slack at this cell position (ps)"
+        }
+        return profile, desc
+
+    def get_cell_criticality(self, agg_metric: str = "mean") -> Tuple[pd.DataFrame, Dict[str, str]]:
+        """
+        Derived Data: Aggregates per-cell slack across all paths and iterations to identify
+        cells that consistently participate in timing-critical paths.
+        Uses the per-cell Slack column from gpl_path_cells, which provides finer granularity
+        than path-level slack alone.
+        
+        Args:
+            agg_metric: Aggregation function ('mean', 'min', 'max', 'sum', or 'count').
+                        'mean' gives the average cell criticality across all paths.
+                        'min' gives the worst slack this cell experienced in any path.
+                        'count' gives how many timing paths the cell participates in.
+        
+        NOTE: Requires the gpl_path_cells table to have the Slack column (new format).
+        If the table uses the old format (PathId, CellId, Iter only), returns empty.
+        """
+        path_cells_df, _ = self.path_cells
+        if path_cells_df.empty:
+            return pd.DataFrame(), {}
+
+        # Safeguard: check that Slack column exists (new format)
+        if "Slack" not in path_cells_df.columns:
+            return pd.DataFrame(), {}
+
+        agg_funcs = {
+            "mean": "mean",
+            "min": "min",
+            "max": "max",
+            "sum": "sum",
+            "count": "count",
+        }
+        if agg_metric not in agg_funcs:
+            raise ValueError(f"Unknown agg_metric '{agg_metric}'. Choose from: {list(agg_funcs.keys())}")
+
+        # Aggregate per-cell slack across paths and iterations
+        if agg_metric == "count":
+            # Count how many distinct (PathId, Iter) pairs a cell participates in
+            crit = (
+                path_cells_df.groupby("CellId")
+                .agg(PathCount=pd.NamedAgg(column="PathId", aggfunc="nunique"),
+                     AvgSlack=pd.NamedAgg(column="Slack", aggfunc="mean"),
+                     MinSlack=pd.NamedAgg(column="Slack", aggfunc="min"))
+                .reset_index()
+            )
+            desc = {
+                "CellId": "The index of the cell in the placer",
+                "PathCount": "Number of distinct timing paths this cell participates in",
+                "AvgSlack": "Average per-stage slack across all path participations (ps)",
+                "MinSlack": "Worst (minimum) per-stage slack experienced by this cell (ps)"
+            }
+        else:
+            crit = (
+                path_cells_df.groupby("CellId")["Slack"]
+                .agg(agg_metric)
+                .reset_index()
+                .rename(columns={"Slack": f"{agg_metric.capitalize()}Slack"})
+            )
+            desc = {
+                "CellId": "The index of the cell in the placer",
+                f"{agg_metric.capitalize()}Slack": f"{agg_metric.capitalize()} per-stage slack across all path participations (ps)"
+            }
+
+        # Sort by worst (most negative / smallest) slack and add criticality rank
+        slack_col = [c for c in crit.columns if c != "CellId" and "Slack" in c][0]
+        crit = crit.sort_values(slack_col)
+        crit["CriticalityRank"] = range(1, len(crit) + 1)
+        desc["CriticalityRank"] = "Rank of cell criticality (1 = most timing-critical)"
+
+        return crit, desc
 
     def get_gradient_balance_stats(self, iter_range: Optional[Tuple[int, int]] = None) -> Tuple[pd.DataFrame, Dict[str, str]]:
         """

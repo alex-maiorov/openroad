@@ -11,6 +11,7 @@ os.makedirs(PLOTS_DIR, exist_ok=True)
 def compute_timing_conflict_trends(gpl: GplAnalysis):
     """
     Computes conflict metrics over ALL iterations, focusing on violating paths.
+    Compatible with both old (PathId, CellId, Iter) and new (+PathSeq, Slack) gpl_path_cells formats.
     """
     # 1. Get Gradient/Force Data for all iterations
     wl_df, _ = gpl.get_wl_gradient_vectors()
@@ -24,14 +25,21 @@ def compute_timing_conflict_trends(gpl: GplAnalysis):
     # Filter for violating paths (slack < 0)
     violating_paths = path_slacks[path_slacks["Slack"] < 0]
     
-    # 3. Merge data for cells on violating paths across all iterations
-    # Merge cells, path slack, gradients
-    analysis = pd.merge(path_cells, violating_paths, on=["PathId", "Iter"])
+    # 3. Detect path_cells schema (old vs new format)
+    has_new_path_cells = "PathSeq" in path_cells.columns and "Slack" in path_cells.columns
+    
+    # 4. Merge data for cells on violating paths across all iterations
+    # If using new format, use suffixes to disambiguate per-cell Slack from path-level Slack
+    merge_suffixes = ("_cell", "_path") if has_new_path_cells else ("_x", "_y")
+    analysis = pd.merge(
+        path_cells, violating_paths, on=["PathId", "Iter"],
+        suffixes=merge_suffixes
+    )
     analysis = pd.merge(analysis, wl_df, on=["Iter", "CellId"])
     analysis = pd.merge(analysis, tim_df, on=["Iter", "CellId"])
     analysis = pd.merge(analysis, dens_df, on=["Iter", "CellId"])
     
-    # 4. Calculate Conflict Metrics per cell
+    # 5. Calculate Conflict Metrics per cell
     analysis["TimVecX"] = analysis["TimUnitX"] * analysis["TimMag"]
     analysis["TimVecY"] = analysis["TimUnitY"] * analysis["TimMag"]
     
@@ -49,12 +57,31 @@ def compute_timing_conflict_trends(gpl: GplAnalysis):
     analysis["TimDominance"] = analysis["TimMag"] / (analysis["TimMag"] + \
                                 np.sqrt(analysis["OtherVecX"]**2 + analysis["OtherVecY"]**2) + 1e-9)
     
-    # 5. Aggregate to Path level (per iteration)
-    path_metrics = analysis.groupby(["Iter", "PathId"]).agg({
-        "Slack": "first",
+    # 6. Aggregate to Path level (per iteration)
+    # Build aggregation dict dynamically based on available columns
+    agg_dict = {
         "Alignment": "mean",
-        "TimDominance": "mean"
-    }).reset_index()
+        "TimDominance": "mean",
+    }
+    
+    if has_new_path_cells:
+        # New format: path-level Slack is suffixed _path, per-cell Slack is _cell
+        agg_dict["Slack_path"] = "first"
+        agg_dict["Slack_cell"] = "mean"
+        agg_dict["PathSeq"] = "count"
+    else:
+        # Old format: the only Slack column is path-level
+        agg_dict["Slack"] = "first"
+    
+    path_metrics = analysis.groupby(["Iter", "PathId"]).agg(agg_dict).reset_index()
+    
+    # Rename for consistent output
+    if has_new_path_cells:
+        path_metrics = path_metrics.rename(columns={
+            "Slack_path": "Slack",
+            "Slack_cell": "MeanCellSlack",
+            "PathSeq": "PathLength"
+        })
     
     return path_metrics
 

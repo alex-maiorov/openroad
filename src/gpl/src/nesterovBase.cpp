@@ -2677,7 +2677,7 @@ FloatPoint NesterovBase::getRoutabilityPreconditioner(const GCell* gCell) const
   return FloatPoint(1, 1);
 }
 
-void NesterovBase::runRoutabilityGradient()
+void NesterovBase::runRoutabilityGradient(int iter)
 {
   // Self-gating: only run when gradient-based routability is active
   if (est_ == nullptr) {
@@ -2689,7 +2689,7 @@ void NesterovBase::runRoutabilityGradient()
   if (nbVars_.routability_pass_weight <= 0.0f) {
     return;
   }
-  if (iter_ < nbVars_.routability_pass_first_iter) {
+  if (iter < nbVars_.routability_pass_first_iter) {
     return;
   }
 
@@ -2697,7 +2697,7 @@ void NesterovBase::runRoutabilityGradient()
   // run_interval iterations.  Between refreshes, getRoutabilityGradient()
   // continues to read the cached tile congestion data.
   if (nbVars_.routability_pass_run_interval > 0) {
-    const int offset = iter_ - nbVars_.routability_pass_first_iter;
+    const int offset = iter - nbVars_.routability_pass_first_iter;
     if (offset % nbVars_.routability_pass_run_interval != 0) {
       return;
     }
@@ -5083,7 +5083,8 @@ std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
   return violating_paths;
 }
 
-void gpl::NesterovBase::queryTimingViolations(NesterovBaseCommon& nbc)
+void gpl::NesterovBase::queryTimingViolations(NesterovBaseCommon& nbc,
+                                              int iter)
 {
   // Query STA for violating paths and store them
   violating_paths_ = getViolatingPaths(nbVars_.timing_pass_top_n, nbc);
@@ -5104,12 +5105,12 @@ void gpl::NesterovBase::queryTimingViolations(NesterovBaseCommon& nbc)
     int path_id = base_path_id++;
     slacks_path_id.push_back(path_id);
     slacks_slack.push_back(path.slack);
-    slacks_iter.push_back(iter_);
+    slacks_iter.push_back(iter);
     
     for (size_t i = 0; i < path.gCellIndexSequence.size(); ++i) {
       nodes_path_id.push_back(path_id);
       nodes_cell_id.push_back(path.gCellIndexSequence[i]);
-      nodes_iter.push_back(iter_);
+      nodes_iter.push_back(iter);
       nodes_path_seq.push_back(i);
       nodes_slack.push_back(path.slacks[i]);
     }

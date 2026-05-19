@@ -586,7 +586,7 @@ void NesterovPlace::runTimingPass(int iter,
       for (auto& nb : nbVec_) {
         nb->updateSTA();
         updateDb();
-        nb->queryTimingViolations(*nbc_);
+        nb->queryTimingViolations(*nbc_, iter);
       }
       ++timing_driven_count;
     }
@@ -925,7 +925,7 @@ void NesterovPlace::runAllRoutabilityGradients(
   // This populates the tile congestion map that getRoutabilityGradient()
   // reads inside updateGradients(). Each NB self-gates on weight/iter.
   for (auto& nb : nbVec_) {
-    nb->runRoutabilityGradient();
+    nb->runRoutabilityGradient(iter);
   }
 
   if (graphics_ && graphics_->enabled()) {

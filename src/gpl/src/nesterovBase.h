@@ -1227,13 +1227,13 @@ class NesterovBase
 
   // Populate routability tile congestion data for gradient computation.
   // Uses RUDY or GRT depending on nbv.routability_pass_use_grt.
-   void runRoutabilityGradient();
+  void runRoutabilityGradient(int iter);
    std::optional<float> getTileCongestion(int tile_x, int tile_y) const;
    std::pair<int, int> getTileCoordsFromCellCoords(int cell_x, int cell_y) const;
    std::pair<int, int> getCellCoordsFromTileCoords(int tile_x, int tile_y) const;
 
   // Query STA for violating paths and store them in violating_paths_
-  void queryTimingViolations(NesterovBaseCommon& nbc);
+  void queryTimingViolations(NesterovBaseCommon& nbc, int iter);
 
   // Access the already-stored violating paths (no STA query).
   const std::vector<ViolatingPath>& getViolatingPathsStored() const
