@@ -1133,6 +1133,28 @@ int NesterovPlace::doNesterovPlace(int start_iter)
     log_->logToDbMetadata(utl::GPL, "routability_driven_mode", std::to_string(npVars_.routability_driven_mode));
     log_->logToDbMetadata(utl::GPL, "timingGradPassStaRunInterval", std::to_string(npVars_.timingGradPassStaRunInterval));
     log_->logToDbMetadata(utl::GPL, "timingGradPassFirstIter", std::to_string(npVars_.timingGradPassFirstIter));
+
+    // Log timing weight parameters from NesterovBaseVars
+    if (!nbVec_.empty()) {
+      const auto& nbv = nbVec_[0]->getNbVars();
+      log_->logToDbMetadata(utl::GPL, "timing_gradpass_top_n", std::to_string(nbv.timing_pass_top_n));
+      log_->logToDbMetadata(utl::GPL, "timing_gradpass_proj_weight", std::to_string(nbv.timing_pass_proj_weight));
+      log_->logToDbMetadata(utl::GPL, "timing_gradpass_end_to_end_weight", std::to_string(nbv.timing_pass_end_to_end_weight));
+      log_->logToDbMetadata(utl::GPL, "timing_gradpass_slack_sharpness", std::to_string(nbv.timing_pass_slack_sharpness));
+      log_->logToDbMetadata(utl::GPL, "timing_gradpass_slack_offset", std::to_string(nbv.timing_pass_slack_offset));
+      log_->logToDbMetadata(utl::GPL, "timing_gradpass_slack_upper", std::to_string(nbv.timing_pass_slack_upper));
+      log_->logToDbMetadata(utl::GPL, "routability_gradpass_sharpness", std::to_string(nbv.routability_pass_sharpness));
+      log_->logToDbMetadata(utl::GPL, "routability_gradpass_weight", std::to_string(nbv.routability_pass_weight));
+      log_->logToDbMetadata(utl::GPL, "routability_gradpass_range", std::to_string(nbv.routability_pass_range));
+      log_->logToDbMetadata(utl::GPL, "routability_gradpass_offset", std::to_string(nbv.routability_pass_offset));
+      log_->logToDbMetadata(utl::GPL, "routability_gradpass_first_iter", std::to_string(nbv.routability_pass_first_iter));
+      log_->logToDbMetadata(utl::GPL, "routability_gradpass_run_interval", std::to_string(nbv.routability_pass_run_interval));
+      log_->logToDbMetadata(utl::GPL, "routability_gradpass_use_grt", std::to_string(nbv.routability_pass_use_grt));
+    }
+
+    // Log routability iteration parameters from NesterovPlaceVars
+    log_->logToDbMetadata(utl::GPL, "routabilityGradPassFirstIter", std::to_string(npVars_.routabilityGradPassFirstIter));
+    log_->logToDbMetadata(utl::GPL, "routabilityGradPassRunInterval", std::to_string(npVars_.routabilityGradPassRunInterval));
     metadata_logged = true;
   }
 

@@ -188,6 +188,23 @@ class GplAnalysis(AnalysisModule):
         return df, desc
 
     @property
+    def path_signature_map(self) -> Tuple[pd.DataFrame, Dict[str, str]]:
+        """
+        Raw Data: Map from (PathId, Iter) to stable PhysicalPathId.
+        """
+        try:
+            df = self.db.get_table("path_signature_map")
+        except ValueError:
+            df = pd.DataFrame()
+            
+        desc = {
+            "PathId": "Original unstable PathId",
+            "Iter": "The Nesterov iteration number",
+            "PhysicalPathId": "Stable identifier for the physical path"
+        }
+        return df, desc
+
+    @property
     def path_cells(self) -> Tuple[pd.DataFrame, Dict[str, str]]:
         """
         Raw Data: Cell memberships for timing paths.
