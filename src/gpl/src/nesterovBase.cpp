@@ -4186,72 +4186,103 @@ void NesterovBase::appendGCellCSVNote(const std::string& filename,
   file.close();
 }
 
-void NesterovBase::logToDb(int iteration, int region_id) const
-{
-  if (iteration == 0) {
-    std::string prefix = fmt::format("region{}.", region_id);
-    log_->logToDbMetadata(GPL, prefix + "targetDensity", fmt::format("{:e}", targetDensity_));
-    log_->logToDbMetadata(GPL, prefix + "uniformTargetDensity", fmt::format("{:e}", uniformTargetDensity_));
-    log_->logToDbMetadata(GPL, prefix + "binCntX", std::to_string(bg_.getBinCntX()));
-    log_->logToDbMetadata(GPL, prefix + "binCntY", std::to_string(bg_.getBinCntY()));
-    log_->logToDbMetadata(GPL, prefix + "binSizeX", fmt::format("{:e}", (double)bg_.getBinSizeX()));
-    log_->logToDbMetadata(GPL, prefix + "binSizeY", fmt::format("{:e}", (double)bg_.getBinSizeY()));
+void NesterovBase::dumpStaticMetadata() {
+  std::string region_name = pb_->getGroup() ? pb_->getGroup()->getName() : "core";
+  log_->logToDbMetadata(utl::GPL, "region_" + region_name + "_targetDensity", fmt::format("{:e}", targetDensity_));
+  log_->logToDbMetadata(utl::GPL, "region_" + region_name + "_uniformTargetDensity", fmt::format("{:e}", uniformTargetDensity_));
+  log_->logToDbMetadata(utl::GPL, "region_" + region_name + "_binCntX", std::to_string(bg_.getBinCntX()));
+  log_->logToDbMetadata(utl::GPL, "region_" + region_name + "_binCntY", std::to_string(bg_.getBinCntY()));
+  log_->logToDbMetadata(utl::GPL, "region_" + region_name + "_binSizeX", fmt::format("{:e}", (double)bg_.getBinSizeX()));
+  log_->logToDbMetadata(utl::GPL, "region_" + region_name + "_binSizeY", fmt::format("{:e}", (double)bg_.getBinSizeY()));
+  log_->logToDbMetadata(utl::GPL, "region_" + region_name + "_lx", std::to_string(bg_.lx()));
+  log_->logToDbMetadata(utl::GPL, "region_" + region_name + "_ly", std::to_string(bg_.ly()));
+}
+
+void NesterovBase::dumpCellStaticInfo() {
+  std::vector<int> cell_ids(nb_gcells_.size());
+  std::vector<float> width(nb_gcells_.size());
+  std::vector<float> height(nb_gcells_.size());
+  std::vector<int> is_macro(nb_gcells_.size());
+  std::vector<int> is_locked(nb_gcells_.size());
+
+  for (size_t i = 0; i < nb_gcells_.size(); i++) {
+    cell_ids[i] = i;
+    GCell* gcell = nb_gcells_[i];
+    width[i] = gcell->dx();
+    height[i] = gcell->dy();
+    is_macro[i] = gcell->isMacroInstance() ? 1 : 0;
+    is_locked[i] = gcell->isLocked() ? 1 : 0;
   }
 
-  const size_t numGCells = nb_gcells_.size();
-  if (numGCells > 0) {
-    std::vector<int> iters(numGCells, iteration);
-    std::vector<int> regions(numGCells, region_id);
-    std::vector<int> gcell_indices(numGCells);
-    std::iota(gcell_indices.begin(), gcell_indices.end(), 0);
+  log_->logToDbBulk<"CellId,Width,Height,IsMacro,IsLocked">(
+    utl::GPL, 810, "gpl_cell_static_info", nb_gcells_.size(),
+    cell_ids.begin(), width.begin(), height.begin(), is_macro.begin(), is_locked.begin());
+}
 
-    std::vector<float> curCoordiX(numGCells);
-    std::vector<float> curCoordiY(numGCells);
-    std::vector<float> wlGradX(numGCells);
-    std::vector<float> wlGradY(numGCells);
-    std::vector<float> densGradX(numGCells);
-    std::vector<float> densGradY(numGCells);
+void NesterovBase::dumpBaseIterationScalars(int iter, float wlCoefX, float wlCoefY) {
+  log_->logToDb<"Iter,StepLength,DensityPenalty,WlCoefX,WlCoefY,BaseWlCoef,SumOverflow">(
+    utl::GPL, 811, "gpl_iteration_scalars", iter, stepLength_, densityPenalty_, wlCoefX, wlCoefY, baseWireLengthCoef_, sum_overflow_unscaled_);
+}
 
-    for (size_t i = 0; i < numGCells; ++i) {
-      curCoordiX[i] = curCoordi_[i].x;
-      curCoordiY[i] = curCoordi_[i].y;
-      wlGradX[i] = curSLPWireLengthGrads_[i].x;
-      wlGradY[i] = curSLPWireLengthGrads_[i].y;
-      densGradX[i] = curSLPDensityGrads_[i].x;
-      densGradY[i] = curSLPDensityGrads_[i].y;
-    }
-
-    log_->logToDbBulk<"iteration,region_id,gcell_index,x,y,wl_grad_x,wl_grad_y,dens_grad_x,dens_grad_y">(
-        GPL, 100, "gcell_data", numGCells,
-        iters.begin(), regions.begin(), gcell_indices.begin(),
-        curCoordiX.begin(), curCoordiY.begin(),
-        wlGradX.begin(), wlGradY.begin(),
-        densGradX.begin(), densGradY.begin());
-  }
-
+void NesterovBase::dumpBinGrid(int iter) {
   const auto& bins = bg_.getBinsConst();
-  const size_t numBins = bins.size();
-  if (numBins > 0) {
-    std::vector<int> iters(numBins, iteration);
-    std::vector<int> regions(numBins, region_id);
-    std::vector<int> bin_indices(numBins);
-    std::iota(bin_indices.begin(), bin_indices.end(), 0);
-    std::vector<float> binDensity(numBins);
+  const size_t num_bins = bins.size();
+  if (num_bins == 0) return;
 
-    for (size_t i = 0; i < numBins; ++i) {
-      binDensity[i] = bins[i].getDensity();
-    }
+  std::vector<int> iters(num_bins, iter);
+  std::vector<int> bin_idx(num_bins);
+  std::vector<float> electro_x(num_bins);
+  std::vector<float> electro_y(num_bins);
+  std::vector<float> density(num_bins);
 
-    log_->logToDbBulk<"iteration,region_id,bin_index,density">(
-        GPL, 101, "bin_data", numBins,
-        iters.begin(), regions.begin(), bin_indices.begin(),
-        binDensity.begin());
+  for (size_t i = 0; i < num_bins; i++) {
+    bin_idx[i] = i;
+    electro_x[i] = bins[i].electroFieldX();
+    electro_y[i] = bins[i].electroFieldY();
+    density[i] = bins[i].getDensity();
   }
 
-  // Iteration stats per region
-  log_->logToDb<"iteration,region_id,hpwl,overflow,density_penalty">(
-      GPL, 104, "iteration_stats",
-      iteration, region_id, prev_hpwl_, sum_overflow_unscaled_, densityPenalty_);
+  log_->logToDbBulk<"Iter,BinIdx,ElectroFieldX,ElectroFieldY,Density">(
+    utl::GPL, 812, "gpl_bin_grid", num_bins,
+    iters.begin(), bin_idx.begin(), electro_x.begin(), electro_y.begin(), density.begin());
+}
+
+void NesterovBase::dumpCellDenseGradients(int iter) {
+  if (nb_gcells_.empty()) return;
+
+  std::vector<int> iters(nb_gcells_.size(), iter);
+  std::vector<int> ids(nb_gcells_.size());
+  std::vector<float> pos_x(nb_gcells_.size());
+  std::vector<float> pos_y(nb_gcells_.size());
+  std::vector<float> wl_x(nb_gcells_.size());
+  std::vector<float> wl_y(nb_gcells_.size());
+  std::vector<float> dens_x(nb_gcells_.size());
+  std::vector<float> dens_y(nb_gcells_.size());
+
+  for (size_t i = 0; i < nb_gcells_.size(); i++) {
+    ids[i] = i;
+    pos_x[i] = curSLPCoordi_[i].x;
+    pos_y[i] = curSLPCoordi_[i].y;
+    wl_x[i] = curSLPWireLengthGrads_[i].x;
+    wl_y[i] = curSLPWireLengthGrads_[i].y;
+    dens_x[i] = curSLPDensityGrads_[i].x;
+    dens_y[i] = curSLPDensityGrads_[i].y;
+  }
+
+  log_->logToDbBulk<"Iter,CellId,PosX,PosY,WlX,WlY,DensX,DensY">(
+    utl::GPL, 813, "gpl_cell_dense_gradients", nb_gcells_.size(), 
+    iters.begin(), ids.begin(), pos_x.begin(), pos_y.begin(), wl_x.begin(), wl_y.begin(), dens_x.begin(), dens_y.begin());
+}
+
+void NesterovBase::dumpGradientsToDb(int iter, float wlCoefX, float wlCoefY) {
+  if (!has_logged_static_) {
+    dumpStaticMetadata();
+    dumpCellStaticInfo();
+    has_logged_static_ = true;
+  }
+  dumpBaseIterationScalars(iter, wlCoefX, wlCoefY);
+  dumpBinGrid(iter);
+  dumpCellDenseGradients(iter);
 }
 
 void NesterovBase::writeGCellVectorsToCSV(const std::string& filename,

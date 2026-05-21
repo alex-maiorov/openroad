@@ -1131,7 +1131,12 @@ class NesterovBase
   void appendGCellCSVNote(const std::string& filename,
                           int iteration,
                           const std::string& message) const;
-  void logToDb(int iteration, int region_id) const;
+  void dumpGradientsToDb(int iter, float wlCoefX, float wlCoefY);
+  void dumpStaticMetadata();
+  void dumpCellStaticInfo();
+  void dumpBaseIterationScalars(int iter, float wlCoefX, float wlCoefY);
+  void dumpBinGrid(int iter);
+  void dumpCellDenseGradients(int iter);
   // Helper to be used at nesterovPlace.cpp, inside core nesterov loop
   // Example:
   // for(auto& nb : nbVec_) {
@@ -1281,6 +1286,7 @@ class NesterovBase
   int iter_ = 0;
   bool isConverged_ = false;
   bool reprint_iter_header_ = false;
+  bool has_logged_static_ = false;
 
   void initFillerGCells();
 };

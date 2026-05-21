@@ -923,47 +923,28 @@ void NesterovPlace::doBackTracking(const float coeff)
   }
 }
 
-void NesterovPlace::logToDb(int iter)
+void NesterovPlace::dumpTimingWeights(int iter)
 {
-  int region_id = 0;
-  for (auto& nb : nbVec_) {
-    nb->logToDb(iter, region_id++);
+  if (!npVars_.timingDrivenMode) return;
+  const auto& gNets = nbc_->getGNets();
+  std::vector<int> iters(gNets.size(), iter);
+  std::vector<int> net_indices(gNets.size());
+  std::iota(net_indices.begin(), net_indices.end(), 0);
+  std::vector<float> timing_weights(gNets.size());
+  for (size_t i = 0; i < gNets.size(); ++i) {
+    timing_weights[i] = gNets[i]->getTimingWeight();
   }
-
-  // Log global NesterovPlace metadata/weights if it's the first iteration or they change
-  if (iter == 0) {
-    log_->logToDbMetadata(GPL, "wireLengthCoefX", fmt::format("{:e}", wireLengthCoefX_));
-    log_->logToDbMetadata(GPL, "wireLengthCoefY", fmt::format("{:e}", wireLengthCoefY_));
-    log_->logToDbMetadata(GPL, "baseWireLengthCoef", fmt::format("{:e}", baseWireLengthCoef_));
-    log_->logToDbMetadata(GPL, "targetOverflow", fmt::format("{:e}", npVars_.targetOverflow));
-    log_->logToDbMetadata(GPL, "initDensityPenalty", fmt::format("{:e}", npVars_.initDensityPenalty));
-    log_->logToDbMetadata(GPL, "initWireLengthCoef", fmt::format("{:e}", npVars_.initWireLengthCoef));
-    log_->logToDbMetadata(GPL, "referenceHpwl", fmt::format("{:e}", npVars_.referenceHpwl));
-  }
-
-  // Timing weights logging (if timing driven)
-  if (npVars_.timingDrivenMode) {
-    const auto& gNets = nbc_->getGNets();
-    std::vector<int> iters(gNets.size(), iter);
-    std::vector<int> net_indices(gNets.size());
-    std::iota(net_indices.begin(), net_indices.end(), 0);
-    std::vector<float> timing_weights(gNets.size());
-    for (size_t i = 0; i < gNets.size(); ++i) {
-      timing_weights[i] = gNets[i]->getTimingWeight();
-    }
-    log_->logToDbBulk<"iteration,net_index,timing_weight">(
-        GPL, 102, "timing_weights", gNets.size(),
-        iters.begin(), net_indices.begin(), timing_weights.begin());
-  }
-
-  // Routability inflation data
-  if (npVars_.routability_driven_mode && rb_) {
-    rb_->logToDb(iter, log_);
-    log_->logToDb<"iteration,total_inflation">(
-        GPL, 103, "routability_stats", iter, (double)rb_->getTotalInflation());
-  }
+  log_->logToDbBulk<"Iter,NetIdx,TimingWeight">(
+      utl::GPL, 816, "gpl_timing_weights", gNets.size(),
+      iters.begin(), net_indices.begin(), timing_weights.begin());
 }
 
+void NesterovPlace::dumpRoutabilityStats(int iter)
+{
+  if (!npVars_.routability_driven_mode || !rb_) return;
+  rb_->dumpRoutabilityInflation(iter, log_);
+  log_->logToDb<"Iter,TotalInflation">(
+      utl::GPL, 818, "gpl_routability_stats", iter, (double)rb_->getTotalInflation());
 }
 
 void NesterovPlace::reportResults(int nesterov_iter,
@@ -1101,9 +1082,26 @@ int NesterovPlace::doNesterovPlace(int start_iter)
         fmt::format("{}/init_nesterov.png", getReportsDir()), label);
   }
 
+  static bool metadata_logged = false;
+  if (!metadata_logged) {
+    log_->logToDbMetadata(utl::GPL, "maxNesterovIter", std::to_string(npVars_.maxNesterovIter));
+    log_->logToDbMetadata(utl::GPL, "maxBackTrack", std::to_string(npVars_.maxBackTrack));
+    log_->logToDbMetadata(utl::GPL, "initDensityPenalty", fmt::format("{:e}", npVars_.initDensityPenalty));
+    log_->logToDbMetadata(utl::GPL, "initWireLengthCoef", fmt::format("{:e}", npVars_.initWireLengthCoef));
+    log_->logToDbMetadata(utl::GPL, "targetOverflow", fmt::format("{:e}", npVars_.targetOverflow));
+    log_->logToDbMetadata(utl::GPL, "minPreconditioner", fmt::format("{:e}", npVars_.minPreconditioner));
+    log_->logToDbMetadata(utl::GPL, "initialPrevCoordiUpdateCoef", fmt::format("{:e}", npVars_.initialPrevCoordiUpdateCoef));
+    log_->logToDbMetadata(utl::GPL, "referenceHpwl", fmt::format("{:e}", npVars_.referenceHpwl));
+    log_->logToDbMetadata(utl::GPL, "routability_end_overflow", fmt::format("{:e}", npVars_.routability_end_overflow));
+    log_->logToDbMetadata(utl::GPL, "routability_snapshot_overflow", fmt::format("{:e}", npVars_.routability_snapshot_overflow));
+    log_->logToDbMetadata(utl::GPL, "keepResizeBelowOverflow", fmt::format("{:e}", npVars_.keepResizeBelowOverflow));
+    log_->logToDbMetadata(utl::GPL, "timingDrivenMode", std::to_string(npVars_.timingDrivenMode));
+    log_->logToDbMetadata(utl::GPL, "routability_driven_mode", std::to_string(npVars_.routability_driven_mode));
+    metadata_logged = true;
+  }
+
   // Core Nesterov Loop
   int nesterov_iter = start_iter;
-  logToDb(nesterov_iter);
 
   for (; nesterov_iter < npVars_.maxNesterovIter; nesterov_iter++) {
     const float prevA = curA;
@@ -1120,7 +1118,10 @@ int NesterovPlace::doNesterovPlace(int start_iter)
     // Adjust Phi dynamically for larger designs
     for (auto& nb : nbVec_) {
       nb->nesterovAdjustPhi();
+      nb->dumpGradientsToDb(nesterov_iter, wireLengthCoefX_, wireLengthCoefY_);
     }
+    dumpTimingWeights(nesterov_iter);
+    dumpRoutabilityStats(nesterov_iter);
 
     if (num_region_diverged_ > 0) {
       break;
@@ -1176,10 +1177,8 @@ int NesterovPlace::doNesterovPlace(int start_iter)
                    curA);
 
     if (isConverged(nesterov_iter, routability_gpl_iter_count_)) {
-      logToDb(nesterov_iter + 1);
       break;
     }
-    logToDb(nesterov_iter + 1);
   }
 
   reportResults(nesterov_iter, original_area, td_accumulated_delta_area);

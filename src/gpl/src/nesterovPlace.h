@@ -55,7 +55,8 @@ class NesterovPlace
 
   void updateDb();
 
-  void logToDb(int iter);
+  void dumpTimingWeights(int iter);
+  void dumpRoutabilityStats(int iter);
 
   void checkInvalidValues(float wireLengthGradSum, float densityGradSum);
 

@@ -254,12 +254,12 @@ RouteBase::RouteBase(RouteBaseVars rbVars,
   init();
 }
 
-void RouteBase::logToDb(int iteration, utl::Logger* log) const
+void RouteBase::dumpRoutabilityInflation(int iter, utl::Logger* log) const
 {
   const auto& tiles = tg_->tiles();
   const size_t numTiles = tiles.size();
   if (numTiles > 0) {
-    std::vector<int> iters(numTiles, iteration);
+    std::vector<int> iters(numTiles, iter);
     std::vector<int> x_indices(numTiles);
     std::vector<int> y_indices(numTiles);
     std::vector<float> inflation_ratios(numTiles);
@@ -270,8 +270,8 @@ void RouteBase::logToDb(int iteration, utl::Logger* log) const
       inflation_ratios[i] = tiles[i]->inflationRatio();
     }
 
-    log->logToDbBulk<"iteration,tile_x,tile_y,inflation_ratio">(
-        GPL, 105, "tile_data", numTiles,
+    log->logToDbBulk<"Iter,TileX,TileY,InflationRatio">(
+        GPL, 817, "gpl_routability_inflation", numTiles,
         iters.begin(), x_indices.begin(), y_indices.begin(),
         inflation_ratios.begin());
   }
