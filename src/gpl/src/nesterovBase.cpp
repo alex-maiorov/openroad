@@ -5394,8 +5394,8 @@ void gpl::NesterovBase::dumpStaticMetadata() {
   std::string region_name = pb_->getGroup() ? pb_->getGroup()->getName() : "core";
   log_->logToDbMetadata(utl::GPL, "region_" + region_name + "_binCntX", std::to_string(bg_.getBinCntX()));
   log_->logToDbMetadata(utl::GPL, "region_" + region_name + "_binCntY", std::to_string(bg_.getBinCntY()));
-  log_->logToDbMetadata(utl::GPL, "region_" + region_name + "_binSizeX", std::to_string(bg_.getBinSizeX()));
-  log_->logToDbMetadata(utl::GPL, "region_" + region_name + "_binSizeY", std::to_string(bg_.getBinSizeY()));
+  log_->logToDbMetadata(utl::GPL, "region_" + region_name + "_binSizeX", fmt::format("{:e}", (double)bg_.getBinSizeX()));
+  log_->logToDbMetadata(utl::GPL, "region_" + region_name + "_binSizeY", fmt::format("{:e}", (double)bg_.getBinSizeY()));
   log_->logToDbMetadata(utl::GPL, "region_" + region_name + "_lx", std::to_string(bg_.lx()));
   log_->logToDbMetadata(utl::GPL, "region_" + region_name + "_ly", std::to_string(bg_.ly()));
 }
