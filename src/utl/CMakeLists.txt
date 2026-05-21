@@ -69,6 +69,7 @@ target_link_libraries(utl_lib
     spdlog::spdlog
     ${TCL_LIBRARY}
     ${Boost_LIBRARIES}
+    sqlite3
 )
 
 target_sources(utl
