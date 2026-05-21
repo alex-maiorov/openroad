@@ -3154,8 +3154,6 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
   float mean_tim_where_timing_nz = 0.0;
   const float timing_to_wirelength_warning_thresh = 5.0;
 
-  for (size_t i = 0; i < nb_gcells_.size(); i++) {
-    GCell* gCell = nb_gcells_.at(i);
   // Two-phase: parallel per-cell compute, then deterministic serial reduce.
   // The previous single-phase loop used `reduction(+: ...)`, whose combine
   // order across threads is unspecified for floats, producing non-deterministic
