@@ -174,6 +174,7 @@ class RouteBase
   std::vector<int64_t> inflatedAreaDelta() const;
   int64_t getTotalInflation() const;
   int getRevertCount() const;
+  void logToDb(int iteration, utl::Logger* log) const;
 
  private:
   RouteBaseVars rbVars_;

@@ -20,6 +20,8 @@ class Example
 
   // The example operation that makes an instance.
   void makeInstance(const char* name);
+  // Test db logging
+  void exerciseDbLog();
 
   // Register an observer for debug graphics
   void setDebug(std::unique_ptr<Observer>& observer);

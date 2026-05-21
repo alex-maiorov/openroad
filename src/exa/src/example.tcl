@@ -20,6 +20,17 @@ proc example_instance { args } {
   exa::make_instance_cmd $name
 }
 
+sta::define_cmd_args "exercise_db_log" {}
+
+proc exercise_db_log { args } {
+  sta::parse_key_args "exercise_db_log" args \
+    keys {} flags {}
+
+  sta::check_argc_eq0 "exercise_db_log" $args
+
+  exa::exercise_db_log_cmd
+}
+
 namespace eval exa {
 # Example private command (not in the global namespace) for debugging.
 proc set_debug { args } {

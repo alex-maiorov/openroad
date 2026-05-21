@@ -254,6 +254,29 @@ RouteBase::RouteBase(RouteBaseVars rbVars,
   init();
 }
 
+void RouteBase::logToDb(int iteration, utl::Logger* log) const
+{
+  const auto& tiles = tg_->tiles();
+  const size_t numTiles = tiles.size();
+  if (numTiles > 0) {
+    std::vector<int> iters(numTiles, iteration);
+    std::vector<int> x_indices(numTiles);
+    std::vector<int> y_indices(numTiles);
+    std::vector<float> inflation_ratios(numTiles);
+
+    for (size_t i = 0; i < numTiles; ++i) {
+      x_indices[i] = tiles[i]->x();
+      y_indices[i] = tiles[i]->y();
+      inflation_ratios[i] = tiles[i]->inflationRatio();
+    }
+
+    log->logToDbBulk<"iteration,tile_x,tile_y,inflation_ratio">(
+        GPL, 105, "tile_data", numTiles,
+        iters.begin(), x_indices.begin(), y_indices.begin(),
+        inflation_ratios.begin());
+  }
+}
+
 RouteBase::~RouteBase() = default;
 
 void RouteBase::resetRoutabilityResources()

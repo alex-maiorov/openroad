@@ -1131,6 +1131,7 @@ class NesterovBase
   void appendGCellCSVNote(const std::string& filename,
                           int iteration,
                           const std::string& message) const;
+  void logToDb(int iteration, int region_id) const;
   // Helper to be used at nesterovPlace.cpp, inside core nesterov loop
   // Example:
   // for(auto& nb : nbVec_) {

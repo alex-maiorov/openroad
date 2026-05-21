@@ -5,6 +5,7 @@
 
 #include "nesterovPlace.h"
 
+#include <numeric>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -922,6 +923,49 @@ void NesterovPlace::doBackTracking(const float coeff)
   }
 }
 
+void NesterovPlace::logToDb(int iter)
+{
+  int region_id = 0;
+  for (auto& nb : nbVec_) {
+    nb->logToDb(iter, region_id++);
+  }
+
+  // Log global NesterovPlace metadata/weights if it's the first iteration or they change
+  if (iter == 0) {
+    log_->logToDbMetadata(GPL, "wireLengthCoefX", fmt::format("{:e}", wireLengthCoefX_));
+    log_->logToDbMetadata(GPL, "wireLengthCoefY", fmt::format("{:e}", wireLengthCoefY_));
+    log_->logToDbMetadata(GPL, "baseWireLengthCoef", fmt::format("{:e}", baseWireLengthCoef_));
+    log_->logToDbMetadata(GPL, "targetOverflow", fmt::format("{:e}", npVars_.targetOverflow));
+    log_->logToDbMetadata(GPL, "initDensityPenalty", fmt::format("{:e}", npVars_.initDensityPenalty));
+    log_->logToDbMetadata(GPL, "initWireLengthCoef", fmt::format("{:e}", npVars_.initWireLengthCoef));
+    log_->logToDbMetadata(GPL, "referenceHpwl", fmt::format("{:e}", npVars_.referenceHpwl));
+  }
+
+  // Timing weights logging (if timing driven)
+  if (npVars_.timingDrivenMode) {
+    const auto& gNets = nbc_->getGNets();
+    std::vector<int> iters(gNets.size(), iter);
+    std::vector<int> net_indices(gNets.size());
+    std::iota(net_indices.begin(), net_indices.end(), 0);
+    std::vector<float> timing_weights(gNets.size());
+    for (size_t i = 0; i < gNets.size(); ++i) {
+      timing_weights[i] = gNets[i]->getTimingWeight();
+    }
+    log_->logToDbBulk<"iteration,net_index,timing_weight">(
+        GPL, 102, "timing_weights", gNets.size(),
+        iters.begin(), net_indices.begin(), timing_weights.begin());
+  }
+
+  // Routability inflation data
+  if (npVars_.routability_driven_mode && rb_) {
+    rb_->logToDb(iter, log_);
+    log_->logToDb<"iteration,total_inflation">(
+        GPL, 103, "routability_stats", iter, (double)rb_->getTotalInflation());
+  }
+}
+
+}
+
 void NesterovPlace::reportResults(int nesterov_iter,
                                   int64_t original_area,
                                   int64_t td_accumulated_delta_area)
@@ -1059,6 +1103,8 @@ int NesterovPlace::doNesterovPlace(int start_iter)
 
   // Core Nesterov Loop
   int nesterov_iter = start_iter;
+  logToDb(nesterov_iter);
+
   for (; nesterov_iter < npVars_.maxNesterovIter; nesterov_iter++) {
     const float prevA = curA;
 
@@ -1130,8 +1176,10 @@ int NesterovPlace::doNesterovPlace(int start_iter)
                    curA);
 
     if (isConverged(nesterov_iter, routability_gpl_iter_count_)) {
+      logToDb(nesterov_iter + 1);
       break;
     }
+    logToDb(nesterov_iter + 1);
   }
 
   reportResults(nesterov_iter, original_area, td_accumulated_delta_area);

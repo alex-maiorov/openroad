@@ -55,6 +55,8 @@ class NesterovPlace
 
   void updateDb();
 
+  void logToDb(int iter);
+
   void checkInvalidValues(float wireLengthGradSum, float densityGradSum);
 
   float getWireLengthCoefX() const { return wireLengthCoefX_; }
