@@ -1426,7 +1426,7 @@ GCell& NesterovBaseCommon::getGCell(size_t index)
 {
   if (index >= gCellStor_.size()) {
     log_->error(utl::GPL,
-                330,
+                333,
                 "getGCell: index {} out of bounds (gCellStor_.size() = {}).",
                 index,
                 gCellStor_.size());
