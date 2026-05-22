@@ -5143,6 +5143,18 @@ void gpl::NesterovBase::queryTimingViolations(NesterovBaseCommon& nbc,
     nodes_path_seq.begin(), nodes_slack.begin());
 }
 
+// Helper to compute the timing slack weight.
+// Weight function: exp(-sharpness * (slack - offset))
+// Negative slack (violation) increases weight; zero slack gives weight =
+// exp(-offset).
+static float calculateTimingSlackWeight(float slack,
+                                         float sharpness,
+                                         float offset)
+{
+  // Positive Normalized Logistic Function. Numerically friendly version of if(slack < offset) return else return 0
+  return 1.0f - (1.0f/(1.0f + std::exp(-1.0f * sharpness * (slack - offset))));
+}
+
 void gpl::NesterovBase::runTimingPassGradient(NesterovBaseCommon& nbc,
                                               NesterovBaseVars& nbv,
                                               std::vector<FloatPoint>& grad)
@@ -5175,12 +5187,8 @@ void gpl::NesterovBase::runTimingPassGradient(NesterovBaseCommon& nbc,
     //   continue;
     // }
 
-    // Weight function: exp(-sharpness * (slack + offset))
-    // Negative slack (violation) increases weight; zero slack gives weight =
-    // exp(-offset).
-    const float slack_weight
-        = exp(-1.0f * nbv.timing_pass_slack_sharpness
-              * (path.slack + nbv.timing_pass_slack_offset));
+    const float slack_weight = calculateTimingSlackWeight(
+        path.slack, nbv.timing_pass_slack_sharpness, nbv.timing_pass_slack_offset);
 
     for (size_t i = 0; i < gCell_indices.size(); ++i) {
       const size_t cell_idx = gCell_indices[i];
@@ -5301,10 +5309,8 @@ FloatPoint NesterovBase::getTimingGradient(const GCell* gCell) const
       continue;
     }
 
-    // Weight function: exp(-sharpness * (slack + offset))
-    const float slack_weight
-        = exp(-1.0f * nbVars_.timing_pass_slack_sharpness
-              * (path.slack + nbVars_.timing_pass_slack_offset));
+    const float slack_weight = calculateTimingSlackWeight(
+        path.slack, nbVars_.timing_pass_slack_sharpness, nbVars_.timing_pass_slack_offset);
 
     const size_t i = std::distance(gCell_indices.begin(), it);
     const bool is_endpoint = (i == 0 || i == gCell_indices.size() - 1);

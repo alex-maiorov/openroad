@@ -661,6 +661,191 @@ class GplDb(DbConnection):
     #   via the raw accessors above.)
     # ================================================================
 
+    def top_timing_cells(
+        self,
+        top_n: int = 10,
+        iter_range: Optional[Tuple[int, int]] = None,
+    ) -> pd.DataFrame:
+        """Return the top N cells ranked by total timing force magnitude.
+        
+        Returns a DataFrame with columns (CellId, TotalTimForce).
+        """
+        if not self._exists(GRADIENT_METRICS_TABLE):
+            return pd.DataFrame()
+            
+        sql = f"SELECT CellId, SUM(mag_tim) AS TotalTimForce FROM [{GRADIENT_METRICS_TABLE}]"
+        params = []
+        if iter_range is not None:
+            sql += " WHERE Iter BETWEEN ? AND ?"
+            params.extend((int(iter_range[0]), int(iter_range[1])))
+            
+        sql += " GROUP BY CellId ORDER BY TotalTimForce DESC LIMIT ?"
+        params.append(int(top_n))
+        
+        return self.query(sql, tuple(params))
+
+    def cell_path_counts(
+        self,
+        cell_ids: List[int],
+        iter_range: Optional[Tuple[int, int]] = None,
+    ) -> pd.DataFrame:
+        """Return the number of unique violating paths passing through each cell per iteration.
+        
+        Returns a DataFrame with columns (Iter, CellId, PathCount).
+        """
+        if not self._exists("gpl_path_cells") or not cell_ids:
+            return pd.DataFrame()
+            
+        placeholders = ",".join("?" for _ in cell_ids)
+        sql = "SELECT Iter, CellId, COUNT(DISTINCT PathId) AS PathCount FROM gpl_path_cells"
+        
+        clauses = [f"CellId IN ({placeholders})"]
+        params = [int(c) for c in cell_ids]
+        
+        if iter_range is not None:
+            clauses.append("Iter BETWEEN ? AND ?")
+            params.extend((int(iter_range[0]), int(iter_range[1])))
+            
+        sql += " WHERE " + " AND ".join(clauses)
+        sql += " GROUP BY Iter, CellId ORDER BY Iter, CellId"
+        
+        return self.query(sql, tuple(params))
+
+    def cell_force_alignment(
+        self,
+        cell_ids: List[int],
+        iter_range: Optional[Tuple[int, int]] = None,
+    ) -> pd.DataFrame:
+        """Return the dot product of the Effective force and Timing force over time.
+        
+        Effective force = Wirelength + Timing + Density.
+        Returns a DataFrame with columns (Iter, CellId, Alignment).
+        """
+        if not cell_ids:
+            return pd.DataFrame()
+            
+        placeholders = ",".join("?" for _ in cell_ids)
+        
+        # We use LEFT JOINs to construct the effective force completely inside SQLite
+        sql = f"""
+            SELECT 
+                d.Iter, d.CellId,
+                (d.WlX + COALESCE(t.TimX, 0.0) + COALESCE(df.EstDensityForceX, 0.0)) * COALESCE(t.TimX, 0.0) +
+                (d.WlY + COALESCE(t.TimY, 0.0) + COALESCE(df.EstDensityForceY, 0.0)) * COALESCE(t.TimY, 0.0) AS Alignment
+            FROM gpl_cell_dense_gradients d
+            LEFT JOIN gpl_cell_timing_gradients t 
+                ON d.Iter = t.Iter AND d.CellId = t.CellId
+            LEFT JOIN [{DENSITY_FORCES_TABLE}] df 
+                ON d.Iter = df.Iter AND d.CellId = df.CellId
+            WHERE d.CellId IN ({placeholders})
+        """
+        params = [int(c) for c in cell_ids]
+        
+        if iter_range is not None:
+            sql += " AND d.Iter BETWEEN ? AND ?"
+            params.extend((int(iter_range[0]), int(iter_range[1])))
+            
+        sql += " ORDER BY d.Iter, d.CellId"
+        
+        return self.query(sql, tuple(params))
+
+    def paths_containing_cells(
+        self,
+        cell_ids: List[int],
+        iter_range: Optional[Tuple[int, int]] = None,
+    ) -> pd.DataFrame:
+        """Return the full cell sequences for all paths that contain at least one of the specified cells.
+        
+        Returns a DataFrame with columns (Iter, PathId, CellId, PathSeq).
+        """
+        if not self._exists("gpl_path_cells") or not cell_ids:
+            return pd.DataFrame()
+            
+        placeholders = ",".join("?" for _ in cell_ids)
+        params = [int(c) for c in cell_ids]
+        
+        iter_clause = ""
+        if iter_range is not None:
+            iter_clause = " AND Iter BETWEEN ? AND ?"
+            params.extend((int(iter_range[0]), int(iter_range[1])))
+            
+        sql = f"""
+            SELECT p.Iter, p.PathId, p.CellId, p.PathSeq
+            FROM gpl_path_cells p
+            JOIN (
+                SELECT DISTINCT Iter, PathId 
+                FROM gpl_path_cells 
+                WHERE CellId IN ({placeholders}){iter_clause}
+            ) target ON p.Iter = target.Iter AND p.PathId = target.PathId
+        """
+        
+        # Add iter filter on outer query too for performance
+        if iter_range is not None:
+            sql += " WHERE p.Iter BETWEEN ? AND ?"
+            params.extend((int(iter_range[0]), int(iter_range[1])))
+            
+        sql += " ORDER BY p.Iter, p.PathId, p.PathSeq"
+        
+        return self.query(sql, tuple(params))
+
+    def similarity_path_data(
+        self,
+        cell_ids: List[int],
+        iter_range: Optional[Tuple[int, int]] = None,
+    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """Fetch optimized data for path similarity analysis.
+        
+        Returns:
+            active_paths: DataFrame(Iter, PhysicalPathId)
+            path_seqs: DataFrame(PhysicalPathId, CellSequence)
+        """
+        if not self._exists("gpl_path_cells") or not self._exists(PATH_SIGNATURES_TABLE) or not cell_ids:
+            return pd.DataFrame(), pd.DataFrame()
+            
+        placeholders = ",".join("?" for _ in cell_ids)
+        params = [int(c) for c in cell_ids]
+        
+        iter_clause = ""
+        if iter_range is not None:
+            iter_clause = " AND p.Iter BETWEEN ? AND ?"
+            params.extend((int(iter_range[0]), int(iter_range[1])))
+
+        # 1. Active Physical Paths per iteration
+        sql_active = f"""
+            SELECT DISTINCT sm.Iter, sm.PhysicalPathId
+            FROM gpl_path_cells p
+            JOIN [{PATH_SIGNATURES_TABLE}] sm
+              ON p.Iter = sm.Iter AND p.PathId = sm.PathId
+            WHERE p.CellId IN ({placeholders}){iter_clause}
+            ORDER BY sm.Iter, sm.PhysicalPathId
+        """
+        active_paths = self.query(sql_active, tuple(params))
+        
+        if active_paths.empty:
+            return active_paths, pd.DataFrame()
+
+        # 2. Get unique physical path sequences
+        unique_phys_ids = active_paths["PhysicalPathId"].unique().tolist()
+        phys_placeholders = ",".join("?" for _ in unique_phys_ids)
+        phys_params = [int(p) for p in unique_phys_ids]
+        
+        sql_seqs = f"""
+            SELECT sm.PhysicalPathId,
+                   GROUP_CONCAT(pc.CellId ORDER BY pc.PathSeq) AS CellSequence
+            FROM (
+                SELECT PhysicalPathId, MIN(Iter) as MinIter, MIN(PathId) as MinPathId
+                FROM [{PATH_SIGNATURES_TABLE}]
+                WHERE PhysicalPathId IN ({phys_placeholders})
+                GROUP BY PhysicalPathId
+            ) sm
+            JOIN gpl_path_cells pc
+              ON pc.Iter = sm.MinIter AND pc.PathId = sm.MinPathId
+            GROUP BY sm.PhysicalPathId
+        """
+        path_seqs = self.query(sql_seqs, tuple(phys_params))
+        
+        return active_paths, path_seqs
+
     def cell_movements(
         self,
         iter_range: Optional[Tuple[int, int]] = None,

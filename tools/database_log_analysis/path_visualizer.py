@@ -19,7 +19,8 @@ import sys
 import os
 
 import dash
-from dash import dcc, html, Input, Output, State
+from dash import dcc, html, Input, Output, State, DiskcacheManager
+import diskcache
 import plotly.graph_objects as go
 import plotly.express as px
 import plotly.figure_factory as ff
@@ -358,7 +359,11 @@ def make_app(db_path, read_only=False):
     if slack_lo >= slack_hi:
         slack_hi = slack_lo + 10
 
-    app = dash.Dash(__name__)
+    cache = diskcache.Cache("./tmp/dash_bg_cache")
+    app = dash.Dash(
+        __name__,
+        background_callback_manager=DiskcacheManager(cache),
+    )
     app.title = "GPL Path Visualizer"
     app._gpl = gpl
 
@@ -514,6 +519,15 @@ def make_app(db_path, read_only=False):
                                "fontSize": "15px", "fontWeight": "bold",
                                "cursor": "pointer"},
                     ),
+                    html.Button("Cancel", id="cancel-btn",
+                                style={"width": "100%", "marginTop": "6px",
+                                       "padding": "8px 0",
+                                       "backgroundColor": "#dc3545", "color": "white",
+                                       "border": "none", "borderRadius": "4px",
+                                       "cursor": "pointer", "display": "none"}),
+                    html.Div(id="status-msg", style={"marginTop": "8px",
+                                                      "fontSize": "12px",
+                                                      "color": "#6c757d"}),
                 ],
             ),
 
@@ -561,6 +575,18 @@ def make_app(db_path, read_only=False):
         State("force-density-toggle", "value"),
         State("force-effective-toggle", "value"),
         State("show-trajectories-toggle", "value"),
+        background=True,
+        running=[
+            (Output("update-btn", "disabled"), True, False),
+            (Output("cancel-btn", "style"),
+             {"width": "100%", "marginTop": "6px", "padding": "8px 0",
+              "backgroundColor": "#dc3545", "color": "white",
+              "border": "none", "borderRadius": "4px", "cursor": "pointer",
+              "display": "block"},
+             {"display": "none"}),
+            (Output("status-msg", "children"), "Computing paths...", ""),
+        ],
+        cancel=[Input("cancel-btn", "n_clicks")],
         prevent_initial_call=False,
     )
     def update_plot(
@@ -613,6 +639,7 @@ def make_app(db_path, read_only=False):
         )
 
         # ── 1. Find worst paths ──────────────────────────────
+        print(f"[{viz_iter}] Fetching worst paths (top_n={top_n})...")
         phys_with_slack = _get_worst_phys_ids(
             gpl, top_n, (iter_lo, iter_hi), min_sep, max_sim,
             slack_range_ps=(slo_ps, shi_ps),
@@ -628,6 +655,7 @@ def make_app(db_path, read_only=False):
             return fig
 
         # ── 2. Get stable cell sequences for each path ───────
+        print(f"[{viz_iter}] Gathering cell sequences for paths...")
         path_cell_seqs = _get_path_cell_sequences(gpl, phys_ids)
         if not path_cell_seqs:
             fig.add_annotation(
@@ -655,6 +683,7 @@ def make_app(db_path, read_only=False):
         # This is the key change: get every iteration's data for
         # the path cells, regardless of whether the path was
         # "active" (logged by STA) at any particular iteration.
+        print(f"[{viz_iter}] Fetching cell trajectories...")
         traj_df = _get_cell_trajectories(gpl, all_cell_ids)
         if traj_df.empty:
             fig.add_annotation(
@@ -685,6 +714,7 @@ def make_app(db_path, read_only=False):
             pass
 
         # ── 5. Build traces per path ─────────────────────────
+        print(f"[{viz_iter}] Fetching snapshot forces...")
         force_df = _build_snapshot_force_df(gpl, all_cell_ids, viz_iter)
 
         for idx, (ppid, cids) in enumerate(path_cell_seqs.items()):
