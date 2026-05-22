@@ -49,6 +49,48 @@ class GplAnalysis(AnalysisModule):
             
         return query
 
+    def iter_chunked(self, data_method, iter_range: Optional[Tuple[int, int]] = None,
+                     chunk_size: int = 25, **kwargs):
+        """
+        Iterate through data in chunked iteration ranges to manage memory.
+        
+        Wraps any get_* method that accepts an iter_range parameter, calling it
+        repeatedly with non-overlapping iteration windows.  This prevents pulling
+        millions of rows into RAM at once when only a few thousand are needed
+        per processing step.
+        
+        Args:
+            data_method: A bound method from this instance, e.g.
+                         ``self.get_cell_dense_gradients``.
+            iter_range:  Optional (min_iter, max_iter) tuple.  When *None* the
+                         full range from ``iteration_scalars`` is used.
+            chunk_size:  Number of consecutive iterations per chunk (default 25).
+            **kwargs:    Additional keyword arguments forwarded to *data_method*
+                         (e.g. ``cell_ids=...``).
+        
+        Yields:
+            (pd.DataFrame, dict) tuples for each chunk.
+        
+        Example
+        -------
+        >>> gpl = GplAnalysis(db)
+        >>> for df, desc in gpl.iter_chunked(gpl.get_cell_dense_gradients,
+        ...                                  cell_ids=[0,1,2], chunk_size=50):
+        ...     process(df)
+        """
+        if iter_range is None:
+            df_scalars, _ = self.iteration_scalars
+            if df_scalars.empty:
+                return
+            iter_range = (int(df_scalars['Iter'].min()),
+                          int(df_scalars['Iter'].max()))
+
+        for start in range(iter_range[0], iter_range[1] + 1, chunk_size):
+            end = min(start + chunk_size - 1, iter_range[1])
+            df, desc = data_method(iter_range=(start, end), **kwargs)
+            if not df.empty:
+                yield df, desc
+
     @property
     def iteration_scalars(self) -> Tuple[pd.DataFrame, Dict[str, str]]:
         """
@@ -115,8 +157,8 @@ class GplAnalysis(AnalysisModule):
         return df, desc
 
     def get_cell_timing_gradients(self, iter_range: Optional[Tuple[int, int]] = None,
-                                  cell_range: Optional[Tuple[int, int]] = None,
-                                  cell_ids: Optional[List[int]] = None) -> Tuple[pd.DataFrame, Dict[str, str]]:
+                                   cell_range: Optional[Tuple[int, int]] = None,
+                                   cell_ids: Optional[List[int]] = None) -> Tuple[pd.DataFrame, Dict[str, str]]:
         """
         Raw Data: Sparse timing gradient components (Supports piece-wise loading).
         NOTE: Missing records imply 0.0 force for that iteration/cell.
@@ -124,7 +166,7 @@ class GplAnalysis(AnalysisModule):
         try:
             sql = self._build_filter_query("gpl_cell_timing_gradients", iter_range, cell_range, cell_ids)
             df = self.db.query(sql)
-        except ValueError:
+        except (ValueError, pd.errors.DatabaseError):
             df = pd.DataFrame()
             
         desc = {
@@ -136,8 +178,8 @@ class GplAnalysis(AnalysisModule):
         return df, desc
 
     def get_cell_routability_gradients(self, iter_range: Optional[Tuple[int, int]] = None,
-                                       cell_range: Optional[Tuple[int, int]] = None,
-                                       cell_ids: Optional[List[int]] = None) -> Tuple[pd.DataFrame, Dict[str, str]]:
+                                        cell_range: Optional[Tuple[int, int]] = None,
+                                        cell_ids: Optional[List[int]] = None) -> Tuple[pd.DataFrame, Dict[str, str]]:
         """
         Raw Data: Sparse routability gradient components (Supports piece-wise loading).
         NOTE: Missing records imply 0.0 force for that iteration/cell.
@@ -145,7 +187,7 @@ class GplAnalysis(AnalysisModule):
         try:
             sql = self._build_filter_query("gpl_cell_routability_gradients", iter_range, cell_range, cell_ids)
             df = self.db.query(sql)
-        except ValueError:
+        except (ValueError, pd.errors.DatabaseError):
             df = pd.DataFrame()
             
         desc = {
