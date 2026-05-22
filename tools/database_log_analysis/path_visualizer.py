@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Dash GUI for tracing worst-slacked timing paths in GPL placement.
 
+Shows the full-iteration trajectory of every cell on the worst timing
+paths, then overlays the path connectivity and force arrows at the user-
+selected snapshot iteration.
+
 Usage
 -----
     python -m tools.database_log_analysis.path_visualizer \\
@@ -13,7 +17,6 @@ Requirements: dash, plotly, pandas, numpy
 import argparse
 import sys
 import os
-from pathlib import Path
 
 import dash
 from dash import dcc, html, Input, Output, State
@@ -22,10 +25,10 @@ import plotly.express as px
 import numpy as np
 import pandas as pd
 
-# ── Ensure the parent package is importable ──────────────────────
-_HERE = Path(__file__).resolve().parent
-if str(_HERE.parent) not in sys.path:
-    sys.path.insert(0, str(_HERE.parent))
+# Ensure the tools/ package is importable
+_TOOLS = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _TOOLS not in sys.path:
+    sys.path.insert(0, _TOOLS)
 
 from database_log_analysis import GplDb
 
@@ -50,7 +53,7 @@ _PATH_COLORS = px.colors.qualitative.Plotly + px.colors.qualitative.Set1
 
 
 # ══════════════════════════════════════════════════════════════════
-#  Data helpers (thin wrappers around existing GplDb methods)
+#  Data helpers  —  all use existing GplDb methods
 # ══════════════════════════════════════════════════════════════════
 
 def _get_iter_range(gpl):
@@ -62,15 +65,9 @@ def _get_iter_range(gpl):
 
 
 def _get_slack_range_ps(gpl):
-    """Return (min_slack_ps, max_slack_ps) across all PhysicalPathIds.
-
-    Queries the per-physical-path minimum slack to get a range that
-    reflects actual worst-path slack values (often negative for
-    timing-critical paths).
-    """
-    # Use path_signatures + path_slacks to get min slack per physical path
+    """Return (min_slack_ps, max_slack_ps) across all PhysicalPathIds."""
     if not gpl._exists("gpl_path_signatures"):
-        return -500, 500  # fallback
+        return -500, 500
     df = gpl.query("""
         SELECT MIN(ps.Slack) AS mins, MAX(ps.Slack) AS maxs
         FROM gpl_path_slacks ps
@@ -88,36 +85,26 @@ def _get_worst_phys_ids(gpl, top_n, iter_range, min_sep_ps, max_sim,
                          slack_range_ps=None):
     """Use GplDb.worst_paths_history to find top pathological paths.
 
-    Parameters
-    ----------
-    slack_range_ps : (float, float) or None
-        If set, only keep paths whose worst slack (in ps) falls within
-        this (lo, hi) inclusive range.
-
-    Returns
-    -------
-    list of (PhysicalPathId, min_slack_ps) tuples, sorted worst-first.
+    Returns list of (PhysicalPathId, min_slack_ps).
     """
     if not gpl._exists("gpl_path_slacks"):
         return []
     histories = gpl.worst_paths_history(
         top_n=top_n,
         iter_range=iter_range,
-        min_separation=min_sep_ps * 1e-12,  # ps → seconds
+        min_separation=min_sep_ps * 1e-12,
         max_similarity=max_sim,
     )
     results = []
     for pdf in histories:
         pid = int(pdf["PhysicalPathId"].iloc[0])
         slack_ps = float(pdf["Slack"].min()) * 1e12
-        # Filter by slack range if given
         if slack_range_ps:
             lo, hi = slack_range_ps
             if not (lo <= slack_ps <= hi):
                 continue
         results.append((pid, slack_ps))
-
-    # Deduplicate by PhysicalPathId (keep the one with worst slack)
+    # Deduplicate
     seen = set()
     deduped = []
     for pid, sps in results:
@@ -127,39 +114,69 @@ def _get_worst_phys_ids(gpl, top_n, iter_range, min_sep_ps, max_sim,
     return deduped
 
 
-def _get_path_cells_with_pos(gpl, path_ids, iteration):
-    """Get path cells at *iteration* with their (PosX, PosY) positions.
+# ── PhysicalPathId → cell sequence ──────────────────────────────
 
-    Uses existing GplDb.path_cells() method and attaches positions.
+def _get_path_cell_sequences(gpl, phys_ids):
+    """Return dict {PhysicalPathId: [CellId, …]} in PathSeq order.
+
+    The cell sequence for a PhysicalPathId is **stable** — it never
+    changes across iterations (it *defines* the identity of the path).
     """
-    cells = gpl.path_cells(iter_range=(iteration, iteration),
-                           path_ids=path_ids)
-    if cells.empty:
-        return cells
+    if not phys_ids:
+        return {}
+    placeholders = ",".join("?" for _ in phys_ids)
+    # Pick the first iteration where each PhysicalPathId appears, then
+    # fetch its PathId + cells.
+    df = gpl.query(f"""
+        SELECT first.PhysicalPathId, pc.CellId, pc.PathSeq
+        FROM (
+            SELECT PhysicalPathId, PathId, MIN(Iter) AS Iter
+            FROM gpl_path_signatures
+            WHERE PhysicalPathId IN ({placeholders})
+            GROUP BY PhysicalPathId
+        ) first
+        JOIN gpl_path_cells pc
+          ON pc.PathId = first.PathId AND pc.Iter = first.Iter
+        ORDER BY first.PhysicalPathId, pc.PathSeq
+    """, phys_ids)
+    if df.empty:
+        return {}
+    result = {}
+    for ppid, grp in df.groupby("PhysicalPathId"):
+        result[int(ppid)] = grp["CellId"].astype(int).tolist()
+    return result
 
-    # Attach positions from dense gradients
-    cell_ids = cells["CellId"].unique().tolist()
-    pos = gpl.cell_dense_gradients(
-        iter_range=(iteration, iteration), cell_ids=cell_ids
-    )[["CellId", "PosX", "PosY"]]
-    if not pos.empty:
-        cells = cells.merge(pos, on="CellId", how="left")
-    return cells
 
+# ── Cell positions across ALL iterations ────────────────────────
 
-def _build_combined_force_df(gpl, cell_ids, iteration):
-    """Return DataFrame with PosX, PosY and all 4 force components.
+def _get_cell_trajectories(gpl, all_cell_ids):
+    """Return DataFrame with (CellId, Iter, PosX, PosY) for every
+    iteration *all_cell_ids* appear in ``gpl_cell_dense_gradients``.
 
-    Force columns: WlX, WlY, TimX, TimY,
-                   EstDensityForceX, EstDensityForceY,
-                   EffectiveX, EffectiveY.
+    Result is sorted by (CellId, Iter).
     """
+    if not all_cell_ids:
+        return pd.DataFrame()
+    placeholders = ",".join("?" for _ in all_cell_ids)
+    df = gpl.query(f"""
+        SELECT CellId, Iter, PosX, PosY
+        FROM gpl_cell_dense_gradients
+        WHERE CellId IN ({placeholders})
+        ORDER BY CellId, Iter
+    """, all_cell_ids)
+    return df
+
+
+# ── Snapshot forces at a single iteration ────────────────────────
+
+def _build_snapshot_force_df(gpl, cell_ids, iteration):
+    """Return one-row-per-CellId DataFrame with all 4 force components
+    at *iteration*."""
     dense = gpl.cell_dense_gradients(
         iter_range=(iteration, iteration), cell_ids=cell_ids
     )
     if dense.empty:
         return None
-
     df = dense[["CellId", "PosX", "PosY", "WlX", "WlY"]].copy()
 
     timing = gpl.cell_timing_gradients(
@@ -195,11 +212,99 @@ def _build_combined_force_df(gpl, cell_ids, iteration):
 #  Trace builders
 # ══════════════════════════════════════════════════════════════════
 
-def _build_arrow_traces(force_df, fkey, scale, color, name, sym):
-    """Build line + marker traces for one force type.
+def _build_trajectory_trace(cell_ids_in_path, traj_df, path_label,
+                            path_color, iter_min, iter_max):
+    """Build one Scattergl trace for a single path.
 
-    Returns list of go.Scatter traces (empty if no nonzero forces).
+    Plots every (PosX, PosY) across ALL iterations for every cell in the
+    path, coloring the markers by Iter so you can see the migration
+    timeline.
     """
+    sub = traj_df[traj_df["CellId"].isin(cell_ids_in_path)].copy()
+    if sub.empty:
+        return None
+
+    sub = sub.sort_values(["CellId", "Iter"])
+
+    return go.Scattergl(
+        x=sub["PosX"].tolist(),
+        y=sub["PosY"].tolist(),
+        mode="markers",
+        marker=dict(
+            size=3,
+            color=sub["Iter"].tolist(),
+            colorscale=[
+                [0.0, "rgba(200,200,255,0.15)"],
+                [0.3, "rgba(100,100,255,0.4)"],
+                [0.6, "rgba(255,100,100,0.6)"],
+                [1.0, path_color],
+            ],
+            cmin=iter_min,
+            cmax=iter_max,
+            colorbar=dict(
+                title="Iter",
+                thickness=12,
+                len=0.4,
+                x=1.04,
+                y=0.7,
+            ),
+            line=dict(width=0),
+            opacity=0.6,
+        ),
+        name=f"{path_label} (trajectory)",
+        showlegend=True,
+        hoverinfo="skip",
+    )
+
+
+def _build_snapshot_path_trace(cell_ids_in_path, traj_df, iteration,
+                                path_label, path_color):
+    """Build a Scatter trace showing path connectivity at *iteration*.
+
+    Draws lines + markers connecting the cells in PathSeq order at the
+    given iteration.
+    """
+    sub = traj_df[
+        (traj_df["CellId"].isin(cell_ids_in_path)) &
+        (traj_df["Iter"] == iteration)
+    ].copy()
+    if sub.empty:
+        return None
+    # Sort by cell index in the path sequence
+    seq_order = {cid: i for i, cid in enumerate(cell_ids_in_path)}
+    sub["_seq"] = sub["CellId"].map(seq_order)
+    sub = sub.sort_values("_seq")
+
+    return go.Scatter(
+        x=sub["PosX"].tolist(),
+        y=sub["PosY"].tolist(),
+        mode="lines+markers",
+        line=dict(color=path_color, width=3),
+        marker=dict(
+            size=9,
+            color=path_color,
+            symbol="circle",
+            line=dict(width=1.5, color="white"),
+        ),
+        name=f"{path_label} @ iter {iteration}",
+        showlegend=True,
+        hovertemplate=(
+            f"<b>{path_label}</b><br>"
+            f"Iter: {iteration}<br>"
+            f"Cell: %{{customdata[0]}}<br>"
+            f"Seq: %{{customdata[1]}}<br>"
+            f"Pos: (%{{x:.0f}}, %{{y:.0f}})<extra></extra>"
+        ),
+        customdata=np.column_stack([
+            sub["CellId"].values,
+            sub["_seq"].values,
+        ]),
+    )
+
+
+def _build_arrow_traces(force_df, fkey, scale, color, name, sym):
+    """Build line + marker traces for one force type at the snapshot
+    iteration."""
     x = force_df["PosX"].values
     y = force_df["PosY"].values
     cfg = FORCE_CONFIG[fkey]
@@ -213,19 +318,14 @@ def _build_arrow_traces(force_df, fkey, scale, color, name, sym):
 
     xn, yn = x[keep], y[keep]
     fxn, fyn = fx[keep] * scale, fy[keep] * scale
-
-    # Interleaved: origin, tip, NaN, origin, tip, NaN, …
     n = sum(keep)
+
     seg_x = np.full(n * 3, np.nan)
     seg_y = np.full(n * 3, np.nan)
     seg_x[0::3] = xn
     seg_y[0::3] = yn
     seg_x[1::3] = xn + fxn
     seg_y[1::3] = yn + fyn
-
-    tip_x = (xn + fxn).tolist()
-    tip_y = (yn + fyn).tolist()
-    tip_mag = mag[keep].tolist()
 
     return [
         go.Scatter(
@@ -236,49 +336,18 @@ def _build_arrow_traces(force_df, fkey, scale, color, name, sym):
             hoverinfo="none",
         ),
         go.Scatter(
-            x=tip_x, y=tip_y,
+            x=(xn + fxn).tolist(), y=(yn + fyn).tolist(),
             mode="markers",
             marker=dict(symbol=sym, size=5, color=color,
                         line=dict(width=0.5, color="white")),
-            name=name, legendgroup=name, showlegend=False,
+            legendgroup=name, showlegend=False,
             hovertemplate=(
                 f"<b>{name}</b><br>Force: %{{customdata[0]:.4e}}"
                 "<extra></extra>"
             ),
-            customdata=np.column_stack([tip_mag]),
+            customdata=np.column_stack([mag[keep].tolist()]),
         ),
     ]
-
-
-def _build_path_traces(path_groups, iteration):
-    """Build scatter+line traces for each path group.
-
-    *path_groups*: dict {label: DataFrame with PosX, PosY, CellId, PathSeq}
-    """
-    traces = []
-    for idx, (label, pdf) in enumerate(path_groups.items()):
-        pdf = pdf.sort_values("PathSeq")
-        color = _PATH_COLORS[idx % len(_PATH_COLORS)]
-        traces.append(
-            go.Scatter(
-                x=pdf["PosX"].tolist(), y=pdf["PosY"].tolist(),
-                mode="lines+markers",
-                line=dict(color=color, width=2),
-                marker=dict(size=7, color=color, symbol="circle",
-                            line=dict(width=1, color="white")),
-                name=label, showlegend=True,
-                hovertemplate=(
-                    f"<b>{label}</b><br>Iter: {iteration}<br>"
-                    f"Cell: %{{customdata[0]}}<br>"
-                    f"Seq: %{{customdata[1]}}<br>"
-                    f"Pos: (%{{x:.0f}}, %{{y:.0f}})<extra></extra>"
-                ),
-                customdata=np.column_stack([
-                    pdf["CellId"].values, pdf["PathSeq"].values,
-                ]),
-            )
-        )
-    return traces
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -286,25 +355,14 @@ def _build_path_traces(path_groups, iteration):
 # ══════════════════════════════════════════════════════════════════
 
 def make_app(db_path, read_only=False):
-    """Create and return a Dash application instance.
-
-    Parameters
-    ----------
-    db_path : str
-        Path to the SQLite database.
-    read_only : bool
-        If True, use ``must_be_preprocessed=True`` (fails fast if derived
-        tables are missing).  If False, auto-preprocess.
-    """
+    """Create and return a Dash application instance."""
     if read_only:
         gpl = GplDb(db_path, must_be_preprocessed=True)
     else:
         gpl = GplDb(db_path)
 
-    # Data ranges (computed once)
     iter_min, iter_max = _get_iter_range(gpl)
     slack_lo, slack_hi = _get_slack_range_ps(gpl)
-    # Round to nice multiples of 5 ps
     slack_lo = np.floor(slack_lo / 5) * 5
     slack_hi = np.ceil(slack_hi / 5) * 5
     if slack_lo >= slack_hi:
@@ -314,7 +372,7 @@ def make_app(db_path, read_only=False):
     app.title = "GPL Path Visualizer"
     app._gpl = gpl
 
-    # ── Helper: build a force-control row ─────────────────────
+    # ── Force control row helper ──────────────────────────────
     def _force_row(fkey):
         cfg = FORCE_CONFIG[fkey]
         return html.Div(
@@ -342,30 +400,27 @@ def make_app(db_path, read_only=False):
             ],
         )
 
-    # ── Layout ──────────────────────────────────────────────────
+    # ── Layout ───────────────────────────────────────────────
     app.layout = html.Div(
         style={"display": "flex", "height": "100vh", "margin": "0",
                "padding": "0", "fontFamily": "Segoe UI, Arial, sans-serif"},
         children=[
-            # ── Sidebar ─────────────────────────────────────────
+            # ── Sidebar ───────────────────────────────────────
             html.Div(
                 id="sidebar",
-                style={
-                    "width": "350px", "minWidth": "350px",
-                    "padding": "16px 14px", "overflowY": "auto",
-                    "backgroundColor": "#f8f9fa",
-                    "borderRight": "1px solid #dee2e6",
-                    "boxSizing": "border-box",
-                },
+                style={"width": "350px", "minWidth": "350px",
+                       "padding": "16px 14px", "overflowY": "auto",
+                       "backgroundColor": "#f8f9fa",
+                       "borderRight": "1px solid #dee2e6",
+                       "boxSizing": "border-box"},
                 children=[
                     html.H3("GPL Path Visualizer",
                             style={"marginTop": "0", "marginBottom": "16px",
                                    "color": "#2c3e50"}),
 
-                    # Iteration range
                     html.Label("Iteration range for worst-path search",
                                style={"fontWeight": "bold", "fontSize": "13px"}),
-                    html.Div(f"Iters: {iter_min}–{iter_max}",
+                    html.Div(f"Iters {iter_min}–{iter_max} (step 10 for path slacks)",
                              style={"fontSize": "11px", "color": "#6c757d",
                                     "marginBottom": "4px"}),
                     dcc.RangeSlider(
@@ -379,7 +434,6 @@ def make_app(db_path, read_only=False):
                     ),
                     html.Hr(style={"margin": "14px 0"}),
 
-                    # Slack range
                     html.Label("Slack range (paths within this slack window)",
                                style={"fontWeight": "bold", "fontSize": "13px"}),
                     html.Div(f"Slack: {slack_lo:.1f}–{slack_hi:.1f} ps",
@@ -396,44 +450,40 @@ def make_app(db_path, read_only=False):
                     ),
                     html.Hr(style={"margin": "14px 0"}),
 
-                    # Path filtering params
                     html.Label("Path filtering",
                                style={"fontWeight": "bold", "fontSize": "13px"}),
                     html.Div([
                         html.Div([
                             html.Label("Min slack separation (ps):",
                                        style={"fontSize": "12px"}),
-                            dcc.Input(
-                                id="min-sep-input", type="number",
-                                value=0, step=1,
-                                style={"width": "100%",
-                                       "boxSizing": "border-box"}),
+                            dcc.Input(id="min-sep-input", type="number",
+                                      value=0, step=1,
+                                      style={"width": "100%",
+                                             "boxSizing": "border-box"}),
                         ], style={"marginBottom": "8px"}),
                         html.Div([
                             html.Label("Max path similarity (0–1):",
                                        style={"fontSize": "12px"}),
-                            dcc.Input(
-                                id="max-sim-input", type="number",
-                                value=1.0, min=0.0, max=1.0, step=0.05,
-                                style={"width": "100%",
-                                       "boxSizing": "border-box"}),
+                            dcc.Input(id="max-sim-input", type="number",
+                                      value=1.0, min=0.0, max=1.0,
+                                      step=0.05,
+                                      style={"width": "100%",
+                                             "boxSizing": "border-box"}),
                         ], style={"marginBottom": "8px"}),
                         html.Div([
                             html.Label("Top N paths:",
                                        style={"fontSize": "12px"}),
-                            dcc.Input(
-                                id="top-n-input", type="number",
-                                value=5, min=1, max=50, step=1,
-                                style={"width": "100%",
-                                       "boxSizing": "border-box"}),
+                            dcc.Input(id="top-n-input", type="number",
+                                      value=5, min=1, max=50, step=1,
+                                      style={"width": "100%",
+                                             "boxSizing": "border-box"}),
                         ]),
                     ]),
                     html.Hr(style={"margin": "14px 0"}),
 
-                    # Viz iteration
-                    html.Label("Visualisation iteration",
+                    html.Label("Snapshot iteration",
                                style={"fontWeight": "bold", "fontSize": "13px"}),
-                    html.Div("Iteration to display (path slacks at iters 150, 160, …, 440)",
+                    html.Div("Path connectivity + force arrows shown at this iter",
                              style={"fontSize": "11px", "color": "#6c757d",
                                     "marginBottom": "4px"}),
                     dcc.Slider(
@@ -447,34 +497,27 @@ def make_app(db_path, read_only=False):
                     ),
                     html.Hr(style={"margin": "14px 0"}),
 
-                    # Force controls
                     html.Label("Force arrows",
                                style={"fontWeight": "bold", "fontSize": "13px"}),
-                    html.Div("Check to show | scale factor for arrow length",
+                    html.Div("Check to show | scale factor",
                              style={"fontSize": "11px", "color": "#6c757d",
                                     "marginBottom": "6px"}),
-                    html.Div(
-                        id="force-controls",
-                        children=[_force_row(k) for k in FORCE_ORDER],
-                    ),
+                    html.Div(children=[_force_row(k) for k in FORCE_ORDER]),
                     html.Hr(style={"margin": "14px 0"}),
 
-                    # Update button
                     html.Button(
                         "Update",
                         id="update-btn", n_clicks=0,
-                        style={
-                            "width": "100%", "padding": "10px 0",
-                            "backgroundColor": "#2c3e50", "color": "white",
-                            "border": "none", "borderRadius": "4px",
-                            "fontSize": "15px", "fontWeight": "bold",
-                            "cursor": "pointer",
-                        },
+                        style={"width": "100%", "padding": "10px 0",
+                               "backgroundColor": "#2c3e50", "color": "white",
+                               "border": "none", "borderRadius": "4px",
+                               "fontSize": "15px", "fontWeight": "bold",
+                               "cursor": "pointer"},
                     ),
                 ],
             ),
 
-            # ── Main plot ───────────────────────────────────────
+            # ── Plot area ─────────────────────────────────────
             html.Div(
                 id="plot-area",
                 style={"flex": "1", "padding": "10px",
@@ -529,7 +572,7 @@ def make_app(db_path, read_only=False):
     ):
         gpl = app._gpl
 
-        # Parse
+        # ── Parse inputs ─────────────────────────────────────
         iter_lo, iter_hi = (int(v) for v in (iter_range_val or [0, 0]))
         slo_ps, shi_ps = (float(v) for v in (slack_range_val or [0, 1]))
         min_sep = float(min_sep or 0)
@@ -550,21 +593,23 @@ def make_app(db_path, read_only=False):
             "effective": bool(t_eff),
         }
 
+        # ── Build figure skeleton ────────────────────────────
         fig = go.Figure()
         fig.update_layout(
-            title=(f"Worst timing paths at iteration {viz_iter}"
-                   f"  (iters {iter_lo}–{iter_hi} for ranking)"),
+            title=(f"Cell trajectories for worst timing paths"
+                   f"  —  snapshot at iter {viz_iter}"
+                   f"  (ranked over iters {iter_lo}–{iter_hi})"),
             xaxis_title="X position (nm)",
             yaxis_title="Y position (nm)",
             template="plotly_white",
             hovermode="closest",
             legend=dict(orientation="v", yanchor="top", y=1,
-                        xanchor="left", x=1.02, font=dict(size=10)),
-            margin=dict(l=40, r=140, t=50, b=40),
+                        xanchor="left", x=1.02, font=dict(size=9)),
+            margin=dict(l=40, r=160, t=50, b=40),
             dragmode="pan",
         )
 
-        # ── 1. Find worst physical paths ────────────────────────
+        # ── 1. Find worst paths ──────────────────────────────
         phys_with_slack = _get_worst_phys_ids(
             gpl, top_n, (iter_lo, iter_hi), min_sep, max_sim,
             slack_range_ps=(slo_ps, shi_ps),
@@ -572,93 +617,92 @@ def make_app(db_path, read_only=False):
         phys_ids = [p[0] for p in phys_with_slack]
         if not phys_ids:
             fig.add_annotation(
-                text="No paths match the current filters.<br>"
-                     "Try widening the slack or iteration range.",
+                text="No paths match the current filters.",
                 xref="paper", yref="paper",
                 x=0.5, y=0.5, showarrow=False,
                 font=dict(size=16, color="#888"),
             )
             return fig
 
-        # ── 2. Map PhysicalPathId → PathId at this iteration ────
-        sig = gpl.path_signatures(iter_range=(viz_iter, viz_iter))
-        if sig.empty:
-            # Show helpful info about which iterations these paths ARE in
-            placeholders = ",".join("?" for _ in phys_ids)
-            avail_iters = gpl.query(
-                f"""
-                SELECT DISTINCT Iter FROM gpl_path_signatures
-                WHERE PhysicalPathId IN ({placeholders})
-                ORDER BY Iter
-                """,
-                phys_ids,
-            )
-            iters_str = (", ".join(str(int(x)) for x in avail_iters["Iter"])
-                         if not avail_iters.empty else "N/A")
+        # ── 2. Get stable cell sequences for each path ───────
+        path_cell_seqs = _get_path_cell_sequences(gpl, phys_ids)
+        if not path_cell_seqs:
             fig.add_annotation(
-                text=(f"No paths at iteration {viz_iter}.<br>"
-                      f"These worst paths have data at iters:<br>"
-                      f"<b>{iters_str}</b>"),
-                xref="paper", yref="paper",
-                x=0.5, y=0.5, showarrow=False,
-                font=dict(size=14, color="#888"),
-            )
-            return fig
-
-        phys_to_path = {}
-        for _, row in sig.iterrows():
-            ppid = int(row["PhysicalPathId"])
-            if ppid in phys_ids:
-                phys_to_path[ppid] = int(row["PathId"])
-
-        if not phys_to_path:
-            placeholders = ",".join("?" for _ in phys_ids)
-            avail_iters = gpl.query(
-                f"""
-                SELECT DISTINCT Iter FROM gpl_path_signatures
-                WHERE PhysicalPathId IN ({placeholders})
-                ORDER BY Iter
-                """,
-                phys_ids,
-            )
-            iters_str = (", ".join(str(int(x)) for x in avail_iters["Iter"])
-                         if not avail_iters.empty else "N/A")
-            fig.add_annotation(
-                text=(f"Worst paths not active at iteration {viz_iter}.<br>"
-                      f"They have data at iters: <b>{iters_str}</b><br>"
-                      f"Move the 'Visualisation iteration' slider to one of those."),
-                xref="paper", yref="paper",
-                x=0.5, y=0.5, showarrow=False,
-                font=dict(size=14, color="#888"),
-            )
-            return fig
-
-        # ── 3. Get path cells with positions ─────────────────────
-        path_ids = list(phys_to_path.values())
-        cells_df = _get_path_cells_with_pos(gpl, path_ids, viz_iter)
-        if cells_df.empty:
-            fig.add_annotation(
-                text="No path cells found for the selected iteration.",
+                text="Could not retrieve cell sequences for paths.",
                 xref="paper", yref="paper",
                 x=0.5, y=0.5, showarrow=False,
                 font=dict(size=16, color="#888"),
             )
             return fig
 
-        # Group by path
-        path_groups = {}
-        for ppid, pid in phys_to_path.items():
-            sub = cells_df[cells_df["PathId"] == pid].copy()
-            if not sub.empty:
-                path_groups[f"Path {ppid}"] = sub
+        # All unique cell IDs across all selected paths
+        all_cell_ids = sorted(set(
+            cid for cids in path_cell_seqs.values() for cid in cids
+        ))
+        label_lines = []
+        for ppid, cids in path_cell_seqs.items():
+            slack_ps = next((s for p, s in phys_with_slack if p == ppid), None)
+            label = f"Path {ppid}"
+            if slack_ps is not None:
+                label += f"  ({slack_ps:.1f} ps)"
+            label += f"  [{len(cids)} cells]"
+            label_lines.append(label)
 
-        # ── 4. Add path traces ──────────────────────────────────
-        for tr in _build_path_traces(path_groups, viz_iter):
-            fig.add_trace(tr)
+        # ── 3. Fetch positions across ALL iterations ─────────
+        # This is the key change: get every iteration's data for
+        # the path cells, regardless of whether the path was
+        # "active" (logged by STA) at any particular iteration.
+        traj_df = _get_cell_trajectories(gpl, all_cell_ids)
+        if traj_df.empty:
+            fig.add_annotation(
+                text="No position data for path cells.",
+                xref="paper", yref="paper",
+                x=0.5, y=0.5, showarrow=False,
+                font=dict(size=16, color="#888"),
+            )
+            return fig
 
-        # ── 5. Add force arrow traces ───────────────────────────
-        all_cids = list(set(cells_df["CellId"].tolist()))
-        force_df = _build_combined_force_df(gpl, all_cids, viz_iter)
+        # ── 4. Core region outline ───────────────────────────
+        try:
+            m = gpl.get_metadata()
+            lx = float(m["region_core_lx"][0])
+            ly = float(m["region_core_ly"][0])
+            bx = float(m["region_core_binSizeX"][0])
+            by = float(m["region_core_binSizeY"][0])
+            bcx = int(m["region_core_binCntX"][0])
+            bcy = int(m["region_core_binCntY"][0])
+            fig.add_shape(
+                type="rect",
+                x0=lx, y0=ly, x1=lx + bx * bcx, y1=ly + by * bcy,
+                line=dict(color="#ccc", width=1, dash="dot"),
+                fillcolor="rgba(200,200,200,0.03)",
+                layer="below",
+            )
+        except (IndexError, TypeError, ValueError, KeyError):
+            pass
+
+        # ── 5. Trajectory traces (one per path) ──────────────
+        for idx, (ppid, cids) in enumerate(path_cell_seqs.items()):
+            color = _PATH_COLORS[idx % len(_PATH_COLORS)]
+            label = f"Path {ppid}"
+            tr = _build_trajectory_trace(
+                cids, traj_df, label, color, iter_min, iter_max,
+            )
+            if tr is not None:
+                fig.add_trace(tr)
+
+        # ── 6. Snapshot path connectivity at viz_iter ─────────
+        for idx, (ppid, cids) in enumerate(path_cell_seqs.items()):
+            color = _PATH_COLORS[idx % len(_PATH_COLORS)]
+            label = f"Path {ppid}"
+            tr = _build_snapshot_path_trace(
+                cids, traj_df, viz_iter, label, color,
+            )
+            if tr is not None:
+                fig.add_trace(tr)
+
+        # ── 7. Force arrows at viz_iter ──────────────────────
+        force_df = _build_snapshot_force_df(gpl, all_cell_ids, viz_iter)
         if force_df is not None:
             for fkey in FORCE_ORDER:
                 if not toggles.get(fkey):
@@ -670,24 +714,19 @@ def make_app(db_path, read_only=False):
                 ):
                     fig.add_trace(tr)
 
-        # ── 6. Core region outline ──────────────────────────────
-        try:
-            m = gpl.get_metadata()
-            lx = float(m["region_core_lx"][0])
-            ly = float(m["region_core_ly"][0])
-            bx = float(m["region_core_binSizeX"][0])
-            by = float(m["region_core_binSizeY"][0])
-            bcx = int(m["region_core_binCntX"][0])
-            bcy = int(m["region_core_binCntY"][0])
-            fig.add_shape(
-                type="rect",
-                x0=lx, y0=ly, x1=lx+bx*bcx, y1=ly+by*bcy,
-                line=dict(color="#ccc", width=1, dash="dot"),
-                fillcolor="rgba(200,200,200,0.03)",
-                layer="below",
-            )
-        except (IndexError, TypeError, ValueError, KeyError):
-            pass
+        # ── 8. Subtitle with path info ───────────────────────
+        fig.add_annotation(
+            xref="paper", yref="paper",
+            x=0.01, y=1.01,
+            text="<br>".join(label_lines),
+            showarrow=False,
+            font=dict(size=11, color="#555"),
+            align="left",
+            bordercolor="#ddd",
+            borderwidth=1,
+            borderpad=4,
+            bgcolor="rgba(255,255,255,0.9)",
+        )
 
         return fig
 
@@ -702,30 +741,14 @@ def main():
     parser = argparse.ArgumentParser(
         description="Dash GUI for GPL path tracing with force arrows"
     )
-    parser.add_argument(
-        "--db", default=None,
-        help="Path to GPL SQLite database (default: auto-detect)",
-    )
+    parser.add_argument("--db", required=True,
+                        help="Path to GPL SQLite database")
     parser.add_argument("--port", type=int, default=8050, help="Dash port")
     parser.add_argument("--read-only", action="store_true",
                         help="Skip preprocessing (fails if not preprocessed)")
     args = parser.parse_args()
 
-    db_path = args.db
-    if db_path is None:
-        for cand in [
-            "placement-visualization.sqlite",
-            str(_HERE / ".." / ".." / "placement-visualization.sqlite"),
-            str(_HERE / ".." / ".." / "tmp" / "test_gpl.sqlite"),
-        ]:
-            if os.path.isfile(cand):
-                db_path = cand
-                break
-        if db_path is None:
-            print("ERROR: Could not find a database. Use --db PATH")
-            sys.exit(1)
-
-    db_path = os.path.abspath(db_path)
+    db_path = os.path.abspath(args.db)
     print(f"Loading database: {db_path}")
 
     if args.read_only:
