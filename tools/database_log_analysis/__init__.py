@@ -1,4 +1,5 @@
-from .core import DatabaseLog
-from .exa import ExaAnalysis
-from .gpl import GplAnalysis
-__all__ = ['DatabaseLog', 'ExaAnalysis', 'GplAnalysis']
+from .core import DbConnection
+from .gpl_db import GplDb
+from .exa_db import ExaDb
+
+__all__ = ["DbConnection", "GplDb", "ExaDb"]

@@ -1,87 +1,129 @@
+"""Base database connection for OpenROAD tool analysis.
+
+DbConnection provides:
+- SQLite connection management (read-write or read-only)
+- Automatic metadata and schema caching
+- A raw query() method
+"""
+
 import sqlite3
 import pandas as pd
-import inspect
-from typing import Tuple, Dict
 
-class DatabaseLog:
-    """Core interface to the OpenROAD database log using Pandas for data and sqlite3 for metadata."""
-    
-    def __init__(self, db_path: str):
-        # Open in read-only mode, using URI=True for safe concurrent access
-        self.conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+
+class DbConnection:
+    """Base class for tool-specific database connections.
+
+    Caches the table list, column names, and metadata on init.
+    Subclasses add query methods that are thin SQL wrappers with
+    keyword-argument filtering.
+
+    Parameters
+    ----------
+    db_path : str
+        Path to the SQLite database file.
+    read_only : bool
+        If True, open in read-only mode (safe for concurrent access).
+        If False, open read-write (needed for preprocessing).
+    """
+
+    def __init__(self, db_path: str, read_only: bool = False):
+        self.db_path = db_path
+
+        if read_only:
+            self.conn = sqlite3.connect(
+                f"file:{db_path}?mode=ro", uri=True, check_same_thread=False
+            )
+        else:
+            self.conn = sqlite3.connect(db_path, check_same_thread=False)
+
         self.conn.row_factory = sqlite3.Row
         self._cache_schema()
-        
+
+    # ------------------------------------------------------------------
+    # Schema / metadata
+    # ------------------------------------------------------------------
+
     def _cache_schema(self):
-        """Load available tables and metadata from the system tables using raw sqlite3."""
+        """Populate self.tables and self.metadata from the database."""
         self.tables = {}
-        # Load from table_list
+
         try:
-            rows = self.conn.execute("SELECT table_name, column_names FROM table_list").fetchall()
+            rows = self.conn.execute(
+                "SELECT table_name, column_names FROM table_list"
+            ).fetchall()
             for r in rows:
-                self.tables[r['table_name']] = r['column_names'].split(',')
+                self.tables[r["table_name"]] = r["column_names"].split(",")
         except sqlite3.OperationalError:
-            pass # DB might be completely empty or missing system tables
-        
-        # Scan sqlite_master for any other tables not in table_list
-        cursor = self.conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN (SELECT table_name FROM table_list)")
+            pass
+
+        # Scan sqlite_master for any tables not in table_list
+        cursor = self.conn.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type='table' AND name NOT IN ("
+            "  SELECT table_name FROM table_list)"
+        )
         for r in cursor:
-            table_name = r['name']
-            # Get column names
-            col_cursor = self.conn.execute(f"PRAGMA table_info('{table_name}')")
-            cols = [c['name'] for c in col_cursor]
-            self.tables[table_name] = cols
-            
+            tname = r["name"]
+            col_cursor = self.conn.execute(f"PRAGMA table_info('{tname}')")
+            self.tables[tname] = [c["name"] for c in col_cursor]
+
+        # Metadata key/value store
         self.metadata = {}
         try:
-            rows = self.conn.execute("SELECT key, value FROM metadata").fetchall()
+            rows = self.conn.execute(
+                "SELECT key, value FROM metadata"
+            ).fetchall()
             for r in rows:
-                if r['key'] not in self.metadata:
-                    self.metadata[r['key']] = []
-                self.metadata[r['key']].append(r['value'])
+                self.metadata.setdefault(r["key"], []).append(r["value"])
         except sqlite3.OperationalError:
             pass
 
     def get_metadata(self, key: str = None):
-        """Fetch metadata. If key is provided, return its values, else return all metadata."""
+        """Return metadata values.
+
+        Parameters
+        ----------
+        key : str or None
+            If provided, return values for that key only.
+
+        Returns
+        -------
+        dict or list
+            All metadata, or the list of values for *key*.
+        """
         if key:
             return self.metadata.get(key, [])
         return self.metadata
 
-    def query(self, sql: str, params: tuple = ()) -> pd.DataFrame:
-        """Execute a custom SQL query and return a Pandas DataFrame."""
+    # ------------------------------------------------------------------
+    # Query
+    # ------------------------------------------------------------------
+
+    def query(self, sql: str, params=()):
+        """Execute a raw SQL query and return a DataFrame.
+
+        Parameters
+        ----------
+        sql : str
+            SQL query string.  May contain ``?`` placeholders.
+        params : tuple or list
+            Parameters bound to the placeholders.
+
+        Returns
+        -------
+        pd.DataFrame
+        """
         return pd.read_sql_query(sql, self.conn, params=params)
 
-    def get_table(self, table_name: str) -> pd.DataFrame:
-        """Fetch an entire table by its user-provided name as a DataFrame."""
-        if table_name not in self.tables:
-            raise ValueError(f"Table '{table_name}' not found in database.")
-        return self.query(f"SELECT * FROM [{table_name}]")
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
 
+    def close(self):
+        self.conn.close()
 
-class AnalysisModule:
-    """Base class for tool-specific analysis modules."""
-    
-    def __init__(self, db: DatabaseLog):
-        self.db = db
+    def __enter__(self):
+        return self
 
-    @classmethod
-    def describe(cls):
-        """Print descriptions of all available data and metrics in this module."""
-        print(f"--- Module: {cls.__name__} ---")
-        print(inspect.cleandoc(cls.__doc__ or "No module description."))
-        print("\nAvailable Data & Metrics:")
-        
-        # Extract methods
-        for name, func in inspect.getmembers(cls, predicate=inspect.isroutine):
-            if name.startswith('_') or name == 'describe':
-                continue
-            doc = inspect.cleandoc(func.__doc__ or "No description provided.")
-            print(f"  * {name}():\n      {doc.replace(chr(10), chr(10)+'      ')}")
-        
-        # Extract properties
-        for name, prop in inspect.getmembers(cls, predicate=lambda o: isinstance(o, property)):
-            if name.startswith('_'): continue
-            doc = inspect.cleandoc(prop.__doc__ or "No description provided.")
-            print(f"  * {name} (property):\n      {doc.replace(chr(10), chr(10)+'      ')}")
-        print()
+    def __exit__(self, *exc):
+        self.close()
