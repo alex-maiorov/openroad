@@ -22,6 +22,7 @@ import dash
 from dash import dcc, html, Input, Output, State
 import plotly.graph_objects as go
 import plotly.express as px
+import plotly.figure_factory as ff
 import numpy as np
 import pandas as pd
 
@@ -252,7 +253,8 @@ def _build_trajectory_trace(cell_ids_in_path, traj_df, path_label,
             opacity=0.6,
         ),
         name=f"{path_label} (trajectory)",
-        showlegend=True,
+        legendgroup=path_label,
+        showlegend=False,
         hoverinfo="skip",
     )
 
@@ -286,7 +288,8 @@ def _build_snapshot_path_trace(cell_ids_in_path, traj_df, iteration,
             symbol="circle",
             line=dict(width=1.5, color="white"),
         ),
-        name=f"{path_label} @ iter {iteration}",
+        name=f"{path_label}",
+        legendgroup=path_label,
         showlegend=True,
         hovertemplate=(
             f"<b>{path_label}</b><br>"
@@ -302,8 +305,8 @@ def _build_snapshot_path_trace(cell_ids_in_path, traj_df, iteration,
     )
 
 
-def _build_arrow_traces(force_df, fkey, scale, color, name, sym):
-    """Build line + marker traces for one force type at the snapshot
+def _build_arrow_traces(force_df, fkey, scale, color, legendgroup):
+    """Build quiver traces for one force type at the snapshot
     iteration."""
     x = force_df["PosX"].values
     y = force_df["PosY"].values
@@ -317,37 +320,24 @@ def _build_arrow_traces(force_df, fkey, scale, color, name, sym):
         return []
 
     xn, yn = x[keep], y[keep]
-    fxn, fyn = fx[keep] * scale, fy[keep] * scale
-    n = sum(keep)
+    fxn, fyn = fx[keep], fy[keep]
 
-    seg_x = np.full(n * 3, np.nan)
-    seg_y = np.full(n * 3, np.nan)
-    seg_x[0::3] = xn
-    seg_y[0::3] = yn
-    seg_x[1::3] = xn + fxn
-    seg_y[1::3] = yn + fyn
+    fig_q = ff.create_quiver(
+        x=xn, y=yn, u=fxn, v=fyn,
+        scale=scale,
+        arrow_scale=0.15,
+        angle=np.pi / 7,
+        name=f"{cfg['label']} force",
+        line_color=color,
+        line_width=1.5
+    )
 
-    return [
-        go.Scatter(
-            x=seg_x.tolist(), y=seg_y.tolist(),
-            mode="lines",
-            line=dict(color=color, width=1.5),
-            name=name, legendgroup=name, showlegend=True,
-            hoverinfo="none",
-        ),
-        go.Scatter(
-            x=(xn + fxn).tolist(), y=(yn + fyn).tolist(),
-            mode="markers",
-            marker=dict(symbol=sym, size=5, color=color,
-                        line=dict(width=0.5, color="white")),
-            legendgroup=name, showlegend=False,
-            hovertemplate=(
-                f"<b>{name}</b><br>Force: %{{customdata[0]:.4e}}"
-                "<extra></extra>"
-            ),
-            customdata=np.column_stack([mag[keep].tolist()]),
-        ),
-    ]
+    trace = fig_q.data[0]
+    trace.legendgroup = legendgroup
+    trace.showlegend = False
+    trace.hoverinfo = "none"
+
+    return [trace]
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -505,6 +495,16 @@ def make_app(db_path, read_only=False):
                     html.Div(children=[_force_row(k) for k in FORCE_ORDER]),
                     html.Hr(style={"margin": "14px 0"}),
 
+                    html.Label("Visualization Options",
+                               style={"fontWeight": "bold", "fontSize": "13px"}),
+                    dcc.Checklist(
+                        id="show-trajectories-toggle",
+                        options=[{"label": " Show full cell trajectories (all iterations)", "value": "show"}],
+                        value=["show"],
+                        style={"fontSize": "12px", "marginBottom": "6px", "marginTop": "4px"}
+                    ),
+                    html.Hr(style={"margin": "14px 0"}),
+
                     html.Button(
                         "Update",
                         id="update-btn", n_clicks=0,
@@ -560,6 +560,7 @@ def make_app(db_path, read_only=False):
         State("force-tim-toggle", "value"),
         State("force-density-toggle", "value"),
         State("force-effective-toggle", "value"),
+        State("show-trajectories-toggle", "value"),
         prevent_initial_call=False,
     )
     def update_plot(
@@ -569,6 +570,7 @@ def make_app(db_path, read_only=False):
         viz_iter,
         s_wl, s_tim, s_dens, s_eff,
         t_wl, t_tim, t_dens, t_eff,
+        show_trajectories
     ):
         gpl = app._gpl
 
@@ -579,6 +581,7 @@ def make_app(db_path, read_only=False):
         max_sim = float(max_sim or 1)
         top_n = int(top_n or 5)
         viz_iter = int(viz_iter or 0)
+        show_traj = bool(show_trajectories)
 
         scales = {
             "wl": float(s_wl or 5e5),
@@ -681,38 +684,41 @@ def make_app(db_path, read_only=False):
         except (IndexError, TypeError, ValueError, KeyError):
             pass
 
-        # ── 5. Trajectory traces (one per path) ──────────────
-        for idx, (ppid, cids) in enumerate(path_cell_seqs.items()):
-            color = _PATH_COLORS[idx % len(_PATH_COLORS)]
-            label = f"Path {ppid}"
-            tr = _build_trajectory_trace(
-                cids, traj_df, label, color, iter_min, iter_max,
-            )
-            if tr is not None:
-                fig.add_trace(tr)
+        # ── 5. Build traces per path ─────────────────────────
+        force_df = _build_snapshot_force_df(gpl, all_cell_ids, viz_iter)
 
-        # ── 6. Snapshot path connectivity at viz_iter ─────────
         for idx, (ppid, cids) in enumerate(path_cell_seqs.items()):
             color = _PATH_COLORS[idx % len(_PATH_COLORS)]
             label = f"Path {ppid}"
+
+            # Trajectory
+            if show_traj:
+                tr = _build_trajectory_trace(
+                    cids, traj_df, label, color, iter_min, iter_max,
+                )
+                if tr is not None:
+                    fig.add_trace(tr)
+
+            # Snapshot Path
             tr = _build_snapshot_path_trace(
                 cids, traj_df, viz_iter, label, color,
             )
             if tr is not None:
                 fig.add_trace(tr)
 
-        # ── 7. Force arrows at viz_iter ──────────────────────
-        force_df = _build_snapshot_force_df(gpl, all_cell_ids, viz_iter)
-        if force_df is not None:
-            for fkey in FORCE_ORDER:
-                if not toggles.get(fkey):
-                    continue
-                cfg = FORCE_CONFIG[fkey]
-                for tr in _build_arrow_traces(
-                    force_df, fkey, scales[fkey],
-                    cfg["color"], cfg["label"], cfg["sym"],
-                ):
-                    fig.add_trace(tr)
+            # Force arrows (grouped with this path)
+            if force_df is not None:
+                force_sub = force_df[force_df["CellId"].isin(cids)]
+                if not force_sub.empty:
+                    for fkey in FORCE_ORDER:
+                        if not toggles.get(fkey):
+                            continue
+                        cfg = FORCE_CONFIG[fkey]
+                        for tr_arrow in _build_arrow_traces(
+                            force_sub, fkey, scales[fkey],
+                            cfg["color"], label
+                        ):
+                            fig.add_trace(tr_arrow)
 
         # ── 8. Subtitle with path info ───────────────────────
         fig.add_annotation(
