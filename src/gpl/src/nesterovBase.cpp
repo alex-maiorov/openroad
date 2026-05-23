@@ -5373,7 +5373,7 @@ FloatPoint NesterovBase::getTimingGradient(
 
     if (std::isnan(timing_gradient.x) || std::isnan(timing_gradient.y)) {
       log_->warn(GPL,
-                 351,
+                 354,
                  "getTimingGradient: NaN value detected\n"
                  "  Cell Position:       ({}, {})\n"
                  "  End1 Position:       ({}, {})\n"
@@ -5400,7 +5400,7 @@ FloatPoint NesterovBase::getTimingGradient(
     }
     if (std::isinf(timing_gradient.x) || std::isinf(timing_gradient.y)) {
       log_->warn(GPL,
-                 352,
+                 356,
                  "getTimingGradient: Inf value detected\n"
                  "  Cell Position:       ({}, {})\n"
                  "  End1 Position:       ({}, {})\n"
