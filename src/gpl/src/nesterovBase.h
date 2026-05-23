@@ -21,12 +21,12 @@
 
 #include "boost/unordered/unordered_flat_map.hpp"
 #include "db_sta/dbSta.hh"
+#include "est/EstimateParasitics.h"
 #include "gpl/Replace.h"
 #include "odb/db.h"
 #include "placerBase.h"
 #include "point.h"
 #include "routeBase.h"
-#include "est/EstimateParasitics.h"
 #include "sta/Sta.hh"
 #include "utl/Logger.h"
 
@@ -1087,6 +1087,8 @@ class NesterovBase
   FloatPoint getTimingPreconditioner(const GCell* gCell) const;
 
   FloatPoint getTimingGradient(const GCell* gCell) const;
+  FloatPoint getTimingGradient(size_t gCellIndex,
+                               const std::vector<FloatPoint>& coordi) const;
 
   FloatPoint getRoutabilityPreconditioner(const GCell* gCell) const;
 
@@ -1115,6 +1117,7 @@ class NesterovBase
                        std::vector<FloatPoint>& densityGrads,
                        std::vector<FloatPoint>& timingGrads,
                        std::vector<FloatPoint>& routabilityGrads,
+                       const std::vector<FloatPoint>& coordi,
                        float wlCoeffX,
                        float wlCoeffY);
 
@@ -1129,6 +1132,7 @@ class NesterovBase
                             std::vector<FloatPoint>& densityGrads,
                             std::vector<FloatPoint>& timingGrads,
                             std::vector<FloatPoint>& routabilityGrads,
+                            const std::vector<FloatPoint>& coordi,
                             float wlCoeffX,
                             float wlCoeffY);
 
@@ -1218,19 +1222,21 @@ class NesterovBase
   void dumpBaseIterationScalars(int iter);
   void dumpBinGrid(int iter);
   void dumpCellDenseGradients(int iter);
+  void dumpCellPositions(int iter);
   void dumpCellSparseTiming(int iter);
   void dumpCellSparseRoutability(int iter);
 
   void runTimingPassGradient(NesterovBaseCommon& nbc,
                              NesterovBaseVars& nbv,
+                             const std::vector<FloatPoint>& coordi,
                              std::vector<FloatPoint>& grad);
 
   // Populate routability tile congestion data for gradient computation.
   // Uses RUDY or GRT depending on nbv.routability_pass_use_grt.
   void runRoutabilityGradient(int iter);
-   std::optional<float> getTileCongestion(int tile_x, int tile_y) const;
-   std::pair<int, int> getTileCoordsFromCellCoords(int cell_x, int cell_y) const;
-   std::pair<int, int> getCellCoordsFromTileCoords(int tile_x, int tile_y) const;
+  std::optional<float> getTileCongestion(int tile_x, int tile_y) const;
+  std::pair<int, int> getTileCoordsFromCellCoords(int cell_x, int cell_y) const;
+  std::pair<int, int> getCellCoordsFromTileCoords(int tile_x, int tile_y) const;
 
   // Query STA for violating paths and store them in violating_paths_
   void queryTimingViolations(NesterovBaseCommon& nbc, int iter);
@@ -1407,7 +1413,8 @@ class NesterovBase
   std::vector<FloatPoint> routabilityGrads_;
 
   // Routability tile congestion data for gradient computation.
-  // Populated by runRoutabilityGradient(), consumed by getRoutabilityGradient().
+  // Populated by runRoutabilityGradient(), consumed by
+  // getRoutabilityGradient().
   std::vector<float> routability_tile_congestion_;
   int routability_tile_cnt_x_ = 0;
   int routability_tile_cnt_y_ = 0;

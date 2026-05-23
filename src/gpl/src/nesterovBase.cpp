@@ -22,10 +22,12 @@
 #include <utility>
 #include <vector>
 
-#include "db_sta/dbNetwork.hh"
 #include "boost/polygon/polygon.hpp"
+#include "db_sta/dbNetwork.hh"
 #include "fft.h"
 #include "gpl/Replace.h"
+#include "grt/GlobalRouter.h"
+#include "grt/Rudy.h"
 #include "nesterovPlace.h"
 #include "odb/db.h"
 #include "omp.h"
@@ -40,9 +42,6 @@
 #include "sta/Sta.hh"
 #include "timingBase.h"
 #include "utl/Logger.h"
-
-#include "grt/GlobalRouter.h"
-#include "grt/Rudy.h"
 
 #define REPLACE_SQRT2 1.414213562373095048801L
 
@@ -1096,18 +1095,18 @@ NesterovBaseVars::NesterovBaseVars(const PlaceOptions& options)
       timing_pass_top_n(options.timingGradPassTopN),
       timing_pass_proj_weight(options.timingGradPassProjWeight),
       timing_pass_end_to_end_weight(options.timingGradPassEndToEndWeight),
-       timing_pass_slack_sharpness(options.timingGradPassSlackSharpness),
-       timing_pass_slack_offset(options.timingGradPassSlackOffset),
-       timing_pass_slack_upper(options.timingGradPassSlackUpper),
-        timing_pass_sta_run_interval(options.timingGradPassStaRunInterval),
-        timing_pass_first_iter(options.timingGradPassFirstIter),
-        routability_pass_sharpness(options.routabilityGradPassSharpness),
-        routability_pass_weight(options.routabilityGradPassWeight),
-        routability_pass_range(options.routabilityGradPassRange),
-        routability_pass_offset(options.routabilityGradPassOffset),
-        routability_pass_first_iter(options.routabilityGradPassFirstIter),
-        routability_pass_run_interval(options.routabilityGradPassRunInterval),
-        routability_pass_use_grt(options.routabilityGradPassUseGrt)
+      timing_pass_slack_sharpness(options.timingGradPassSlackSharpness),
+      timing_pass_slack_offset(options.timingGradPassSlackOffset),
+      timing_pass_slack_upper(options.timingGradPassSlackUpper),
+      timing_pass_sta_run_interval(options.timingGradPassStaRunInterval),
+      timing_pass_first_iter(options.timingGradPassFirstIter),
+      routability_pass_sharpness(options.routabilityGradPassSharpness),
+      routability_pass_weight(options.routabilityGradPassWeight),
+      routability_pass_range(options.routabilityGradPassRange),
+      routability_pass_offset(options.routabilityGradPassOffset),
+      routability_pass_first_iter(options.routabilityGradPassFirstIter),
+      routability_pass_run_interval(options.routabilityGradPassRunInterval),
+      routability_pass_use_grt(options.routabilityGradPassUseGrt)
 {
 }
 
@@ -1124,11 +1123,11 @@ NesterovPlaceVars::NesterovPlaceVars(const PlaceOptions& options)
       keepResizeBelowOverflow(options.keepResizeBelowOverflow),
       timingDrivenMode(options.timingDrivenMode),
       routability_driven_mode(options.routabilityDrivenMode),
-       disableRevertIfDiverge(options.disableRevertIfDiverge),
-        timingGradPassStaRunInterval(options.timingGradPassStaRunInterval),
-        timingGradPassFirstIter(options.timingGradPassFirstIter),
-        routabilityGradPassFirstIter(options.routabilityGradPassFirstIter),
-        routabilityGradPassRunInterval(options.routabilityGradPassRunInterval)
+      disableRevertIfDiverge(options.disableRevertIfDiverge),
+      timingGradPassStaRunInterval(options.timingGradPassStaRunInterval),
+      timingGradPassFirstIter(options.timingGradPassFirstIter),
+      routabilityGradPassFirstIter(options.routabilityGradPassFirstIter),
+      routabilityGradPassRunInterval(options.routabilityGradPassRunInterval)
 {
 }
 
@@ -2730,8 +2729,7 @@ void NesterovBase::runRoutabilityGradient(int iter)
     routability_tile_congestion_.resize(grid_x * grid_y, 0.0f);
     for (int ty = 0; ty < grid_y; ty++) {
       for (int tx = 0; tx < grid_x; tx++) {
-        const float ratio
-            = rudy->getTile(tx, ty).getRudy() / 100.0f;
+        const float ratio = rudy->getTile(tx, ty).getRudy() / 100.0f;
         const int idx = ty * grid_x + tx;
         routability_tile_congestion_[idx]
             = (std::isfinite(ratio)) ? ratio : 0.0f;
@@ -2779,39 +2777,29 @@ void NesterovBase::runRoutabilityGradient(int iter)
       for (int ty = 0; ty < routability_tile_cnt_y_; ty++) {
         for (int tx = 0; tx < routability_tile_cnt_x_; tx++) {
           float ratio = 0.0f;
-          if (layer >= min_routing_layer
-              && layer <= max_routing_layer) {
-            const uint8_t cur_cap
-                = gGrid->getCapacity(db_layer, tx, ty);
-            const uint8_t cur_use
-                = gGrid->getUsage(db_layer, tx, ty);
-            ratio = (cur_cap > 0)
-                        ? static_cast<float>(cur_use) / cur_cap
-                        : 0.0f;
+          if (layer >= min_routing_layer && layer <= max_routing_layer) {
+            const uint8_t cur_cap = gGrid->getCapacity(db_layer, tx, ty);
+            const uint8_t cur_use = gGrid->getUsage(db_layer, tx, ty);
+            ratio
+                = (cur_cap > 0) ? static_cast<float>(cur_use) / cur_cap : 0.0f;
 
             // Mirror neighbor-tile logic from RouteBase::updateGrtRoute:
             // horizontal layers also consider the left neighbor's right edge
             if (is_horizontal && tx >= 1) {
-              const uint8_t left_cap
-                  = gGrid->getCapacity(db_layer, tx - 1, ty);
-              const uint8_t left_use
-                  = gGrid->getUsage(db_layer, tx - 1, ty);
+              const uint8_t left_cap = gGrid->getCapacity(db_layer, tx - 1, ty);
+              const uint8_t left_use = gGrid->getUsage(db_layer, tx - 1, ty);
               const float left_ratio
-                  = (left_cap > 0)
-                        ? static_cast<float>(left_use) / left_cap
-                        : 0.0f;
+                  = (left_cap > 0) ? static_cast<float>(left_use) / left_cap
+                                   : 0.0f;
               ratio = std::fmax(left_ratio, ratio);
             }
             // vertical layers also consider the down neighbor's up edge
             if (!is_horizontal && ty >= 1) {
-              const uint8_t down_cap
-                  = gGrid->getCapacity(db_layer, tx, ty - 1);
-              const uint8_t down_use
-                  = gGrid->getUsage(db_layer, tx, ty - 1);
+              const uint8_t down_cap = gGrid->getCapacity(db_layer, tx, ty - 1);
+              const uint8_t down_use = gGrid->getUsage(db_layer, tx, ty - 1);
               const float down_ratio
-                  = (down_cap > 0)
-                        ? static_cast<float>(down_use) / down_cap
-                        : 0.0f;
+                  = (down_cap > 0) ? static_cast<float>(down_use) / down_cap
+                                   : 0.0f;
               ratio = std::fmax(down_ratio, ratio);
             }
 
@@ -2825,8 +2813,7 @@ void NesterovBase::runRoutabilityGradient(int iter)
     }
 
     // Average across routing layers
-    const int layer_count
-        = max_routing_layer - min_routing_layer + 1;
+    const int layer_count = max_routing_layer - min_routing_layer + 1;
     if (layer_count > 0) {
       for (auto& c : routability_tile_congestion_) {
         c /= static_cast<float>(layer_count);
@@ -2835,26 +2822,32 @@ void NesterovBase::runRoutabilityGradient(int iter)
   }
 }
 
-std::optional<float> NesterovBase::getTileCongestion(int tile_x, int tile_y) const
+std::optional<float> NesterovBase::getTileCongestion(int tile_x,
+                                                     int tile_y) const
 {
-  if (tile_x < 0 || tile_x >= routability_tile_cnt_x_ || tile_y < 0 || tile_y >= routability_tile_cnt_y_) {
+  if (tile_x < 0 || tile_x >= routability_tile_cnt_x_ || tile_y < 0
+      || tile_y >= routability_tile_cnt_y_) {
     return std::nullopt;
   }
   int idx = tile_y * routability_tile_cnt_x_ + tile_x;
   return routability_tile_congestion_[idx];
 }
 
-std::pair<int, int> NesterovBase::getTileCoordsFromCellCoords(int cell_x, int cell_y) const
+std::pair<int, int> NesterovBase::getTileCoordsFromCellCoords(int cell_x,
+                                                              int cell_y) const
 {
   int tile_x = (cell_x - routability_grid_lx_) / routability_tile_size_;
   int tile_y = (cell_y - routability_grid_ly_) / routability_tile_size_;
   return {tile_x, tile_y};
 }
 
-std::pair<int, int> NesterovBase::getCellCoordsFromTileCoords(int tile_x, int tile_y) const
+std::pair<int, int> NesterovBase::getCellCoordsFromTileCoords(int tile_x,
+                                                              int tile_y) const
 {
-  int cx = routability_grid_lx_ + tile_x * routability_tile_size_ + routability_tile_size_ / 2;
-  int cy = routability_grid_ly_ + tile_y * routability_tile_size_ + routability_tile_size_ / 2;
+  int cx = routability_grid_lx_ + tile_x * routability_tile_size_
+           + routability_tile_size_ / 2;
+  int cy = routability_grid_ly_ + tile_y * routability_tile_size_
+           + routability_tile_size_ / 2;
   return {cx, cy};
 }
 
@@ -2865,18 +2858,20 @@ FloatPoint NesterovBase::getRoutabilityGradient(const GCell* gCell) const
   // Access pattern for tile congestion data:
   //
   //   1. Find which tile this cell falls into:
-  //      int tile_x = (gCell->cx() - routability_grid_lx_) / routability_tile_size_;
-  //      int tile_y = (gCell->cy() - routability_grid_ly_) / routability_tile_size_;
-  //      tile_x = std::clamp(tile_x, 0, routability_tile_cnt_x_ - 1);
-  //      tile_y = std::clamp(tile_y, 0, routability_tile_cnt_y_ - 1);
+  //      int tile_x = (gCell->cx() - routability_grid_lx_) /
+  //      routability_tile_size_; int tile_y = (gCell->cy() -
+  //      routability_grid_ly_) / routability_tile_size_; tile_x =
+  //      std::clamp(tile_x, 0, routability_tile_cnt_x_ - 1); tile_y =
+  //      std::clamp(tile_y, 0, routability_tile_cnt_y_ - 1);
   //
   //   2. Access tile congestion:
   //      int idx = tile_y * routability_tile_cnt_x_ + tile_x;
   //      float congestion = routability_tile_congestion_[idx];
   //
   //   3. Iterate over neighborhood tiles within 'range':
-  //      int range_in_tiles = static_cast<int>(routability_pass_range / routability_tile_size_);
-  //      for (int dy = -range_in_tiles; dy <= range_in_tiles; dy++) {
+  //      int range_in_tiles = static_cast<int>(routability_pass_range /
+  //      routability_tile_size_); for (int dy = -range_in_tiles; dy <=
+  //      range_in_tiles; dy++) {
   //        for (int dx = -range_in_tiles; dx <= range_in_tiles; dx++) {
   //          int nx = tile_x + dx;
   //          int ny = tile_y + dy;
@@ -2895,57 +2890,79 @@ FloatPoint NesterovBase::getRoutabilityGradient(const GCell* gCell) const
   //   routability_pass_offset     - offset applied before sharpness
   //
 
+  // Algorithm: For each routability congestion zone, the formula should be
+  // weight * distance_squared * (exp(sharpness * (congestion - offset)) - 1).
+  // The exponential component should yield a result where faraway stuff is
+  // irrelevant, but nearby low congestion will pull on the cell.
+  // TODO: This shouldn't overpower more important things, and there is no way
+  // to set that right now. WARNING: Keep in mind that the basis direction for
+  // this is FROM THE TILE TO THE CELL, so that positive values push the cell
+  // away from the congested zones
 
-  // Algorithm: For each routability congestion zone, the formula should be weight * distance_squared * (exp(sharpness * (congestion - offset)) - 1).
-  // The exponential component should yield a result where faraway stuff is irrelevant, but nearby low congestion will pull on the cell.
-  // TODO: This shouldn't overpower more important things, and there is no way to set that right now.
-  // WARNING: Keep in mind that the basis direction for this is FROM THE TILE TO THE CELL, so that positive values push the cell away from the congested zones
-
-  // FIXME: The first iter + 1 is paranoia to avoid this messing up the solution. Probably worth doing this whole orechstration differently honestly.
-  if(!npVars_->routability_driven_mode ||
-    iter_ < (nbVars_.routability_pass_first_iter + 1) ||
-    routability_tile_size_ == 0)
-  {
+  // FIXME: The first iter + 1 is paranoia to avoid this messing up the
+  // solution. Probably worth doing this whole orechstration differently
+  // honestly.
+  if (!npVars_->routability_driven_mode
+      || iter_ < (nbVars_.routability_pass_first_iter + 1)
+      || routability_tile_size_ == 0) {
     return FloatPoint(0.0f, 0.0f);
   }
   // TODO: Figure out if this is wise
-  int cell_tile_x = (gCell->cx() - routability_grid_lx_) / routability_tile_size_;
-  int cell_tile_y = (gCell->cy() - routability_grid_ly_) / routability_tile_size_;
+  int cell_tile_x
+      = (gCell->cx() - routability_grid_lx_) / routability_tile_size_;
+  int cell_tile_y
+      = (gCell->cy() - routability_grid_ly_) / routability_tile_size_;
   cell_tile_x = std::clamp(cell_tile_x, 0, routability_tile_cnt_x_ - 1);
   cell_tile_y = std::clamp(cell_tile_y, 0, routability_tile_cnt_y_ - 1);
 
-  // Not sure if this will be suceptible to round-to-zero problems or other issues
+  // Not sure if this will be suceptible to round-to-zero problems or other
+  // issues
   int tile_range = nbVars_.routability_pass_range / routability_tile_size_;
 
-  int upper_x =  std::clamp(cell_tile_x, cell_tile_x + tile_range, routability_tile_cnt_x_ - 1);
-  int upper_y =  std::clamp(cell_tile_y, cell_tile_y + tile_range, routability_tile_cnt_x_ - 1);
-  int lower_x =  std::clamp(cell_tile_x, cell_tile_x - tile_range, routability_tile_cnt_x_ - 1);
-  int lower_y =  std::clamp(cell_tile_y, cell_tile_y - tile_range, routability_tile_cnt_x_ - 1);
+  int upper_x = std::clamp(
+      cell_tile_x, cell_tile_x + tile_range, routability_tile_cnt_x_ - 1);
+  int upper_y = std::clamp(
+      cell_tile_y, cell_tile_y + tile_range, routability_tile_cnt_x_ - 1);
+  int lower_x = std::clamp(
+      cell_tile_x, cell_tile_x - tile_range, routability_tile_cnt_x_ - 1);
+  int lower_y = std::clamp(
+      cell_tile_y, cell_tile_y - tile_range, routability_tile_cnt_x_ - 1);
 
   float tile_range_squared = float(tile_range * tile_range);
 
-
   auto routability_force = FloatPoint(0, 0);
-  // rx and ry are tile-space coordinates that we iterate over the whole neighborhood of the cell on.
-  for(int rx = lower_x; rx <= upper_x; rx++){
-    for(int ry = lower_y; ry <= upper_y; ry++){
-      float distance_squared = float(((cell_tile_x - rx) * (cell_tile_x - rx)) + ((cell_tile_y - ry) * (cell_tile_y - ry)));
-      if(distance_squared > tile_range_squared){
+  // rx and ry are tile-space coordinates that we iterate over the whole
+  // neighborhood of the cell on.
+  for (int rx = lower_x; rx <= upper_x; rx++) {
+    for (int ry = lower_y; ry <= upper_y; ry++) {
+      float distance_squared
+          = float(((cell_tile_x - rx) * (cell_tile_x - rx))
+                  + ((cell_tile_y - ry) * (cell_tile_y - ry)));
+      if (distance_squared > tile_range_squared) {
         continue;
       }
       auto congestion_opt = getTileCongestion(rx, ry);
 
-      if(!congestion_opt){
+      if (!congestion_opt) {
         continue;
       }
       float congestion = congestion_opt.value();
-      FloatPoint tile_cellspace_coords = FloatPoint(getCellCoordsFromTileCoords(rx, ry));
+      FloatPoint tile_cellspace_coords
+          = FloatPoint(getCellCoordsFromTileCoords(rx, ry));
       FloatPoint cell_coords = FloatPoint(gCell->cx(), gCell->cy());
-      FloatPoint cell_to_tile_vector = cell_coords - tile_cellspace_coords; // see warning above about needing this to be tile->cell
+      FloatPoint cell_to_tile_vector
+          = cell_coords
+            - tile_cellspace_coords;  // see warning above about needing this to
+                                      // be tile->cell
 
       float cell_to_tile_distance = cell_to_tile_vector.magnitude();
-      // We never unit-vectorred the original vector so we only need to multiply by distance once.
-      float force_weight = cell_to_tile_distance * nbVars_.routability_pass_weight * (std::exp(nbVars_.routability_pass_sharpness * (congestion - nbVars_.routability_pass_offset)) - 1.0f);
+      // We never unit-vectorred the original vector so we only need to multiply
+      // by distance once.
+      float force_weight
+          = cell_to_tile_distance * nbVars_.routability_pass_weight
+            * (std::exp(nbVars_.routability_pass_sharpness
+                        * (congestion - nbVars_.routability_pass_offset))
+               - 1.0f);
       FloatPoint scaled_vector = cell_to_tile_vector * force_weight;
       FloatPoint routability_force = routability_force + scaled_vector;
     }
@@ -3041,6 +3058,7 @@ void NesterovBase::initDensity1()
 
   // bin
   updateGCellDensityCenterLocation(curSLPCoordi_);
+  updateGCellCenterLocation(curSLPCoordi_);
 
   prev_hpwl_ = nbc_->getHpwl();
 
@@ -3115,6 +3133,7 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
                                    std::vector<FloatPoint>& densityGrads,
                                    std::vector<FloatPoint>& timingGrads,
                                    std::vector<FloatPoint>& routabilityGrads,
+                                   const std::vector<FloatPoint>& coordi,
                                    float wlCoeffX,
                                    float wlCoeffY)
 {
@@ -3141,7 +3160,7 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
   // This computes gradient contributions from timing violations
   std::fill(timingGrads.begin(), timingGrads.end(), FloatPoint(0, 0));
   if (sta_ != nullptr && npVars_->timingDrivenMode) {
-    runTimingPassGradient(*nbc_, nbVars_, timingGrads);
+    runTimingPassGradient(*nbc_, nbVars_, coordi, timingGrads);
   }
 
   // NOTE: Routability tile congestion data is refreshed periodically by
@@ -3222,11 +3241,12 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
     densityGradSum_ += std::fabs(densityGrads[i].x);
     densityGradSum_ += std::fabs(densityGrads[i].y);
 
-
-    //FIXME: Get rid of this later, expensive and only for debug
-    if(std::abs(timingGrads[i].x) > 0.0 || std::abs(timingGrads[i].y) > 0.0){
-      float tim_mag = std::sqrt(std::pow(timingGrads[i].x, 2) + std::pow(timingGrads[i].y, 2));
-      float wl_mag  = std::sqrt(std::pow(wireLengthGrads[i].x, 2) + std::pow(wireLengthGrads[i].y, 2));
+    // FIXME: Get rid of this later, expensive and only for debug
+    if (std::abs(timingGrads[i].x) > 0.0 || std::abs(timingGrads[i].y) > 0.0) {
+      float tim_mag = std::sqrt(std::pow(timingGrads[i].x, 2)
+                                + std::pow(timingGrads[i].y, 2));
+      float wl_mag = std::sqrt(std::pow(wireLengthGrads[i].x, 2)
+                               + std::pow(wireLengthGrads[i].y, 2));
 
       num_nonzero_tim++;
       mean_wl_where_timing_nz += wl_mag;
@@ -3240,20 +3260,21 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
 
   float tim_wl_ratio = mean_tim_where_timing_nz / mean_wl_where_timing_nz;
 
-  if(tim_wl_ratio >= timing_to_wirelength_warning_thresh){
-    log_->warn(GPL,
-               353,
-               "Mean timing to Wirelength Ratio exceeded warning threshold({}>={})",
-               tim_wl_ratio,
-               timing_to_wirelength_warning_thresh);
-  }
-  else{
+  if (tim_wl_ratio >= timing_to_wirelength_warning_thresh) {
+    log_->warn(
+        GPL,
+        353,
+        "Mean timing to Wirelength Ratio exceeded warning threshold({}>={})",
+        tim_wl_ratio,
+        timing_to_wirelength_warning_thresh);
+  } else {
     debugPrint(log_,
                GPL,
                "updateGrad",
                1,
                "tim_wl_ratio: {}, total nonzero: {}",
-               tim_wl_ratio, num_nonzero_tim);
+               tim_wl_ratio,
+               num_nonzero_tim);
   }
 
   debugPrint(log_,
@@ -3281,6 +3302,7 @@ void NesterovBase::nbUpdatePrevGradient(float wlCoeffX, float wlCoeffY)
                   prevSLPDensityGrads_,
                   prevSLPTimingGrads_,
                   prevSLPRoutabilityGrads_,
+                  prevSLPCoordi_,
                   wlCoeffX,
                   wlCoeffY);
 }
@@ -3292,6 +3314,7 @@ void NesterovBase::nbUpdateCurGradient(float wlCoeffX, float wlCoeffY)
                   curSLPDensityGrads_,
                   curSLPTimingGrads_,
                   curSLPRoutabilityGrads_,
+                  curSLPCoordi_,
                   wlCoeffX,
                   wlCoeffY);
 }
@@ -3303,6 +3326,7 @@ void NesterovBase::nbUpdateNextGradient(float wlCoeffX, float wlCoeffY)
                   nextSLPDensityGrads_,
                   nextSLPTimingGrads_,
                   nextSLPRoutabilityGrads_,
+                  nextSLPCoordi_,
                   wlCoeffX,
                   wlCoeffY);
 }
@@ -3317,6 +3341,7 @@ void NesterovBase::updateSinglePrevGradient(size_t gCellIndex,
                        prevSLPDensityGrads_,
                        prevSLPTimingGrads_,
                        prevSLPRoutabilityGrads_,
+                       prevSLPCoordi_,
                        wlCoeffX,
                        wlCoeffY);
 }
@@ -3331,6 +3356,7 @@ void NesterovBase::updateSingleCurGradient(size_t gCellIndex,
                        curSLPDensityGrads_,
                        curSLPTimingGrads_,
                        curSLPRoutabilityGrads_,
+                       curSLPCoordi_,
                        wlCoeffX,
                        wlCoeffY);
 }
@@ -3342,6 +3368,7 @@ void NesterovBase::updateSingleGradient(
     std::vector<FloatPoint>& densityGrads,
     std::vector<FloatPoint>& timingGrads,
     std::vector<FloatPoint>& routabilityGrads,
+    const std::vector<FloatPoint>& coordi,
     float wlCoeffX,
     float wlCoeffY)
 {
@@ -3362,7 +3389,7 @@ void NesterovBase::updateSingleGradient(
   wireLengthGrads[gCellIndex]
       = nbc_->getWireLengthGradientWA(gCell, wlCoeffX, wlCoeffY);
   densityGrads[gCellIndex] = getDensityGradient(gCell);
-  timingGrads[gCellIndex] = getTimingGradient(gCell);
+  timingGrads[gCellIndex] = getTimingGradient(gCellIndex, coordi);
   routabilityGrads[gCellIndex] = getRoutabilityGradient(gCell);
 
   sumGrads[gCellIndex].x = wireLengthGrads[gCellIndex].x
@@ -3422,18 +3449,22 @@ void NesterovBase::updateInitialPrevSLPCoordi()
 void NesterovBase::updateDensityCenterCur()
 {
   updateGCellDensityCenterLocation(curCoordi_);
+  updateGCellCenterLocation(curCoordi_);
 }
 void NesterovBase::updateDensityCenterCurSLP()
 {
   updateGCellDensityCenterLocation(curSLPCoordi_);
+  updateGCellCenterLocation(curSLPCoordi_);
 }
 void NesterovBase::updateDensityCenterPrevSLP()
 {
   updateGCellDensityCenterLocation(prevSLPCoordi_);
+  updateGCellCenterLocation(prevSLPCoordi_);
 }
 void NesterovBase::updateDensityCenterNextSLP()
 {
   updateGCellDensityCenterLocation(nextSLPCoordi_);
+  updateGCellCenterLocation(nextSLPCoordi_);
 }
 
 void NesterovBase::resetMinSumOverflow()
@@ -3649,6 +3680,7 @@ void NesterovBase::nesterovUpdateCoordinates(float coeff)
 
   // Update Density
   updateGCellDensityCenterLocation(nextSLPCoordi_);
+  updateGCellCenterLocation(nextSLPCoordi_);
   updateDensityFieldBin();
 }
 
@@ -3849,6 +3881,7 @@ bool NesterovBase::revertToSnapshot()
   stepLength_ = snapshotStepLength_;
 
   updateGCellDensityCenterLocation(curCoordi_);
+  updateGCellCenterLocation(curCoordi_);
   updateDensityFieldBin();
 
   isDiverged_ = false;
@@ -4971,11 +5004,7 @@ std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
 
   // Query STA for path ends matching our filter criteria
   // This returns paths sorted by slack (most critical first)
-  debugPrint(log_,
-             GPL,
-             "timing",
-             1,
-             "gradientPass: About to run findPathEnds");
+  debugPrint(log_, GPL, "timing", 1, "gradientPass: About to run findPathEnds");
   if (sta_ == nullptr) {
     debugPrint(log_, GPL, "timing", 1, "gradientPass: sta_ was null");
     return violating_paths;
@@ -5008,7 +5037,6 @@ std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
              "gradientPass: Ran findPathEnds, found {} ends.",
              ends.size());
 
-
   // Get the database network adapter for converting between OpenSTA and OpenDB
   // objects
   sta::dbNetwork* network = sta_->getDbNetwork();
@@ -5024,7 +5052,7 @@ std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
     sta::Slack slack = end->slack(sta_);
     tns = tns + std::min(slack, zero_slack);
     asl = asl + (slack / ends.size());
-    if(std::min(slack, zero_slack) < wns){
+    if (std::min(slack, zero_slack) < wns) {
       wns = slack;
     }
 
@@ -5090,18 +5118,13 @@ std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
     violating_path.slacks = std::move(slacks);
     violating_paths.push_back(violating_path);
   }
-  debugPrint(log_,
-             GPL,
-             "timing",
-             1,
-             "TNS: {}, WNS: {}, ASL: {}",
-             tns, wns, asl);
+  debugPrint(
+      log_, GPL, "timing", 1, "TNS: {}, WNS: {}, ASL: {}", tns, wns, asl);
 
   return violating_paths;
 }
 
-void gpl::NesterovBase::queryTimingViolations(NesterovBaseCommon& nbc,
-                                              int iter)
+void gpl::NesterovBase::queryTimingViolations(NesterovBaseCommon& nbc, int iter)
 {
   // Query STA for violating paths and store them
   violating_paths_ = getViolatingPaths(nbVars_.timing_pass_top_n, nbc);
@@ -5111,19 +5134,19 @@ void gpl::NesterovBase::queryTimingViolations(NesterovBaseCommon& nbc,
   std::vector<int> slacks_path_id;
   std::vector<float> slacks_slack;
   std::vector<int> slacks_iter;
-  
+
   std::vector<int> nodes_path_id;
   std::vector<int> nodes_cell_id;
   std::vector<int> nodes_iter;
   std::vector<int> nodes_path_seq;
   std::vector<float> nodes_slack;
-  
+
   for (const auto& path : violating_paths_) {
     int path_id = base_path_id++;
     slacks_path_id.push_back(path_id);
     slacks_slack.push_back(path.slack);
     slacks_iter.push_back(iter);
-    
+
     for (size_t i = 0; i < path.gCellIndexSequence.size(); ++i) {
       nodes_path_id.push_back(path_id);
       nodes_cell_id.push_back(path.gCellIndexSequence[i]);
@@ -5132,15 +5155,24 @@ void gpl::NesterovBase::queryTimingViolations(NesterovBaseCommon& nbc,
       nodes_slack.push_back(path.slacks[i]);
     }
   }
-  
-  log_->logToDbBulk<"PathId,Slack,Iter">(
-    utl::GPL, 803, "gpl_path_slacks", slacks_path_id.size(),
-    slacks_path_id.begin(), slacks_slack.begin(), slacks_iter.begin());
 
-  log_->logToDbBulk<"PathId,CellId,Iter,PathSeq,Slack">(
-    utl::GPL, 804, "gpl_path_cells", nodes_path_id.size(),
-    nodes_path_id.begin(), nodes_cell_id.begin(), nodes_iter.begin(), 
-    nodes_path_seq.begin(), nodes_slack.begin());
+  log_->logToDbBulk<"PathId,Slack,Iter">(utl::GPL,
+                                         803,
+                                         "gpl_path_slacks",
+                                         slacks_path_id.size(),
+                                         slacks_path_id.begin(),
+                                         slacks_slack.begin(),
+                                         slacks_iter.begin());
+
+  log_->logToDbBulk<"PathId,CellId,Iter,PathSeq,Slack">(utl::GPL,
+                                                        804,
+                                                        "gpl_path_cells",
+                                                        nodes_path_id.size(),
+                                                        nodes_path_id.begin(),
+                                                        nodes_cell_id.begin(),
+                                                        nodes_iter.begin(),
+                                                        nodes_path_seq.begin(),
+                                                        nodes_slack.begin());
 }
 
 // Helper to compute the timing slack weight.
@@ -5148,16 +5180,20 @@ void gpl::NesterovBase::queryTimingViolations(NesterovBaseCommon& nbc,
 // Negative slack (violation) increases weight; zero slack gives weight =
 // exp(-offset).
 static float calculateTimingSlackWeight(float slack,
-                                         float sharpness,
-                                         float offset)
+                                        float sharpness,
+                                        float offset)
 {
-  // Positive Normalized Logistic Function. Numerically friendly version of if(slack < offset) return else return 0
-  return 1.0f - (1.0f/(1.0f + std::exp(-1.0f * sharpness * (slack - offset))));
+  // Positive Normalized Logistic Function. Numerically friendly version of
+  // if(slack < offset) return else return 0
+  return 1.0f
+         - (1.0f / (1.0f + std::exp(-1.0f * sharpness * (slack - offset))));
 }
 
-void gpl::NesterovBase::runTimingPassGradient(NesterovBaseCommon& nbc,
-                                              NesterovBaseVars& nbv,
-                                              std::vector<FloatPoint>& grad)
+void gpl::NesterovBase::runTimingPassGradient(
+    NesterovBaseCommon& nbc,
+    NesterovBaseVars& nbv,
+    const std::vector<FloatPoint>& coordi,
+    std::vector<FloatPoint>& grad)
 {
   int inf_cnt = 0;
   int nan_cnt = 0;
@@ -5175,43 +5211,44 @@ void gpl::NesterovBase::runTimingPassGradient(NesterovBaseCommon& nbc,
                path.slack,
                gCell_indices.size());
 
-    GCell& end1 = nbc.getGCell(gCell_indices.front());
-    GCell& end2 = nbc.getGCell(gCell_indices.back());
+    const size_t end1_idx = gCell_indices.front();
+    const size_t end2_idx = gCell_indices.back();
 
-    const float end1_x = end1.cx();
-    const float end1_y = end1.cy();
-    const float end2_x = end2.cx();
-    const float end2_y = end2.cy();
+    const FloatPoint end1_pos = coordi[end1_idx];
+    const FloatPoint end2_pos = coordi[end2_idx];
 
     // if (std::abs(path.slack) > kMinSlackThreshold_) {
     //   continue;
     // }
 
-    const float slack_weight = calculateTimingSlackWeight(
-        path.slack, nbv.timing_pass_slack_sharpness, nbv.timing_pass_slack_offset);
+    const float slack_weight
+        = calculateTimingSlackWeight(path.slack,
+                                     nbv.timing_pass_slack_sharpness,
+                                     nbv.timing_pass_slack_offset);
 
     for (size_t i = 0; i < gCell_indices.size(); ++i) {
       const size_t cell_idx = gCell_indices[i];
-      GCell& cell = nbc.getGCell(cell_idx);
 
-      const FloatPoint cell_pos{static_cast<float>(cell.cx()),
-                                static_cast<float>(cell.cy())};
-      const FloatPoint end1_pos{end1_x, end1_y};
-      const FloatPoint end2_pos{end2_x, end2_y};
+      const FloatPoint cell_pos = coordi[cell_idx];
 
       const bool is_endpoint = (i == 0 || i == gCell_indices.size() - 1);
 
-      FloatPoint force = calculateTimingGradientValue(
-          cell_pos, end1_pos, end2_pos, slack_weight,
-          nbv.timing_pass_end_to_end_weight,
-          nbv.timing_pass_proj_weight,
-          gCell_indices.size(), is_endpoint, i);
+      FloatPoint force
+          = calculateTimingGradientValue(cell_pos,
+                                         end1_pos,
+                                         end2_pos,
+                                         slack_weight,
+                                         nbv.timing_pass_end_to_end_weight,
+                                         nbv.timing_pass_proj_weight,
+                                         gCell_indices.size(),
+                                         is_endpoint,
+                                         i);
 
-      if(std::isnan(force.x) || std::isnan(force.y)){
+      if (std::isnan(force.x) || std::isnan(force.y)) {
         nan_cnt++;
         continue;
       }
-      if(std::isinf(force.x) || std::isinf(force.y)){
+      if (std::isinf(force.x) || std::isinf(force.y)) {
         inf_cnt++;
         continue;
       }
@@ -5219,10 +5256,15 @@ void gpl::NesterovBase::runTimingPassGradient(NesterovBaseCommon& nbc,
       grad[cell_idx] = grad[cell_idx] + force;
     }
   }
-  if(nan_cnt != 0 || inf_cnt != 0){
-    log_->warn(GPL, 350, "runTimingPassGradient: Skipped {} Gradient Updates due to {} NaNs and {} Infs", nan_cnt + inf_cnt, nan_cnt, inf_cnt);
+  if (nan_cnt != 0 || inf_cnt != 0) {
+    log_->warn(GPL,
+               350,
+               "runTimingPassGradient: Skipped {} Gradient Updates due to {} "
+               "NaNs and {} Infs",
+               nan_cnt + inf_cnt,
+               nan_cnt,
+               inf_cnt);
   }
-
 }
 
 FloatPoint NesterovBase::calculateTimingGradientValue(
@@ -5249,14 +5291,19 @@ FloatPoint NesterovBase::calculateTimingGradientValue(
 
   // Projection force calc
   if (proj_weight > 0.0f && path_length > 2 && !is_endpoint) {
-    const FloatPoint e1_to_e2_vec{end2_pos.x - end1_pos.x, end2_pos.y - end1_pos.y};
+    const FloatPoint e1_to_e2_vec{end2_pos.x - end1_pos.x,
+                                  end2_pos.y - end1_pos.y};
     float position_scaling_factor = float(cell_index) / float(path_length);
-    FloatPoint point_to_attract_cell_to = end1_pos + (e1_to_e2_vec * position_scaling_factor); // TODO: Not sure if it will be obvious what this does
-    force = FloatPoint(point_to_attract_cell_to - cell_pos) * float(proj_weight * slack_weight); // FIXME: maybe normalize this
+    FloatPoint point_to_attract_cell_to
+        = end1_pos
+          + (e1_to_e2_vec
+             * position_scaling_factor);  // TODO: Not sure if it will be
+                                          // obvious what this does
+    force = FloatPoint(point_to_attract_cell_to - cell_pos)
+            * float(proj_weight * slack_weight);  // FIXME: maybe normalize this
 
-
-
-    // Old calculation was a bit silly due to not accounting for intermediate cells not actually being in-between endpoints, so it has been replaced
+    // Old calculation was a bit silly due to not accounting for intermediate
+    // cells not actually being in-between endpoints, so it has been replaced
     // const FloatPoint proj_from_end1
     //     = proj_vector(cell_pos, end1_pos, end2_pos);
     // const FloatPoint from_cell_to_proj
@@ -5270,11 +5317,125 @@ FloatPoint NesterovBase::calculateTimingGradientValue(
   return force;
 }
 
+FloatPoint NesterovBase::getTimingGradient(
+    size_t target_index,
+    const std::vector<FloatPoint>& coordi) const
+{
+  FloatPoint timing_gradient(0.0f, 0.0f);
+
+  if (!npVars_->timingDrivenMode) {
+    return timing_gradient;
+  }
+
+  if (sta_ == nullptr) {
+    return timing_gradient;
+  }
+
+  for (const auto& path : violating_paths_) {
+    const auto& gCell_indices = path.gCellIndexSequence;
+    if (gCell_indices.size() < 2) {
+      continue;
+    }
+
+    auto it
+        = std::find(gCell_indices.begin(), gCell_indices.end(), target_index);
+    if (it == gCell_indices.end()) {
+      continue;
+    }
+
+    const FloatPoint end1_pos = coordi[gCell_indices.front()];
+    const FloatPoint end2_pos = coordi[gCell_indices.back()];
+
+    if (std::abs(path.slack) > kMinSlackThreshold_) {
+      continue;
+    }
+
+    const float slack_weight
+        = calculateTimingSlackWeight(path.slack,
+                                     nbVars_.timing_pass_slack_sharpness,
+                                     nbVars_.timing_pass_slack_offset);
+
+    const size_t i = std::distance(gCell_indices.begin(), it);
+    const bool is_endpoint = (i == 0 || i == gCell_indices.size() - 1);
+
+    const FloatPoint cell_pos = coordi[target_index];
+
+    FloatPoint timing_gradient_new
+        = calculateTimingGradientValue(cell_pos,
+                                       end1_pos,
+                                       end2_pos,
+                                       slack_weight,
+                                       nbVars_.timing_pass_end_to_end_weight,
+                                       nbVars_.timing_pass_proj_weight,
+                                       gCell_indices.size(),
+                                       is_endpoint,
+                                       i);
+
+    if (std::isnan(timing_gradient.x) || std::isnan(timing_gradient.y)) {
+      log_->warn(GPL,
+                 351,
+                 "getTimingGradient: NaN value detected\n"
+                 "  Cell Position:       ({}, {})\n"
+                 "  End1 Position:       ({}, {})\n"
+                 "  End2 Position:       ({}, {})\n"
+                 "  Slack Weight:        {}\n"
+                 "  End-to-End Weight:   {}\n"
+                 "  Proj Weight:         {}\n"
+                 "  Path Length:         {}\n"
+                 "  Is Endpoint:         {}\n"
+                 "  Index in Path:       {}\n",
+                 cell_pos.x,
+                 cell_pos.y,
+                 end1_pos.x,
+                 end1_pos.y,
+                 end2_pos.x,
+                 end2_pos.y,
+                 slack_weight,
+                 nbVars_.timing_pass_end_to_end_weight,
+                 nbVars_.timing_pass_proj_weight,
+                 gCell_indices.size(),
+                 is_endpoint,
+                 i);
+      continue;
+    }
+    if (std::isinf(timing_gradient.x) || std::isinf(timing_gradient.y)) {
+      log_->warn(GPL,
+                 352,
+                 "getTimingGradient: Inf value detected\n"
+                 "  Cell Position:       ({}, {})\n"
+                 "  End1 Position:       ({}, {})\n"
+                 "  End2 Position:       ({}, {})\n"
+                 "  Slack Weight:        {}\n"
+                 "  End-to-End Weight:   {}\n"
+                 "  Proj Weight:         {}\n"
+                 "  Path Length:         {}\n"
+                 "  Is Endpoint:         {}\n"
+                 "  Index in Path:       {}\n",
+                 cell_pos.x,
+                 cell_pos.y,
+                 end1_pos.x,
+                 end1_pos.y,
+                 end2_pos.x,
+                 end2_pos.y,
+                 slack_weight,
+                 nbVars_.timing_pass_end_to_end_weight,
+                 nbVars_.timing_pass_proj_weight,
+                 gCell_indices.size(),
+                 is_endpoint,
+                 i);
+      continue;
+    }
+    timing_gradient = timing_gradient + timing_gradient_new;
+  }
+
+  return timing_gradient;
+}
+
 FloatPoint NesterovBase::getTimingGradient(const GCell* gCell) const
 {
   FloatPoint timing_gradient(0.0f, 0.0f);
 
-  if(!npVars_->timingDrivenMode){
+  if (!npVars_->timingDrivenMode) {
     return timing_gradient;
   }
 
@@ -5309,8 +5470,10 @@ FloatPoint NesterovBase::getTimingGradient(const GCell* gCell) const
       continue;
     }
 
-    const float slack_weight = calculateTimingSlackWeight(
-        path.slack, nbVars_.timing_pass_slack_sharpness, nbVars_.timing_pass_slack_offset);
+    const float slack_weight
+        = calculateTimingSlackWeight(path.slack,
+                                     nbVars_.timing_pass_slack_sharpness,
+                                     nbVars_.timing_pass_slack_offset);
 
     const size_t i = std::distance(gCell_indices.begin(), it);
     const bool is_endpoint = (i == 0 || i == gCell_indices.size() - 1);
@@ -5320,54 +5483,69 @@ FloatPoint NesterovBase::getTimingGradient(const GCell* gCell) const
     const FloatPoint end1_pos{end1_x, end1_y};
     const FloatPoint end2_pos{end2_x, end2_y};
 
-    FloatPoint timing_gradient_new = calculateTimingGradientValue(
-        cell_pos, end1_pos, end2_pos, slack_weight,
-        nbVars_.timing_pass_end_to_end_weight,
-        nbVars_.timing_pass_proj_weight,
-        gCell_indices.size(), is_endpoint, i);
+    FloatPoint timing_gradient_new
+        = calculateTimingGradientValue(cell_pos,
+                                       end1_pos,
+                                       end2_pos,
+                                       slack_weight,
+                                       nbVars_.timing_pass_end_to_end_weight,
+                                       nbVars_.timing_pass_proj_weight,
+                                       gCell_indices.size(),
+                                       is_endpoint,
+                                       i);
 
-    if(std::isnan(timing_gradient.x) || std::isnan(timing_gradient.y)){
-      log_->warn(GPL, 351, "getTimingGradient: NaN value detected\n"
-      "  Cell Position:       ({}, {})\n"
-      "  End1 Position:       ({}, {})\n"
-      "  End2 Position:       ({}, {})\n"
-      "  Slack Weight:        {}\n"
-      "  End-to-End Weight:   {}\n"
-      "  Proj Weight:         {}\n"
-      "  Path Length:         {}\n"
-      "  Is Endpoint:         {}\n"
-      "  Index in Path:       {}\n",
-      cell_pos.x, cell_pos.y,
-      end1_pos.x, end1_pos.y,
-      end2_pos.x, end2_pos.y,
-      slack_weight,
-      nbVars_.timing_pass_end_to_end_weight,
-      nbVars_.timing_pass_proj_weight,
-      gCell_indices.size(),
-                  is_endpoint,
-                  i);
+    if (std::isnan(timing_gradient.x) || std::isnan(timing_gradient.y)) {
+      log_->warn(GPL,
+                 351,
+                 "getTimingGradient: NaN value detected\n"
+                 "  Cell Position:       ({}, {})\n"
+                 "  End1 Position:       ({}, {})\n"
+                 "  End2 Position:       ({}, {})\n"
+                 "  Slack Weight:        {}\n"
+                 "  End-to-End Weight:   {}\n"
+                 "  Proj Weight:         {}\n"
+                 "  Path Length:         {}\n"
+                 "  Is Endpoint:         {}\n"
+                 "  Index in Path:       {}\n",
+                 cell_pos.x,
+                 cell_pos.y,
+                 end1_pos.x,
+                 end1_pos.y,
+                 end2_pos.x,
+                 end2_pos.y,
+                 slack_weight,
+                 nbVars_.timing_pass_end_to_end_weight,
+                 nbVars_.timing_pass_proj_weight,
+                 gCell_indices.size(),
+                 is_endpoint,
+                 i);
       continue;
     }
-    if(std::isinf(timing_gradient.x) || std::isinf(timing_gradient.y)){
-      log_->warn(GPL, 352, "getTimingGradient: Inf value detected\n"
-      "  Cell Position:       ({}, {})\n"
-      "  End1 Position:       ({}, {})\n"
-      "  End2 Position:       ({}, {})\n"
-      "  Slack Weight:        {}\n"
-      "  End-to-End Weight:   {}\n"
-      "  Proj Weight:         {}\n"
-      "  Path Length:         {}\n"
-      "  Is Endpoint:         {}\n"
-      "  Index in Path:       {}\n",
-      cell_pos.x, cell_pos.y,
-      end1_pos.x, end1_pos.y,
-      end2_pos.x, end2_pos.y,
-      slack_weight,
-      nbVars_.timing_pass_end_to_end_weight,
-      nbVars_.timing_pass_proj_weight,
-      gCell_indices.size(),
-                  is_endpoint,
-                  i);
+    if (std::isinf(timing_gradient.x) || std::isinf(timing_gradient.y)) {
+      log_->warn(GPL,
+                 352,
+                 "getTimingGradient: Inf value detected\n"
+                 "  Cell Position:       ({}, {})\n"
+                 "  End1 Position:       ({}, {})\n"
+                 "  End2 Position:       ({}, {})\n"
+                 "  Slack Weight:        {}\n"
+                 "  End-to-End Weight:   {}\n"
+                 "  Proj Weight:         {}\n"
+                 "  Path Length:         {}\n"
+                 "  Is Endpoint:         {}\n"
+                 "  Index in Path:       {}\n",
+                 cell_pos.x,
+                 cell_pos.y,
+                 end1_pos.x,
+                 end1_pos.y,
+                 end2_pos.x,
+                 end2_pos.y,
+                 slack_weight,
+                 nbVars_.timing_pass_end_to_end_weight,
+                 nbVars_.timing_pass_proj_weight,
+                 gCell_indices.size(),
+                 is_endpoint,
+                 i);
       continue;
     }
     timing_gradient = timing_gradient + timing_gradient_new;
@@ -5387,24 +5565,37 @@ void NesterovBase::updateSTA()
     }
     // Estimate parasitics directly without using the resizer
     est_->estimateParasitics(parasitics_src);
-  }
-  else{
-    debugPrint(log_, GPL, "timing", 1, "Could not update STA, est or sta were null");
+  } else {
+    debugPrint(
+        log_, GPL, "timing", 1, "Could not update STA, est or sta were null");
   }
 }
 }  // namespace gpl
 
-void gpl::NesterovBase::dumpStaticMetadata() {
-  std::string region_name = pb_->getGroup() ? pb_->getGroup()->getName() : "core";
-  log_->logToDbMetadata(utl::GPL, "region_" + region_name + "_binCntX", std::to_string(bg_.getBinCntX()));
-  log_->logToDbMetadata(utl::GPL, "region_" + region_name + "_binCntY", std::to_string(bg_.getBinCntY()));
-  log_->logToDbMetadata(utl::GPL, "region_" + region_name + "_binSizeX", fmt::format("{:e}", (double)bg_.getBinSizeX()));
-  log_->logToDbMetadata(utl::GPL, "region_" + region_name + "_binSizeY", fmt::format("{:e}", (double)bg_.getBinSizeY()));
-  log_->logToDbMetadata(utl::GPL, "region_" + region_name + "_lx", std::to_string(bg_.lx()));
-  log_->logToDbMetadata(utl::GPL, "region_" + region_name + "_ly", std::to_string(bg_.ly()));
+void gpl::NesterovBase::dumpStaticMetadata()
+{
+  std::string region_name
+      = pb_->getGroup() ? pb_->getGroup()->getName() : "core";
+  log_->logToDbMetadata(utl::GPL,
+                        "region_" + region_name + "_binCntX",
+                        std::to_string(bg_.getBinCntX()));
+  log_->logToDbMetadata(utl::GPL,
+                        "region_" + region_name + "_binCntY",
+                        std::to_string(bg_.getBinCntY()));
+  log_->logToDbMetadata(utl::GPL,
+                        "region_" + region_name + "_binSizeX",
+                        fmt::format("{:e}", (double) bg_.getBinSizeX()));
+  log_->logToDbMetadata(utl::GPL,
+                        "region_" + region_name + "_binSizeY",
+                        fmt::format("{:e}", (double) bg_.getBinSizeY()));
+  log_->logToDbMetadata(
+      utl::GPL, "region_" + region_name + "_lx", std::to_string(bg_.lx()));
+  log_->logToDbMetadata(
+      utl::GPL, "region_" + region_name + "_ly", std::to_string(bg_.ly()));
 }
 
-void gpl::NesterovBase::dumpCellStaticInfo() {
+void gpl::NesterovBase::dumpCellStaticInfo()
+{
   std::vector<int> cell_ids(nb_gcells_.size());
   std::vector<float> width(nb_gcells_.size());
   std::vector<float> height(nb_gcells_.size());
@@ -5421,16 +5612,35 @@ void gpl::NesterovBase::dumpCellStaticInfo() {
   }
 
   log_->logToDbBulk<"CellId,Width,Height,IsMacro,IsLocked">(
-    utl::GPL, 810, "gpl_cell_static_info", nb_gcells_.size(),
-    cell_ids.begin(), width.begin(), height.begin(), is_macro.begin(), is_locked.begin());
+      utl::GPL,
+      810,
+      "gpl_cell_static_info",
+      nb_gcells_.size(),
+      cell_ids.begin(),
+      width.begin(),
+      height.begin(),
+      is_macro.begin(),
+      is_locked.begin());
 }
 
-void gpl::NesterovBase::dumpBaseIterationScalars(int iter) {
-  log_->logToDb<"Iter,StepLength,DensityPenalty,WlCoefX,WlCoefY,BaseWlCoef,SumOverflow">(
-    utl::GPL, 811, "gpl_iteration_scalars", iter, stepLength_, densityPenalty_, wireLengthCoefX_, wireLengthCoefY_, baseWireLengthCoef_, sum_overflow_unscaled_);
+void gpl::NesterovBase::dumpBaseIterationScalars(int iter)
+{
+  log_->logToDb<
+      "Iter,StepLength,DensityPenalty,WlCoefX,WlCoefY,BaseWlCoef,SumOverflow">(
+      utl::GPL,
+      811,
+      "gpl_iteration_scalars",
+      iter,
+      stepLength_,
+      densityPenalty_,
+      wireLengthCoefX_,
+      wireLengthCoefY_,
+      baseWireLengthCoef_,
+      sum_overflow_unscaled_);
 }
 
-void gpl::NesterovBase::dumpBinGrid(int iter) {
+void gpl::NesterovBase::dumpBinGrid(int iter)
+{
   const std::vector<Bin>& bins = bg_.getBinsConst();
   size_t num_bins = bins.size();
   std::vector<int> iters(num_bins, iter);
@@ -5447,11 +5657,19 @@ void gpl::NesterovBase::dumpBinGrid(int iter) {
   }
 
   log_->logToDbBulk<"Iter,BinIdx,ElectroFieldX,ElectroFieldY,Density">(
-    utl::GPL, 812, "gpl_bin_grid", num_bins,
-    iters.begin(), bin_idx.begin(), electro_x.begin(), electro_y.begin(), density.begin());
+      utl::GPL,
+      812,
+      "gpl_bin_grid",
+      num_bins,
+      iters.begin(),
+      bin_idx.begin(),
+      electro_x.begin(),
+      electro_y.begin(),
+      density.begin());
 }
 
-void gpl::NesterovBase::dumpCellDenseGradients(int iter) {
+void gpl::NesterovBase::dumpCellDenseGradients(int iter)
+{
   std::vector<int> iters(nb_gcells_.size(), iter);
   std::vector<int> ids(nb_gcells_.size());
   std::vector<float> pos_x(nb_gcells_.size());
@@ -5467,12 +5685,20 @@ void gpl::NesterovBase::dumpCellDenseGradients(int iter) {
     wl_y[i] = curSLPWireLengthGrads_[i].y;
   }
 
-  log_->logToDbBulk<"Iter,CellId,PosX,PosY,WlX,WlY">(
-    utl::GPL, 813, "gpl_cell_dense_gradients", nb_gcells_.size(), 
-    iters.begin(), ids.begin(), pos_x.begin(), pos_y.begin(), wl_x.begin(), wl_y.begin());
+  log_->logToDbBulk<"Iter,CellId,PosX,PosY,WlX,WlY">(utl::GPL,
+                                                     813,
+                                                     "gpl_cell_dense_gradients",
+                                                     nb_gcells_.size(),
+                                                     iters.begin(),
+                                                     ids.begin(),
+                                                     pos_x.begin(),
+                                                     pos_y.begin(),
+                                                     wl_x.begin(),
+                                                     wl_y.begin());
 }
 
-void gpl::NesterovBase::dumpCellSparseTiming(int iter) {
+void gpl::NesterovBase::dumpCellSparseTiming(int iter)
+{
   std::vector<int> iters;
   std::vector<int> ids;
   std::vector<float> tim_x;
@@ -5488,20 +5714,27 @@ void gpl::NesterovBase::dumpCellSparseTiming(int iter) {
   }
 
   if (!ids.empty()) {
-    log_->logToDbBulk<"Iter,CellId,TimX,TimY">(
-      utl::GPL, 814, "gpl_cell_timing_gradients", ids.size(),
-      iters.begin(), ids.begin(), tim_x.begin(), tim_y.begin());
+    log_->logToDbBulk<"Iter,CellId,TimX,TimY">(utl::GPL,
+                                               814,
+                                               "gpl_cell_timing_gradients",
+                                               ids.size(),
+                                               iters.begin(),
+                                               ids.begin(),
+                                               tim_x.begin(),
+                                               tim_y.begin());
   }
 }
 
-void gpl::NesterovBase::dumpCellSparseRoutability(int iter) {
+void gpl::NesterovBase::dumpCellSparseRoutability(int iter)
+{
   std::vector<int> iters;
   std::vector<int> ids;
   std::vector<float> rt_x;
   std::vector<float> rt_y;
 
   for (size_t i = 0; i < nb_gcells_.size(); i++) {
-    if (curSLPRoutabilityGrads_[i].x != 0.0f || curSLPRoutabilityGrads_[i].y != 0.0f) {
+    if (curSLPRoutabilityGrads_[i].x != 0.0f
+        || curSLPRoutabilityGrads_[i].y != 0.0f) {
       iters.push_back(iter);
       ids.push_back(i);
       rt_x.push_back(curSLPRoutabilityGrads_[i].x);
@@ -5510,13 +5743,42 @@ void gpl::NesterovBase::dumpCellSparseRoutability(int iter) {
   }
 
   if (!ids.empty()) {
-    log_->logToDbBulk<"Iter,CellId,RtX,RtY">(
-      utl::GPL, 815, "gpl_cell_routability_gradients", ids.size(),
-      iters.begin(), ids.begin(), rt_x.begin(), rt_y.begin());
+    log_->logToDbBulk<"Iter,CellId,RtX,RtY">(utl::GPL,
+                                             815,
+                                             "gpl_cell_routability_gradients",
+                                             ids.size(),
+                                             iters.begin(),
+                                             ids.begin(),
+                                             rt_x.begin(),
+                                             rt_y.begin());
   }
 }
 
-void gpl::NesterovBase::dumpGradientsToDb(int iter) {
+void gpl::NesterovBase::dumpCellPositions(int iter)
+{
+  std::vector<int> iters(nb_gcells_.size(), iter);
+  std::vector<int> ids(nb_gcells_.size());
+  std::vector<float> cx(nb_gcells_.size());
+  std::vector<float> cy(nb_gcells_.size());
+
+  for (size_t i = 0; i < nb_gcells_.size(); i++) {
+    ids[i] = i;
+    cx[i] = static_cast<float>(nb_gcells_[i]->cx());
+    cy[i] = static_cast<float>(nb_gcells_[i]->cy());
+  }
+
+  log_->logToDbBulk<"Iter,CellId,Cx,Cy">(utl::GPL,
+                                         816,
+                                         "gpl_cell_positions",
+                                         nb_gcells_.size(),
+                                         iters.begin(),
+                                         ids.begin(),
+                                         cx.begin(),
+                                         cy.begin());
+}
+
+void gpl::NesterovBase::dumpGradientsToDb(int iter)
+{
   if (!has_logged_static_) {
     dumpStaticMetadata();
     dumpCellStaticInfo();
@@ -5525,6 +5787,7 @@ void gpl::NesterovBase::dumpGradientsToDb(int iter) {
   dumpBaseIterationScalars(iter);
   dumpBinGrid(iter);
   dumpCellDenseGradients(iter);
+  dumpCellPositions(iter);
   dumpCellSparseTiming(iter);
   dumpCellSparseRoutability(iter);
 }
