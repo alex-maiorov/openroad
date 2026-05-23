@@ -100,6 +100,7 @@ struct PlaceOptions
 
   // TimingPass parameters for gradient-based timing optimization
    int timingGradPassTopN = 10;
+   int timingGradPassNPathsPerEndpoint = 1;
    float timingGradPassProjWeight = 1.0F;
    float timingGradPassEndToEndWeight = 1.0F;
    float timingGradPassSlackSharpness = 1.0F;

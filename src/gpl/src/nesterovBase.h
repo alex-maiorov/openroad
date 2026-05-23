@@ -774,6 +774,7 @@ struct NesterovBaseVars
 
   // Timing gradient pass parameters
   const int timing_pass_top_n;
+  const int timing_pass_n_paths_per_endpoint;
   const float timing_pass_proj_weight;
   const float timing_pass_end_to_end_weight;
   const float timing_pass_slack_sharpness;
@@ -1258,6 +1259,7 @@ class NesterovBase
   }
 
   std::vector<ViolatingPath> getViolatingPaths(int top_n,
+                                               int n_paths_per_endpoint,
                                                NesterovBaseCommon& nbc);
 
  private:

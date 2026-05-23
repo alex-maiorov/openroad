@@ -37,6 +37,7 @@ sta::define_cmd_args "global_placement" {\
     [-disable_pin_density_adjust]\
     [-enable_routing_congestion]\
     [-timing_gradpass_top_n timing_gradpass_top_n]\
+    [-timing_gradpass_n_paths_per_endpoint timing_gradpass_n_paths_per_endpoint]\
     [-timing_gradpass_proj_weight timing_gradpass_proj_weight]\
     [-timing_gradpass_end_to_end_weight timing_gradpass_end_to_end_weight]\
      [-timing_gradpass_slack_sharpness timing_gradpass_slack_sharpness]\
@@ -75,6 +76,7 @@ proc global_placement { args } {
       -keep_resize_below_overflow \
       -pad_left -pad_right \
       -timing_gradpass_top_n \
+      -timing_gradpass_n_paths_per_endpoint \
       -timing_gradpass_proj_weight \
       -timing_gradpass_end_to_end_weight \
        -timing_gradpass_slack_sharpness \

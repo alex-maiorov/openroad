@@ -82,6 +82,7 @@ class GplDb(DbConnection):
         if force_rebuild:
             self._drop_derived_tables()
 
+        self._preprocess_source_indexes()
         self._preprocess_gradient_metrics(batch_size)
         self._preprocess_density_forces(batch_size)
         self._preprocess_path_signatures(batch_size)
@@ -123,6 +124,61 @@ class GplDb(DbConnection):
                 f"Database is not preprocessed — missing tables: {missing}. "
                 "Open GplDb with must_be_preprocessed=False to auto-build."
             )
+
+    # ── Step 0: Source table indexes ───────────────────────────────
+
+    def _preprocess_source_indexes(self):
+        """Create indexes on every raw source table for fast lookup.
+
+        Creates an index on ``Iter`` for every table that has an
+        ``Iter`` column, as well as composite indexes on the natural
+        lookup key (e.g. ``CellId``, ``PathId``, ``BinIdx``).  Static
+        tables (netlist, cell_static_info) get indexes on their
+        primary key only.
+
+        Tables that do not exist in the database are silently skipped
+        with a warning — this handles databases that are missing
+        optional sources (e.g. timing/routability gradients).
+
+        Uses ``CREATE INDEX IF NOT EXISTS``, so calling this
+        repeatedly is idempotent and cheap.
+        """
+        def _maybe_index(table: str, col_groups):
+            if not self._exists(table):
+                print(f"    [source_index] table '{table}' not found "
+                      f"— skipping.")
+                return
+            _create_indexes(self.conn, table, col_groups)
+
+        # ── Tables WITH an Iter column ──────────────────────────
+        _maybe_index("gpl_iteration_scalars",
+                     ["Iter"])
+        _maybe_index("gpl_bin_grid",
+                     ["Iter", "BinIdx", "Iter, BinIdx"])
+        _maybe_index("gpl_cell_dense_gradients",
+                     ["Iter", "CellId", "Iter, CellId"])
+        _maybe_index("gpl_cell_timing_gradients",
+                     ["Iter", "CellId", "Iter, CellId"])
+        _maybe_index("gpl_cell_routability_gradients",
+                     ["Iter", "CellId", "Iter, CellId"])
+        _maybe_index("gpl_cell_positions",
+                     ["Iter", "CellId", "Iter, CellId"])
+        _maybe_index("gpl_path_slacks",
+                     ["Iter", "PathId", "Iter, PathId"])
+        _maybe_index("gpl_path_cells",
+                     ["Iter", "PathId", "CellId",
+                      "Iter, PathId", "Iter, CellId"])
+        _maybe_index("gpl_netlist_cells",
+                     ["Iter", "CellId", "Iter, CellId"])
+        _maybe_index("gpl_netlist_nets",
+                     ["Iter", "NetId", "Iter, NetId"])
+        _maybe_index("gpl_netlist_connectivity",
+                     ["Iter", "PinId", "NetId", "CellId",
+                      "Iter, PinId", "Iter, NetId", "Iter, CellId"])
+
+        # ── Static tables (no Iter column) ──────────────────────
+        _maybe_index("gpl_cell_static_info",
+                     ["CellId"])
 
     # ── Step 1: Gradient metrics ───────────────────────────────────
 
@@ -1067,6 +1123,430 @@ class GplDb(DbConnection):
 
         return result
 
+    # ================================================================
+    #  NETLIST GRAPH ACCESSORS  (gpl_netlist_* tables)
+    # ================================================================
+
+    def netlist_cells(
+        self,
+        iter_range: Optional[Tuple[int, int]] = None,
+        cell_ids: Optional[List[int]] = None,
+    ) -> pd.DataFrame:
+        """Return ``gpl_netlist_cells`` rows.
+
+        Parameters
+        ----------
+        iter_range : tuple of (int, int), optional
+            Restrict to iterations in [min,max] inclusive.
+        cell_ids : list of int, optional
+            If provided, restrict to these cell IDs.
+
+        Returns
+        -------
+        pd.DataFrame
+            Columns: Iter, CellId, Cx, Cy, Width, Height, IsMacro,
+            IsLocked, NumInstances, NumPins.
+        """
+        sql, params = self._make_select(
+            "gpl_netlist_cells",
+            iter_range=iter_range,
+            cell_ids=cell_ids,
+            order_by="Iter, CellId",
+        )
+        if not sql:
+            return pd.DataFrame()
+        return self.query(sql, params)
+
+    def netlist_nets(
+        self,
+        iter_range: Optional[Tuple[int, int]] = None,
+        net_ids: Optional[List[int]] = None,
+    ) -> pd.DataFrame:
+        """Return ``gpl_netlist_nets`` rows.
+
+        Parameters
+        ----------
+        iter_range : tuple of (int, int), optional
+            Restrict to iterations in [min,max] inclusive.
+        net_ids : list of int, optional
+            If provided, restrict to these net IDs.
+
+        Returns
+        -------
+        pd.DataFrame
+            Columns: Iter, NetId, NumPins, TimingWeight, CustomWeight.
+        """
+        sql, params = self._make_select(
+            "gpl_netlist_nets",
+            iter_range=iter_range,
+            order_by="Iter, NetId",
+        )
+        if not sql:
+            return pd.DataFrame()
+        # _make_select doesn't support net_ids directly, append manually
+        if net_ids is not None:
+            if not net_ids:
+                return pd.DataFrame()
+            placeholders = ",".join("?" for _ in net_ids)
+            sql += f" AND NetId IN ({placeholders})"
+            params = tuple(params) + tuple(net_ids)
+        return self.query(sql, params)
+
+    def netlist_connectivity(
+        self,
+        iter_range: Optional[Tuple[int, int]] = None,
+        pin_ids: Optional[List[int]] = None,
+        cell_ids: Optional[List[int]] = None,
+        net_ids: Optional[List[int]] = None,
+    ) -> pd.DataFrame:
+        """Return ``gpl_netlist_connectivity`` rows with optional filters.
+
+        Parameters
+        ----------
+        iter_range : tuple of (int, int), optional
+            Restrict to iterations in [min,max] inclusive.
+        pin_ids : list of int, optional
+            Restrict to these pin IDs.
+        cell_ids : list of int, optional
+            Restrict to pins belonging to these cells.
+        net_ids : list of int, optional
+            Restrict to pins on these nets.
+
+        Returns
+        -------
+        pd.DataFrame
+            Columns: Iter, PinId, NetId, CellId, PinCx, PinCy.
+        """
+        table = "gpl_netlist_connectivity"
+        clauses: List[str] = []
+        params: list = []
+
+        if iter_range is not None:
+            clauses.append("Iter BETWEEN ? AND ?")
+            params.extend(iter_range)
+
+        for col, ids in [("PinId", pin_ids),
+                          ("CellId", cell_ids),
+                          ("NetId", net_ids)]:
+            if ids is not None:
+                if not ids:
+                    return pd.DataFrame()
+                placeholders = ",".join("?" for _ in ids)
+                clauses.append(f"{col} IN ({placeholders})")
+                params.extend(ids)
+
+        if not clauses:
+            return self.query(
+                f"SELECT * FROM [{table}] ORDER BY Iter, PinId")
+
+        sql = (f"SELECT * FROM [{table}] WHERE {' AND '.join(clauses)} "
+               f"ORDER BY Iter, PinId")
+        return self.query(sql, params)
+
+    def _has_netlist_tables(self) -> bool:
+        """True when all three netlist tables exist and have rows."""
+        for table in ("gpl_netlist_cells", "gpl_netlist_nets",
+                      "gpl_netlist_connectivity"):
+            if not self._table_has_data(table):
+                return False
+        return True
+
+    # ── Graph traversal ───────────────────────────────────────────
+
+    def netlist_cell_nets(
+        self,
+        cell_ids: List[int],
+        iter_range: Optional[Tuple[int, int]] = None,
+    ) -> pd.DataFrame:
+        """Nets connected to the given cells (one row per pin).
+
+        Returns columns: CellId, NetId, PinId, PinCx, PinCy.
+        """
+        if not cell_ids:
+            return pd.DataFrame()
+        return self.netlist_connectivity(
+            cell_ids=cell_ids, iter_range=iter_range)
+
+    def netlist_net_cells(
+        self,
+        net_ids: List[int],
+        iter_range: Optional[Tuple[int, int]] = None,
+    ) -> pd.DataFrame:
+        """Cells connected to the given nets (one row per pin).
+
+        Returns columns: NetId, CellId, PinId, PinCx, PinCy.
+        """
+        if not net_ids:
+            return pd.DataFrame()
+        return self.netlist_connectivity(
+            net_ids=net_ids, iter_range=iter_range)
+
+    def netlist_cell_neighbors(
+        self,
+        cell_ids: List[int],
+        include_self: bool = False,
+        iter_range: Optional[Tuple[int, int]] = None,
+    ) -> pd.DataFrame:
+        """Cells that share at least one net with the given cells.
+
+        Uses a self-join on ``gpl_netlist_connectivity``, scoped to
+        *iter_range* when provided (default: all iterations).
+
+        Returns columns: CellId, NeighborCellId, SharedNetId.
+        """
+        if not cell_ids:
+            return pd.DataFrame()
+
+        placeholders = ",".join("?" for _ in cell_ids)
+        op = "!=" if not include_self else "IS NOT"
+
+        iter_clause = ""
+        params = list(cell_ids)
+        if iter_range is not None:
+            iter_clause = " AND a.Iter BETWEEN ? AND ?"
+            params.extend(iter_range)
+
+        return self.query(f"""
+            SELECT a.CellId, b.CellId AS NeighborCellId,
+                   a.NetId AS SharedNetId
+            FROM [gpl_netlist_connectivity] a
+            JOIN [gpl_netlist_connectivity] b
+              ON a.NetId = b.NetId AND a.Iter = b.Iter
+            WHERE a.CellId IN ({placeholders})
+              AND a.CellId {op} b.CellId{iter_clause}
+            ORDER BY a.CellId, b.CellId
+        """, params)
+
+    def netlist_net_neighbors(
+        self,
+        net_ids: List[int],
+        include_self: bool = False,
+        iter_range: Optional[Tuple[int, int]] = None,
+    ) -> pd.DataFrame:
+        """Nets that share at least one cell with the given nets.
+
+        Uses a self-join on ``gpl_netlist_connectivity``, scoped to
+        *iter_range* when provided.
+
+        Returns columns: NetId, NeighborNetId, SharedCellId.
+        """
+        if not net_ids:
+            return pd.DataFrame()
+
+        placeholders = ",".join("?" for _ in net_ids)
+        op = "!=" if not include_self else "IS NOT"
+
+        iter_clause = ""
+        params = list(net_ids)
+        if iter_range is not None:
+            iter_clause = " AND a.Iter BETWEEN ? AND ?"
+            params.extend(iter_range)
+
+        return self.query(f"""
+            SELECT a.NetId, b.NetId AS NeighborNetId,
+                   a.CellId AS SharedCellId
+            FROM [gpl_netlist_connectivity] a
+            JOIN [gpl_netlist_connectivity] b
+              ON a.CellId = b.CellId AND a.Iter = b.Iter
+            WHERE a.NetId IN ({placeholders})
+              AND a.NetId {op} b.NetId{iter_clause}
+            ORDER BY a.NetId, b.NetId
+        """, params)
+
+    def netlist_adjacency(
+        self,
+        cell_ids: Optional[List[int]] = None,
+        iter_range: Optional[Tuple[int, int]] = None,
+    ) -> pd.DataFrame:
+        """Cell-to-cell adjacency list (one row per edge).
+
+        Two cells are adjacent if they share at least one net.
+        Scoped to *iter_range* when provided.
+
+        Returns columns: CellId, NeighborCellId, SharedNetId.
+        """
+        if cell_ids is not None and not cell_ids:
+            return pd.DataFrame()
+
+        iter_clause = ""
+        iter_params: list = []
+        if iter_range is not None:
+            iter_clause = " AND a.Iter BETWEEN ? AND ?"
+            iter_params = list(iter_range)
+
+        if cell_ids is not None:
+            placeholders = ",".join("?" for _ in cell_ids)
+            return self.query(f"""
+                SELECT a.CellId, b.CellId AS NeighborCellId,
+                       a.NetId AS SharedNetId
+                FROM [gpl_netlist_connectivity] a
+                JOIN [gpl_netlist_connectivity] b
+                  ON a.NetId = b.NetId AND a.Iter = b.Iter
+                WHERE a.CellId IN ({placeholders})
+                  AND a.CellId != b.CellId{iter_clause}
+                ORDER BY a.CellId, b.CellId
+            """, list(cell_ids) + iter_params)
+
+        return self.query(f"""
+            SELECT a.CellId, b.CellId AS NeighborCellId,
+                   a.NetId AS SharedNetId
+            FROM [gpl_netlist_connectivity] a
+            JOIN [gpl_netlist_connectivity] b
+              ON a.NetId = b.NetId AND a.Iter = b.Iter
+            WHERE a.CellId != b.CellId{iter_clause}
+            ORDER BY a.CellId, b.CellId
+        """, iter_params)
+
+    # ── Graph metrics ─────────────────────────────────────────────
+
+    def netlist_cell_degree(
+        self,
+        cell_ids: Optional[List[int]] = None,
+        iter_range: Optional[Tuple[int, int]] = None,
+    ) -> pd.DataFrame:
+        """Number of distinct nets connected to each cell.
+
+        Scoped to *iter_range* when provided.
+
+        Returns columns: Iter, CellId, Degree.
+        """
+        table = "gpl_netlist_connectivity"
+
+        iter_clause = ""
+        params: list = []
+        if iter_range is not None:
+            iter_clause = " AND Iter BETWEEN ? AND ?"
+            params = list(iter_range)
+
+        if cell_ids is not None:
+            if not cell_ids:
+                return pd.DataFrame()
+            placeholders = ",".join("?" for _ in cell_ids)
+            return self.query(f"""
+                SELECT Iter, CellId, COUNT(DISTINCT NetId) AS Degree
+                FROM [{table}]
+                WHERE CellId IN ({placeholders}){iter_clause}
+                GROUP BY Iter, CellId
+                ORDER BY Iter, CellId
+            """, list(cell_ids) + params)
+
+        return self.query(f"""
+            SELECT Iter, CellId, COUNT(DISTINCT NetId) AS Degree
+            FROM [{table}]
+            WHERE 1=1{iter_clause}
+            GROUP BY Iter, CellId
+            ORDER BY Iter, CellId
+        """, params)
+
+    def netlist_net_degree(
+        self,
+        net_ids: Optional[List[int]] = None,
+        iter_range: Optional[Tuple[int, int]] = None,
+    ) -> pd.DataFrame:
+        """Pin count per net (computed from connectivity).
+
+        Scoped to *iter_range* when provided.
+
+        Returns columns: Iter, NetId, Degree.
+        """
+        table = "gpl_netlist_connectivity"
+
+        iter_clause = ""
+        params: list = []
+        if iter_range is not None:
+            iter_clause = " AND Iter BETWEEN ? AND ?"
+            params = list(iter_range)
+
+        if net_ids is not None:
+            if not net_ids:
+                return pd.DataFrame()
+            placeholders = ",".join("?" for _ in net_ids)
+            return self.query(f"""
+                SELECT Iter, NetId, COUNT(*) AS Degree
+                FROM [{table}]
+                WHERE NetId IN ({placeholders}){iter_clause}
+                GROUP BY Iter, NetId
+                ORDER BY Iter, NetId
+            """, list(net_ids) + params)
+
+        return self.query(f"""
+            SELECT Iter, NetId, COUNT(*) AS Degree
+            FROM [{table}]
+            WHERE 1=1{iter_clause}
+            GROUP BY Iter, NetId
+            ORDER BY Iter, NetId
+        """, params)
+
+    # ── Cross-table joins ─────────────────────────────────────────
+
+    def netlist_cells_with_net_counts(
+        self,
+        iter_range: Optional[Tuple[int, int]] = None,
+    ) -> pd.DataFrame:
+        """Cell properties augmented with live net-degree.
+
+        Scoped to *iter_range* when provided.
+
+        Returns columns: Iter, CellId, Cx, Cy, Width, Height, IsMacro,
+        IsLocked, NumInstances, NumPins, NetDegree.
+        """
+        iter_join = ""
+        params: list = []
+        if iter_range is not None:
+            iter_join = " AND c.Iter = d.Iter"
+            params = list(iter_range)
+
+        where = ""
+        if iter_range is not None:
+            where = " WHERE c.Iter BETWEEN ? AND ?"
+
+        return self.query(f"""
+            SELECT c.Iter, c.CellId, c.Cx, c.Cy, c.Width, c.Height,
+                   c.IsMacro, c.IsLocked, c.NumInstances,
+                   c.NumPins, COALESCE(d.Degree, 0) AS NetDegree
+            FROM [gpl_netlist_cells] c
+            LEFT JOIN (
+                SELECT Iter, CellId, COUNT(DISTINCT NetId) AS Degree
+                FROM [gpl_netlist_connectivity]
+                GROUP BY Iter, CellId
+            ) d ON c.CellId = d.CellId{iter_join}
+            {where}
+            ORDER BY c.Iter, c.CellId
+        """, params)
+
+    def netlist_net_cell_coordinates(
+        self,
+        net_ids: List[int],
+        iter_range: Optional[Tuple[int, int]] = None,
+    ) -> pd.DataFrame:
+        """Cells on the given nets, with coordinates.
+
+        Scoped to *iter_range* when provided.
+
+        Returns columns: NetId, CellId, Cx, Cy, Width, Height,
+        PinId, PinCx, PinCy.
+        """
+        if not net_ids:
+            return pd.DataFrame()
+
+        placeholders = ",".join("?" for _ in net_ids)
+        iter_clause = ""
+        params = list(net_ids)
+        if iter_range is not None:
+            iter_clause = " AND conn.Iter BETWEEN ? AND ?"
+            params.extend(iter_range)
+
+        return self.query(f"""
+            SELECT conn.NetId, conn.CellId, c.Cx, c.Cy,
+                   c.Width, c.Height,
+                   conn.PinId, conn.PinCx, conn.PinCy
+            FROM [gpl_netlist_connectivity] conn
+            JOIN [gpl_netlist_cells] c
+              ON conn.CellId = c.CellId AND conn.Iter = c.Iter
+            WHERE conn.NetId IN ({placeholders}){iter_clause}
+            ORDER BY conn.NetId, conn.CellId
+        """, params)
+
 
 # ====================================================================
 #  Module-level helpers
@@ -1079,3 +1559,22 @@ def _create_indexes(conn: sqlite3.Connection, table: str, col_groups):
         conn.execute(
             f"CREATE INDEX IF NOT EXISTS [{name}] ON [{table}] ({cols})"
         )
+
+
+def _select_by_ids(
+    db: DbConnection,
+    table: str,
+    col: str,
+    ids: Optional[List[int]],
+) -> pd.DataFrame:
+    """``SELECT * FROM [table]`` optionally filtered by ``col IN (...)``."""
+    if ids is not None:
+        if not ids:
+            return pd.DataFrame()
+        placeholders = ",".join("?" for _ in ids)
+        return db.query(
+            f"SELECT * FROM [{table}] WHERE {col} IN ({placeholders}) "
+            f"ORDER BY {col}",
+            ids,
+        )
+    return db.query(f"SELECT * FROM [{table}] ORDER BY {col}")

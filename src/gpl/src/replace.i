@@ -75,6 +75,9 @@ static gpl::PlaceOptions getOptions(
   checkKey(keys, "-init_wirelength_coef", options.initWireLengthCoef);
   checkKey(keys, "-reference_hpwl", options.referenceHpwl);
   checkKey(keys, "-timing_gradpass_top_n", options.timingGradPassTopN);
+  checkKey(keys,
+           "-timing_gradpass_n_paths_per_endpoint",
+           options.timingGradPassNPathsPerEndpoint);
   checkKey(keys, "-timing_gradpass_proj_weight", options.timingGradPassProjWeight);
   checkKey(
       keys, "-timing_gradpass_end_to_end_weight", options.timingGradPassEndToEndWeight);

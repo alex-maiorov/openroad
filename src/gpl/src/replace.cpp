@@ -364,11 +364,12 @@ int Replace::doNesterovPlace(const int threads,
     log_->info(GPL,
                88,
                "Timing driven mode enabled. timing_gradpass parameters: "
-               "top_n={}, proj_weight={}, end_to_end_weight={}, "
+               "top_n={}, n_paths_per_endpoint={}, proj_weight={}, end_to_end_weight={}, "
                "slack_sharpness={}, slack_offset={}, slack_upper={}, "
                "sta_run_interval={}, first_iter={}, "
                "saturation_kl={}, saturation_minl={}, precond_count_weight={}",
                options.timingGradPassTopN,
+               options.timingGradPassNPathsPerEndpoint,
                options.timingGradPassProjWeight,
                options.timingGradPassEndToEndWeight,
                options.timingGradPassSlackSharpness,

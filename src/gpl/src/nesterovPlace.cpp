@@ -1144,6 +1144,7 @@ int NesterovPlace::doNesterovPlace(int start_iter)
     if (!nbVec_.empty()) {
       const auto& nbv = nbVec_[0]->getNbVars();
       log_->logToDbMetadata(utl::GPL, "timing_gradpass_top_n", std::to_string(nbv.timing_pass_top_n));
+      log_->logToDbMetadata(utl::GPL, "timing_gradpass_n_paths_per_endpoint", std::to_string(nbv.timing_pass_n_paths_per_endpoint));
       log_->logToDbMetadata(utl::GPL, "timing_gradpass_proj_weight", fmt::format("{:e}", (double)nbv.timing_pass_proj_weight));
       log_->logToDbMetadata(utl::GPL, "timing_gradpass_end_to_end_weight", fmt::format("{:e}", (double)nbv.timing_pass_end_to_end_weight));
       log_->logToDbMetadata(utl::GPL, "timing_gradpass_slack_sharpness", fmt::format("{:e}", (double)nbv.timing_pass_slack_sharpness));

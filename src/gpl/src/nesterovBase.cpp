@@ -1093,6 +1093,7 @@ NesterovBaseVars::NesterovBaseVars(const PlaceOptions& options)
       minPhiCoef(options.minPhiCoef),
       maxPhiCoef(options.maxPhiCoef),
       timing_pass_top_n(options.timingGradPassTopN),
+      timing_pass_n_paths_per_endpoint(options.timingGradPassNPathsPerEndpoint),
       timing_pass_proj_weight(options.timingGradPassProjWeight),
       timing_pass_end_to_end_weight(options.timingGradPassEndToEndWeight),
       timing_pass_slack_sharpness(options.timingGradPassSlackSharpness),
@@ -4983,6 +4984,7 @@ static float getSecondNorm(const std::vector<FloatPoint>& a)
 
 std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
     int top_n,
+    int n_paths_per_endpoint,
     NesterovBaseCommon& nbc)
 {
   std::vector<ViolatingPath> violating_paths;
@@ -5003,8 +5005,8 @@ std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
 
   // How many paths to find per path group
   int group_path_count = top_n;
-  // Limit to 1 worst paths per unique endpoint pin for now
-  int endpoint_path_count = 1;
+  // Limit worst paths per unique endpoint pin
+  int endpoint_path_count = n_paths_per_endpoint;
   bool unique_pins = false;   // Don't filter for unique pins
   bool unique_edges = false;  // Don't filter for unique edges
   float slack_min = -1e30f;   // Essentially -inf. Capture all paths (no lower bound)
@@ -5145,7 +5147,9 @@ std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
 void gpl::NesterovBase::queryTimingViolations(NesterovBaseCommon& nbc, int iter)
 {
   // Query STA for violating paths and store them
-  violating_paths_ = getViolatingPaths(nbVars_.timing_pass_top_n, nbc);
+  violating_paths_ = getViolatingPaths(nbVars_.timing_pass_top_n,
+                                         nbVars_.timing_pass_n_paths_per_endpoint,
+                                         nbc);
 
   // Logging
   static int base_path_id = 0;
@@ -5344,7 +5348,8 @@ FloatPoint NesterovBase::calculateTimingGradientValue(
     const FloatPoint e1_to_e2_vec{end2_pos.x - end1_pos.x,
                                   end2_pos.y - end1_pos.y};
     const float position_scaling_factor
-        = static_cast<float>(cell_index) / static_cast<float>(path_length);
+        = static_cast<float>(cell_index)
+          / static_cast<float>(path_length - 1);
     const FloatPoint point_to_attract_cell_to
         = end1_pos + (e1_to_e2_vec * position_scaling_factor);
     const FloatPoint offset{point_to_attract_cell_to.x - cell_pos.x,

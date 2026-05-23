@@ -25,25 +25,25 @@ database_log_analysis/
 
 ### Design principles
 
-1. **Thin SQL wrappers**  
+1. **Thin SQL wrappers**
    Every data-access method is a lightweight wrapper around a parameterised
    `SELECT … WHERE …` query.  Filters use keyword arguments (`iter_range=…`,
    `cell_ids=…`).  SQL does the heavy lifting (GROUP BY, window functions,
    joins).
 
-2. **Precomputed derived tables**  
+2. **Precomputed derived tables**
    Complex per-cell-per-iteration metrics (gradient force magnitudes,
    estimated density forces, stable path signatures) are computed once
    and stored as tables.  Query methods read them just like raw tables.
    Preprocessing runs automatically when `GplDb` is opened (idempotent —
    each step skips if its table already exists).
 
-3. **Sparse data is sparse**  
+3. **Sparse data is sparse**
    Timing and routability gradients are logged sparsely.  Query methods
    return exactly what is in the database — missing rows implicitly mean
    zero force.  No automatic filling or imputation.
 
-4. **One class per tool**  
+4. **One class per tool**
    `GplDb` knows about `gpl_*` tables.  `ExaDb` knows about `exa_*` tables.
    They follow the same calling convention (keyword-filtered methods
    returning DataFrames) but are completely independent.
@@ -56,21 +56,39 @@ from database_log_analysis import GplDb
 # Open — auto-preprocesses if needed
 gpl = GplDb("placement.sqlite")
 
-# Read a raw table with optional filters
+# Read raw tables with optional filters
 df = gpl.cell_dense_gradients(iter_range=(0, 50))
 df = gpl.cell_timing_gradients(cell_ids=[0, 1, 2])
 info = gpl.cell_static_info()
+scalars = gpl.iteration_scalars()
+bins = gpl.bin_grid(iter_range=(0, 50))
 
 # Precomputed derived data
 metrics = gpl.cell_gradient_metrics(iter_range=(100, 200))
 forces  = gpl.cell_density_forces(cell_ids=[0, 1, 2])
 paths   = gpl.path_signatures()
 
+# Timing-path analysis
+slacks = gpl.path_slacks()
+cells  = gpl.path_cells(iter_range=(0, 50))
+top    = gpl.top_timing_cells(top_n=10)
+counts = gpl.cell_path_counts(cell_ids=[0,1,2])
+align  = gpl.cell_force_alignment(cell_ids=[0,1,2])
+
 # SQL-computed analytics
 moves   = gpl.cell_movements(iter_range=(50, 100))
-# Returns list of DataFrames, one per path:
 histories = gpl.worst_paths_history(top_n=10, iter_range=(100, 400),
                                      min_separation=5.0, max_similarity=0.7)
+containing = gpl.paths_containing_cells(cell_ids=[0,1])
+active, seqs = gpl.similarity_path_data(cell_ids=[0,1,2])
+
+# Netlist graph (static connectivity dumped during placement)
+cells     = gpl.netlist_cells()
+nets      = gpl.netlist_nets()
+conn      = gpl.netlist_connectivity(cell_ids=[0,1,2])
+neighbors = gpl.netlist_cell_neighbors([0,1,2])
+adj       = gpl.netlist_adjacency()
+expanded  = gpl.netlist_net_cell_coordinates([5])
 
 # Raw query for ad-hoc exploration
 df = gpl.query("""
@@ -82,13 +100,6 @@ df = gpl.query("""
 
 gpl.close()
 ```
-
-The philosophy is **sifting, not calculating**.  Accessor methods are
-thin SQL wrappers that let you fetch and filter data.  Simple
-aggregates (group-by stats, percentiles, …) are left to the caller.
-Only computations that genuinely benefit from being close to the
-database engine (e.g. SQL window functions, multi-step path
-deduplication) are provided as methods.
 
 ### Read-only / fast-open mode
 
@@ -107,6 +118,87 @@ gpl = GplDb("placement.sqlite")
 gpl.preprocess(force_rebuild=True)   # drop + re-create all derived tables
 ```
 
+## Method reference
+
+### Raw table access
+
+All accept optional ID-list filters via keyword arguments (`iter_range`,
+`cell_ids`, `path_ids`, …).  When a filter is `None` the full table is
+returned.
+
+| Method | Table | Filters | Description |
+|--------|-------|---------|-------------|
+| `cell_static_info()` | `gpl_cell_static_info` | — | Width, Height, IsMacro, IsLocked per cell |
+| `cell_dense_gradients()` | `gpl_cell_dense_gradients` | `iter_range`, `cell_ids` | WL gradient (PosX, PosY, WlX, WlY) every cell every iter |
+| `cell_timing_gradients()` | `gpl_cell_timing_gradients` | `iter_range`, `cell_ids` | Timing gradient (TimX, TimY) — sparse |
+| `iteration_scalars()` | `gpl_iteration_scalars` | — | StepLength, DensityPenalty, WlCoefX/Y, BaseWlCoef, SumOverflow per iter |
+| `bin_grid()` | `gpl_bin_grid` | `iter_range` | ElectroFieldX/Y, Density per (iter, bin) |
+| `path_slacks()` | `gpl_path_slacks` | — | Slack per (PathId, Iter) |
+| `path_cells()` | `gpl_path_cells` | `iter_range`, `path_ids` | CellId, PathSeq, slack per stage on timing paths |
+
+### Precomputed derived tables
+
+Created once by `preprocess()`; queried like raw tables thereafter.
+
+| Method | Table | Description |
+|--------|-------|-------------|
+| `cell_gradient_metrics()` | `gpl_cell_gradient_metrics` | mag_wl, mag_tim, dot_wl_tim, opposition per (Iter, CellId) |
+| `cell_density_forces()` | `gpl_cell_density_forces` | Estimated electrostatic force per cell (SAT reconstruction) |
+| `path_signatures()` | `gpl_path_signatures` | Maps (PathId, Iter) → stable PhysicalPathId |
+| `physical_paths()` | *(join)* | Unique cell sequences per PhysicalPathId (GROUP_CONCAT) |
+
+### Timing-path analytics
+
+SQL-computed methods that combine multiple tables.
+
+| Method | Description |
+|--------|-------------|
+| `top_timing_cells(top_n, iter_range)` | Cells ranked by total timing force magnitude |
+| `cell_path_counts(cell_ids, iter_range)` | Count of distinct violating paths per cell per iter |
+| `cell_force_alignment(cell_ids, iter_range)` | Dot product of effective force and timing force |
+| `paths_containing_cells(cell_ids, iter_range)` | Full cell sequences for paths that include any of the given cells |
+| `similarity_path_data(cell_ids, iter_range)` | (active_paths, path_seqs) tuple for path similarity analysis |
+| `worst_paths_history(top_n, iter_range, …)` | Per-path slack history for the most critical paths |
+| `cell_movements(iter_range, cell_ids)` | DeltaX/Y and distance between consecutive iters (SQL LAG window) |
+
+### Netlist graph
+
+Access the static netlist connectivity (`gpl_netlist_cells`,
+`gpl_netlist_nets`, `gpl_netlist_connectivity`) dumped once during
+global placement.
+
+**Raw tables**
+
+| Method | Description |
+|--------|-------------|
+| `netlist_cells(cell_ids)` | CellId, Cx, Cy, Width, Height, IsMacro, IsLocked, NumInstances, NumPins |
+| `netlist_nets(net_ids)` | NetId, NumPins, TimingWeight, CustomWeight |
+| `netlist_connectivity(pin_ids, cell_ids, net_ids)` | PinId, NetId, CellId, PinCx, PinCy with optional multi-column filters |
+
+**Graph traversal** (SQLite JOINs — no data leaves the engine until the final result)
+
+| Method | Description |
+|--------|-------------|
+| `netlist_cell_nets(cell_ids)` | Nets connected to each cell (one row per pin) |
+| `netlist_net_cells(net_ids)` | Cells on each net (one row per pin) |
+| `netlist_cell_neighbors(cell_ids, include_self)` | Cells sharing ≥1 net (self-join) |
+| `netlist_net_neighbors(net_ids, include_self)` | Nets sharing ≥1 cell (self-join) |
+| `netlist_adjacency(cell_ids)` | Full (CellId, NeighborCellId, SharedNetId) edge list |
+
+**Metrics**
+
+| Method | Description |
+|--------|-------------|
+| `netlist_cell_degree(cell_ids)` | COUNT(DISTINCT NetId) per cell |
+| `netlist_net_degree(net_ids)` | Pin count per net |
+
+**Cross-table joins**
+
+| Method | Description |
+|--------|-------------|
+| `netlist_cells_with_net_counts()` | Cell properties + live net-degree in one query |
+| `netlist_net_cell_coordinates(net_ids)` | Cells on given nets with positions (join cells + connectivity) |
+
 ## Preprocessing details
 
 `GplDb.preprocess()` creates three derived tables:
@@ -120,29 +212,6 @@ gpl.preprocess(force_rebuild=True)   # drop + re-create all derived tables
 All three use iteration batching to keep peak RAM under 1 GiB.
 Default batch size = 25 iterations; tune with `batch_size=`.
 
-## Adding a new tool
-
-1. Create `new_tool_db.py`.
-2. Add a `preprocess()` method if your tool needs derived tables.
-3. Add thin SQL wrapper methods with keyword-argument filters.
-4. For SQL-computed analytics, prefer window functions and GROUP BY
-   over loading data into pandas.
-
-```python
-from .core import DbConnection
-
-class NewToolDb(DbConnection):
-    def __init__(self, db_path):
-        super().__init__(db_path, read_only=True)
-
-    def my_table(self, iter_range=None):
-        sql = "SELECT * FROM new_my_table"
-        if iter_range:
-            sql += " WHERE Iter BETWEEN ? AND ?"
-            return self.query(sql, tuple(iter_range))
-        return self.query(sql)
-```
-
 ## Data model (GPL)
 
 | Table | Rows | Cardinality |
@@ -154,6 +223,9 @@ class NewToolDb(DbConnection):
 | `gpl_bin_grid` | 1 per (iter, bin) | 7.4M |
 | `gpl_path_slacks` | 1 per (path, iter) | 38k |
 | `gpl_path_cells` | 1 per (path, iter, cell_position) | 3.7M |
+| `gpl_netlist_cells` | 1 per cell | 50k |
+| `gpl_netlist_nets` | 1 per net | varies |
+| `gpl_netlist_connectivity` | 1 per pin | varies |
 | `gpl_cell_gradient_metrics` | 1 per (cell, iter) | 22M (derived) |
 | `gpl_cell_density_forces` | 1 per (cell, iter) | 22M (derived) |
 | `gpl_path_signatures` | 1 per (path, iter) | 38k (derived) |

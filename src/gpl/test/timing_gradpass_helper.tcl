@@ -12,6 +12,9 @@
 if { ![info exists ::gpl_timing_gradpass_top_n] } {
   set ::gpl_timing_gradpass_top_n 10
 }
+if { ![info exists ::gpl_timing_gradpass_n_paths_per_endpoint] } {
+  set ::gpl_timing_gradpass_n_paths_per_endpoint 1
+}
 if { ![info exists ::gpl_timing_gradpass_proj_weight] } {
   set ::gpl_timing_gradpass_proj_weight 1.0
 }
@@ -44,6 +47,7 @@ if { ![info exists ::gpl_timing_gradpass_precond_count_weight] } {
 proc get_timing_gradpass_args { } {
   return [list \
     -timing_gradpass_top_n $::gpl_timing_gradpass_top_n \
+    -timing_gradpass_n_paths_per_endpoint $::gpl_timing_gradpass_n_paths_per_endpoint \
     -timing_gradpass_proj_weight $::gpl_timing_gradpass_proj_weight \
     -timing_gradpass_end_to_end_weight $::gpl_timing_gradpass_end_to_end_weight \
      -timing_gradpass_slack_sharpness $::gpl_timing_gradpass_slack_sharpness \
