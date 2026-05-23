@@ -5007,7 +5007,7 @@ std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
   int endpoint_path_count = 1;
   bool unique_pins = false;   // Don't filter for unique pins
   bool unique_edges = false;  // Don't filter for unique edges
-  float slack_min = -1e30f;   // Capture all paths (no lower bound)
+  float slack_min = -1e30f;   // Essentially -inf. Capture all paths (no lower bound)
   float slack_max = nbVars_.timing_pass_slack_upper;
   bool sort_by_slack = true;  // Sort results by slack (most negative first)
 
@@ -5816,6 +5816,139 @@ void gpl::NesterovBase::dumpCellPositions(int iter)
                                          cy.begin());
 }
 
+void gpl::NesterovBase::dumpNetlistCells(int iter)
+{
+  std::vector<int> iters(nb_gcells_.size(), iter);
+  std::vector<int> cell_ids(nb_gcells_.size());
+  std::vector<float> cx(nb_gcells_.size());
+  std::vector<float> cy(nb_gcells_.size());
+  std::vector<float> width(nb_gcells_.size());
+  std::vector<float> height(nb_gcells_.size());
+  std::vector<int> is_macro(nb_gcells_.size());
+  std::vector<int> is_locked(nb_gcells_.size());
+  std::vector<int> num_instances(nb_gcells_.size());
+  std::vector<int> num_pins(nb_gcells_.size());
+
+  for (size_t i = 0; i < nb_gcells_.size(); i++) {
+    GCell* gcell = nb_gcells_[i];
+    cell_ids[i] = static_cast<int>(i);
+    cx[i] = static_cast<float>(gcell->cx());
+    cy[i] = static_cast<float>(gcell->cy());
+    width[i] = static_cast<float>(gcell->dx());
+    height[i] = static_cast<float>(gcell->dy());
+    is_macro[i] = gcell->isMacroInstance() ? 1 : 0;
+    is_locked[i] = gcell->isLocked() ? 1 : 0;
+    num_instances[i] = static_cast<int>(gcell->insts().size());
+    num_pins[i] = static_cast<int>(gcell->gPins().size());
+  }
+
+  log_->logToDbBulk<"Iter,CellId,Cx,Cy,Width,Height,IsMacro,IsLocked,"
+                     "NumInstances,NumPins">(
+      utl::GPL,
+      817,
+      "gpl_netlist_cells",
+      nb_gcells_.size(),
+      iters.begin(),
+      cell_ids.begin(),
+      cx.begin(),
+      cy.begin(),
+      width.begin(),
+      height.begin(),
+      is_macro.begin(),
+      is_locked.begin(),
+      num_instances.begin(),
+      num_pins.begin());
+}
+
+void gpl::NesterovBase::dumpNetlistNets(int iter)
+{
+  const auto& nets = nbc_->getGNets();
+  std::vector<int> iters(nets.size(), iter);
+  std::vector<int> net_ids(nets.size());
+  std::vector<int> num_pins(nets.size());
+  std::vector<float> timing_weight(nets.size());
+  std::vector<float> custom_weight(nets.size());
+
+  for (size_t i = 0; i < nets.size(); i++) {
+    net_ids[i] = static_cast<int>(i);
+    num_pins[i] = static_cast<int>(nets[i]->getGPins().size());
+    timing_weight[i] = nets[i]->getTimingWeight();
+    custom_weight[i] = nets[i]->getCustomWeight();
+  }
+
+  log_->logToDbBulk<"Iter,NetId,NumPins,TimingWeight,CustomWeight">(
+      utl::GPL,
+      818,
+      "gpl_netlist_nets",
+      nets.size(),
+      iters.begin(),
+      net_ids.begin(),
+      num_pins.begin(),
+      timing_weight.begin(),
+      custom_weight.begin());
+}
+
+void gpl::NesterovBase::dumpNetlistConnectivity(int iter)
+{
+  // Build GCell* -> local cell_id map for this region
+  std::unordered_map<GCell*, int> gcell_to_local;
+  for (size_t i = 0; i < nb_gcells_.size(); i++) {
+    gcell_to_local[nb_gcells_[i]] = static_cast<int>(i);
+  }
+
+  const auto& pins = nbc_->getGPins();
+  std::vector<int> iters;
+  std::vector<int> pin_ids;
+  std::vector<int> net_ids;
+  std::vector<int> cell_ids;
+  std::vector<float> pin_cx;
+  std::vector<float> pin_cy;
+
+  iters.reserve(pins.size());
+  pin_ids.reserve(pins.size());
+  net_ids.reserve(pins.size());
+  cell_ids.reserve(pins.size());
+  pin_cx.reserve(pins.size());
+  pin_cy.reserve(pins.size());
+
+  for (size_t i = 0; i < pins.size(); i++) {
+    GPin* gpin = pins[i];
+    GCell* gcell = gpin->getGCell();
+    auto it = gcell_to_local.find(gcell);
+    if (it == gcell_to_local.end()) {
+      continue;  // pin belongs to a cell not in this region
+    }
+
+    iters.push_back(iter);
+    pin_ids.push_back(static_cast<int>(i));
+    net_ids.push_back(static_cast<int>(nbc_->getGNetIndex(gpin->getGNet())));
+    cell_ids.push_back(it->second);
+    pin_cx.push_back(static_cast<float>(gpin->cx()));
+    pin_cy.push_back(static_cast<float>(gpin->cy()));
+  }
+
+  if (!pin_ids.empty()) {
+    log_->logToDbBulk<"Iter,PinId,NetId,CellId,PinCx,PinCy">(
+        utl::GPL,
+        819,
+        "gpl_netlist_connectivity",
+        pin_ids.size(),
+        iters.begin(),
+        pin_ids.begin(),
+        net_ids.begin(),
+        cell_ids.begin(),
+        pin_cx.begin(),
+        pin_cy.begin());
+  }
+}
+
+void gpl::NesterovBase::dumpNetlistToDb(int iter)
+{
+  dumpNetlistCells(iter);
+  dumpNetlistNets(iter);
+  dumpNetlistConnectivity(iter);
+}
+
 void gpl::NesterovBase::dumpGradientsToDb(int iter)
 {
   if (!has_logged_static_) {
@@ -5823,6 +5956,14 @@ void gpl::NesterovBase::dumpGradientsToDb(int iter)
     dumpCellStaticInfo();
     has_logged_static_ = true;
   }
+  //HACK: Dumping the full netlist graph EVERY iteration produces a diabolical
+  // amount of data (multiple GB per second). This is for DEBUGGING ONLY.
+  // NEVER run this in production — it will fill your disk and bottleneck
+  // the placer with logging overhead. Revert to the once-only dump
+  // (the commented-out block below) before any production use.
+  //
+  // if (!has_logged_netlist_) { ... has_logged_netlist_ = true; }
+  dumpNetlistToDb(iter);
   dumpBaseIterationScalars(iter);
   dumpBinGrid(iter);
   dumpCellDenseGradients(iter);

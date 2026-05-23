@@ -1230,6 +1230,12 @@ class NesterovBase
   void dumpCellSparseTiming(int iter);
   void dumpCellSparseRoutability(int iter);
 
+  // Netlist dump
+  void dumpNetlistToDb(int iter);
+  void dumpNetlistCells(int iter);
+  void dumpNetlistNets(int iter);
+  void dumpNetlistConnectivity(int iter);
+
   void runTimingPassGradient(NesterovBaseCommon& nbc,
                              NesterovBaseVars& nbv,
                              const std::vector<FloatPoint>& coordi,
@@ -1407,6 +1413,7 @@ class NesterovBase
   bool isConverged_ = false;
   bool reprint_iter_header_ = false;
   bool has_logged_static_ = false;
+  bool has_logged_netlist_ = false;
 
   void initFillerGCells();
 
