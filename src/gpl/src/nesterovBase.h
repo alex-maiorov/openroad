@@ -781,6 +781,9 @@ struct NesterovBaseVars
   const float timing_pass_slack_upper;
   const int timing_pass_sta_run_interval;
   const int timing_pass_first_iter;
+  const float timing_pass_saturation_kL;
+  const float timing_pass_saturation_minL;
+  const float timing_pass_precond_count_weight;
 
   // Routability gradient pass parameters
   const float routability_pass_sharpness;
@@ -1084,7 +1087,8 @@ class NesterovBase
 
   FloatPoint getDensityGradient(const GCell* gCell) const;
 
-  FloatPoint getTimingPreconditioner(const GCell* gCell) const;
+  FloatPoint getTimingPreconditioner(const GCell* gCell,
+                                      size_t cell_index) const;
 
   FloatPoint getTimingGradient(const GCell* gCell) const;
   FloatPoint getTimingGradient(size_t gCellIndex,
@@ -1408,6 +1412,10 @@ class NesterovBase
 
   // Store timing gradients here. Make sure to zero them in the constructor
   std::vector<FloatPoint> timingGrads_;
+
+  // Count of violating paths a cell appears in. Populated by
+  // runTimingPassGradient(), consumed by getTimingPreconditioner().
+  std::vector<int> timing_path_counts_;
 
   // Store routability gradients here. Make sure to zero them in the constructor
   std::vector<FloatPoint> routabilityGrads_;

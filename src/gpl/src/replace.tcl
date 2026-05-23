@@ -44,6 +44,9 @@ sta::define_cmd_args "global_placement" {\
      [-timing_gradpass_slack_upper timing_gradpass_slack_upper]\
      [-timing_gradpass_sta_run_interval timing_gradpass_sta_run_interval]\
      [-timing_gradpass_first_iter timing_gradpass_first_iter]\
+     [-timing_gradpass_saturation_kl timing_gradpass_saturation_kl]\
+     [-timing_gradpass_saturation_minl timing_gradpass_saturation_minl]\
+     [-timing_gradpass_precond_count_weight timing_gradpass_precond_count_weight]\
      [-routability_gradpass_sharpness routability_gradpass_sharpness]\
      [-routability_gradpass_weight routability_gradpass_weight]\
      [-routability_gradpass_range routability_gradpass_range]\
@@ -79,6 +82,9 @@ proc global_placement { args } {
        -timing_gradpass_slack_upper \
        -timing_gradpass_sta_run_interval \
         -timing_gradpass_first_iter \
+        -timing_gradpass_saturation_kl \
+        -timing_gradpass_saturation_minl \
+        -timing_gradpass_precond_count_weight \
         -routability_gradpass_sharpness \
         -routability_gradpass_weight \
         -routability_gradpass_range \

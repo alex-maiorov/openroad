@@ -912,15 +912,18 @@ class GplDb(DbConnection):
             None means use all iterations.
         min_separation : float
             Minimum slack difference (in ps) between any two returned
-            paths.  If a candidate's worst slack is within this
-            threshold of an already-selected path, the candidate is
-            skipped.  0 means no filtering.
+            paths.  This check uses **OR** logic with
+            ``max_similarity``: a candidate is only rejected when it
+            fails **both** this check AND the similarity check against
+            the same already-selected path.  0 means no filtering.
         max_similarity : float
             Maximum ratio of shared nodes (CellIds) between a
             candidate path and any already-selected path.  Computed as
             ``|cells(new) ∩ cells(existing)| / |cells(new)|``.
-            Candidates exceeding this threshold are skipped.  1.0
-            means no filtering.
+            This check uses **OR** logic with ``min_separation``: a
+            candidate is only rejected when it fails **both** checks
+            against the same already-selected path.  1.0 means no
+            filtering.
 
         Returns
         -------
@@ -961,54 +964,73 @@ class GplDb(DbConnection):
         # ── 2. Worst slack per physical path ────────────────────────
         worst = df.groupby("PhysicalPathId")["Slack"].min().sort_values()
 
-        # ── 3. Apply min_separation filter ──────────────────────────
-        # Walk paths from worst → best, keep only those whose slack
-        # differs by at least min_separation from the last kept path.
-        kept: list = []
-        for phys_id in worst.index:
-            if min_separation > 0 and kept:
-                last_worst = worst[kept[-1]]
-                if abs(worst[phys_id] - last_worst) < min_separation:
-                    continue
-            kept.append(phys_id)
-            if len(kept) >= top_n:
-                break
+        # ── 3. Combined OR filtering ──────────────────────────
+        # A candidate is selected if it differs from ALL
+        # already-selected paths in EITHER slack
+        # (≥ min_separation) OR cell composition
+        # (overlap ≤ max_similarity).  Only paths that fail
+        # BOTH checks against SOME already-selected path are
+        # rejected.  When only one criterion's threshold is
+        # active (the other at its default) it works as a
+        # single-dimension filter for backward compatibility.
 
-        if not kept:
-            return []
+        use_slack = (min_separation > 0)
+        use_sim = (max_similarity < 1.0 and has_sig)
 
-        # ── 4. Apply max_similarity (node overlap) filter ───────────
-        if max_similarity < 1.0 and has_sig:
-            placeholders = ",".join("?" for _ in kept)
-            cell_df = self.query(f"""
-                SELECT sm.PhysicalPathId, pc.CellId
-                FROM [{PATH_SIGNATURES_TABLE}] sm
-                JOIN gpl_path_cells pc
-                  ON sm.PathId = pc.PathId AND sm.Iter = pc.Iter
-                WHERE sm.PhysicalPathId IN ({placeholders})
-            """, kept)
+        # Shortcut: if neither filter is active, take top_n
+        # directly (avoids the "both_violated stays True" trap).
+        if not use_slack and not use_sim:
+            kept = worst.index[:top_n].tolist()
+        else:
+            # Pre-fetch cell sets for all candidates when
+            # similarity is enabled.
+            if use_sim:
+                all_ids = worst.index.tolist()
+                ph = ",".join("?" for _ in all_ids)
+                cell_df = self.query(f"""
+                    SELECT sm.PhysicalPathId, pc.CellId
+                    FROM [{PATH_SIGNATURES_TABLE}] sm
+                    JOIN gpl_path_cells pc
+                      ON sm.PathId = pc.PathId AND sm.Iter = pc.Iter
+                    WHERE sm.PhysicalPathId IN ({ph})
+                """, all_ids)
+                path_cells = {
+                    pid: set(grp["CellId"].values)
+                    for pid, grp in cell_df.groupby("PhysicalPathId")
+                }
 
-            path_cells = {
-                pid: set(grp["CellId"].values)
-                for pid, grp in cell_df.groupby("PhysicalPathId")
-            }
+            kept: list = []
+            for phys_id in worst.index:
+                if len(kept) >= top_n:
+                    break
 
-            filtered: list = []
-            for phys_id in kept:
-                new_set = path_cells.get(phys_id, set())
-                too_similar = False
-                for existing_id in filtered:
-                    existing_set = path_cells.get(existing_id, set())
-                    if len(new_set) > 0:
-                        overlap = len(new_set & existing_set) / len(new_set)
-                        if overlap > max_similarity:
-                            too_similar = True
-                            break
-                if not too_similar:
-                    filtered.append(phys_id)
-                    if len(filtered) >= top_n:
+                reject = False
+                for existing_id in kept:
+                    # Start by assuming this candidate fails ALL
+                    # dimensions vs *existing_id*.  If EITHER the
+                    # slack or the cell check passes, we mark the
+                    # pair as OK.
+                    both_violated = True
+
+                    if use_slack:
+                        diff = abs(worst[phys_id] - worst[existing_id])
+                        if diff >= min_separation:
+                            both_violated = False
+
+                    if use_sim:
+                        new_set = path_cells.get(phys_id, set())
+                        old_set = path_cells.get(existing_id, set())
+                        if len(new_set) > 0:
+                            overlap = len(new_set & old_set) / len(new_set)
+                            if overlap <= max_similarity:
+                                both_violated = False
+
+                    if both_violated:
+                        reject = True
                         break
-            kept = filtered
+
+                if not reject:
+                    kept.append(phys_id)
 
         if not kept:
             return []

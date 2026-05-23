@@ -365,7 +365,9 @@ int Replace::doNesterovPlace(const int threads,
                88,
                "Timing driven mode enabled. timing_gradpass parameters: "
                "top_n={}, proj_weight={}, end_to_end_weight={}, "
-               "slack_sharpness={}, slack_offset={}, slack_upper={}, sta_run_interval={}, first_iter={}",
+               "slack_sharpness={}, slack_offset={}, slack_upper={}, "
+               "sta_run_interval={}, first_iter={}, "
+               "saturation_kl={}, saturation_minl={}, precond_count_weight={}",
                options.timingGradPassTopN,
                options.timingGradPassProjWeight,
                options.timingGradPassEndToEndWeight,
@@ -373,7 +375,10 @@ int Replace::doNesterovPlace(const int threads,
                options.timingGradPassSlackOffset,
                options.timingGradPassSlackUpper,
                options.timingGradPassStaRunInterval,
-               options.timingGradPassFirstIter);
+               options.timingGradPassFirstIter,
+               options.timingGradPassSaturationKL,
+               options.timingGradPassSaturationMinL,
+               options.timingGradPassPrecondCountWeight);
   }
 
   if (options.timingDrivenMode) {

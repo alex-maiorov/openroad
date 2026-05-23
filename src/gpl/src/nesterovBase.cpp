@@ -1100,6 +1100,9 @@ NesterovBaseVars::NesterovBaseVars(const PlaceOptions& options)
       timing_pass_slack_upper(options.timingGradPassSlackUpper),
       timing_pass_sta_run_interval(options.timingGradPassStaRunInterval),
       timing_pass_first_iter(options.timingGradPassFirstIter),
+      timing_pass_saturation_kL(options.timingGradPassSaturationKL),
+      timing_pass_saturation_minL(options.timingGradPassSaturationMinL),
+      timing_pass_precond_count_weight(options.timingGradPassPrecondCountWeight),
       routability_pass_sharpness(options.routabilityGradPassSharpness),
       routability_pass_weight(options.routabilityGradPassWeight),
       routability_pass_range(options.routabilityGradPassRange),
@@ -2664,10 +2667,25 @@ FloatPoint NesterovBase::getDensityGradient(const GCell* gCell) const
   return electroForce;
 }
 
-FloatPoint NesterovBase::getTimingPreconditioner(const GCell* gCell) const
+FloatPoint NesterovBase::getTimingPreconditioner(const GCell* gCell,
+                                                  size_t cell_index) const
 {
-  // FIXME: think about this
-  return FloatPoint(1, 1);
+  // Scale the preconditioner by the number of violating paths this cell
+  // appears in.  Cells in many timing-violating paths accumulate large
+  // aggregate forces (each path adds its gradient vector independently),
+  // so we dampen their effective step to prevent them from dominating
+  // the Nesterov line search and destabilising convergence.
+  if (cell_index >= timing_path_counts_.size()) {
+    return FloatPoint(1, 1);
+  }
+  const int count = timing_path_counts_[cell_index];
+  if (count <= 0) {
+    return FloatPoint(1, 1);
+  }
+  const float precond
+      = 1.0f
+        + static_cast<float>(count) * nbVars_.timing_pass_precond_count_weight;
+  return FloatPoint(precond, precond);
 }
 
 FloatPoint NesterovBase::getRoutabilityPreconditioner(const GCell* gCell) const
@@ -3211,7 +3229,7 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
 
     FloatPoint wireLengthPreCondi = nbc_->getWireLengthPreconditioner(gCell);
     FloatPoint densityPrecondi = getDensityPreconditioner(gCell);
-    FloatPoint timingPrecondi = getTimingPreconditioner(gCell);
+    FloatPoint timingPrecondi = getTimingPreconditioner(gCell, i);
     FloatPoint routabilityPrecondi = getRoutabilityPreconditioner(gCell);
 
     FloatPoint sumPrecondi(
@@ -3403,7 +3421,7 @@ void NesterovBase::updateSingleGradient(
 
   FloatPoint wireLengthPreCond = nbc_->getWireLengthPreconditioner(gCell);
   FloatPoint densityPrecondi = getDensityPreconditioner(gCell);
-  FloatPoint timingPrecondi = getTimingPreconditioner(gCell);
+  FloatPoint timingPrecondi = getTimingPreconditioner(gCell, gCellIndex);
   FloatPoint routabilityPrecondi = getRoutabilityPreconditioner(gCell);
 
   FloatPoint sumPrecondi(
@@ -5197,6 +5215,10 @@ void gpl::NesterovBase::runTimingPassGradient(
 {
   int inf_cnt = 0;
   int nan_cnt = 0;
+
+  // Reset per-cell violating-path counts for preconditioner use.
+  timing_path_counts_.assign(grad.size(), 0);
+
   for (const auto& path : violating_paths_) {
     const auto& gCell_indices = path.gCellIndexSequence;
     if (gCell_indices.size() < 2) {
@@ -5254,6 +5276,7 @@ void gpl::NesterovBase::runTimingPassGradient(
       }
 
       grad[cell_idx] = grad[cell_idx] + force;
+      timing_path_counts_[cell_idx] += 1;
     }
   }
   if (nan_cnt != 0 || inf_cnt != 0) {
@@ -5280,38 +5303,54 @@ FloatPoint NesterovBase::calculateTimingGradientValue(
 {
   FloatPoint force(0.0f, 0.0f);
 
+  // Compute the characteristic length L for Pseudo-Huber saturation.
+  // L is derived from the path span (distance between endpoints) so that
+  // short paths see nearly-linear forces while long paths saturate gracefully.
+  const float path_span
+      = std::sqrt((end2_pos.x - end1_pos.x) * (end2_pos.x - end1_pos.x)
+                  + (end2_pos.y - end1_pos.y) * (end2_pos.y - end1_pos.y));
+  const float L = std::max(path_span / nbVars_.timing_pass_saturation_kL,
+                           nbVars_.timing_pass_saturation_minL);
+
+  // Helper: apply Pseudo-Huber saturation to a raw force vector.
+  // F_sat = F_raw * (L / d) * tanh(d / L), where d = geometric distance.
+  // This is the gradient of w * L² * log(cosh(d / L)), which is quadratic
+  // near zero and linear at infinity — preventing unbounded force growth
+  // while preserving the direction signal.
+  auto apply_pseudo_huber = [L](const FloatPoint& offset, float weight) {
+    FloatPoint raw = FloatPoint(offset.x * weight, offset.y * weight);
+    const float d = std::sqrt(offset.x * offset.x + offset.y * offset.y);
+    if (d < 1e-12f) {
+      return FloatPoint(0.0f, 0.0f);
+    }
+    const float scale = (L / d) * std::tanh(d / L);
+    return FloatPoint(raw.x * scale, raw.y * scale);
+  };
+
   // Endpoint attraction force calc
   if (end_to_end_weight > 0.0f && is_endpoint) {
-    // FIXME: This relies on the fact that a - a = 0
+    // For endpoints, the total geometric offset is toward the other endpoint.
+    // End1: to_end1 = 0, to_end2 = end2 - end1  →  offset = end2 - end1
+    // End2: to_end1 = end1 - end2, to_end2 = 0  →  offset = end1 - end2
     const FloatPoint to_end1{end1_pos.x - cell_pos.x, end1_pos.y - cell_pos.y};
     const FloatPoint to_end2{end2_pos.x - cell_pos.x, end2_pos.y - cell_pos.y};
-    const float force_weight = end_to_end_weight * slack_weight;
-    force = (to_end1 + to_end2) * force_weight;
+    const FloatPoint offset{to_end1.x + to_end2.x, to_end1.y + to_end2.y};
+    const float weight = end_to_end_weight * slack_weight;
+    force = apply_pseudo_huber(offset, weight);
   }
 
-  // Projection force calc
+  // Projection force calc for interior cells
   if (proj_weight > 0.0f && path_length > 2 && !is_endpoint) {
     const FloatPoint e1_to_e2_vec{end2_pos.x - end1_pos.x,
                                   end2_pos.y - end1_pos.y};
-    float position_scaling_factor = float(cell_index) / float(path_length);
-    FloatPoint point_to_attract_cell_to
-        = end1_pos
-          + (e1_to_e2_vec
-             * position_scaling_factor);  // TODO: Not sure if it will be
-                                          // obvious what this does
-    force = FloatPoint(point_to_attract_cell_to - cell_pos)
-            * float(proj_weight * slack_weight);  // FIXME: maybe normalize this
-
-    // Old calculation was a bit silly due to not accounting for intermediate
-    // cells not actually being in-between endpoints, so it has been replaced
-    // const FloatPoint proj_from_end1
-    //     = proj_vector(cell_pos, end1_pos, end2_pos);
-    // const FloatPoint from_cell_to_proj
-    //     = proj_from_end1 + (end1_pos - cell_pos);
-    // const float dist_sq = from_cell_to_proj.x * from_cell_to_proj.x
-    //                       + from_cell_to_proj.y * from_cell_to_proj.y;
-    // const float proj_scaled_force = proj_weight * slack_weight * dist_sq;
-    // force = force + (from_cell_to_proj * proj_scaled_force);
+    const float position_scaling_factor
+        = static_cast<float>(cell_index) / static_cast<float>(path_length);
+    const FloatPoint point_to_attract_cell_to
+        = end1_pos + (e1_to_e2_vec * position_scaling_factor);
+    const FloatPoint offset{point_to_attract_cell_to.x - cell_pos.x,
+                            point_to_attract_cell_to.y - cell_pos.y};
+    const float weight = proj_weight * slack_weight;
+    force = apply_pseudo_huber(offset, weight);
   }
 
   return force;

@@ -50,7 +50,11 @@ FORCE_ORDER = ["wl", "tim", "density", "effective"]
 
 
 def _build_arrow_trace(force_df, fkey, scale, color):
-    """Build a quiver trace for one force type."""
+    """Build a quiver trace for one force type with hover info.
+
+    The hover tooltip shows cell ID, position, and all four gradient
+    components (WL, timing, density, effective).
+    """
     x = force_df["PosX"].values
     y = force_df["PosY"].values
     cfg = FORCE_CONFIG[fkey]
@@ -73,7 +77,32 @@ def _build_arrow_trace(force_df, fkey, scale, color):
     )
     trace = fig_q.data[0]
     trace.showlegend = True
-    trace.hoverinfo = "none"
+
+    # ── Build hover customdata ────────────────────────────────
+    n_arr = keep.sum()
+    kept_df = force_df.iloc[np.where(keep)[0]]
+    rows = []
+    for i in range(n_arr):
+        r = kept_df.iloc[i]
+        rows.append((
+            int(r["CellId"]),
+            float(r["PosX"]), float(r["PosY"]),
+            float(r["WlX"]), float(r["WlY"]),
+            float(r["TimX"]), float(r["TimY"]),
+            float(r["EstDensityForceX"]), float(r["EstDensityForceY"]),
+            float(r["EffectiveX"]), float(r["EffectiveY"]),
+        ))
+    trace.customdata = np.repeat(rows, 7, axis=0)
+    trace.hovertemplate = (
+        f"<b>{cfg['label']} force</b><br>"
+        "Cell %{customdata[0]}<br>"
+        "Pos: (%{customdata[1]:.0f}, %{customdata[2]:.0f})<br>"
+        "<b>Gradients</b><br>"
+        "WL:  (%{customdata[3]:.4f}, %{customdata[4]:.4f})<br>"
+        "Tim: (%{customdata[5]:.4f}, %{customdata[6]:.4f})<br>"
+        "Den: (%{customdata[7]:.4f}, %{customdata[8]:.4f})<br>"
+        "Eff: (%{customdata[9]:.4f}, %{customdata[10]:.4f})<extra></extra>"
+    )
     return trace
 
 
@@ -105,9 +134,72 @@ def make_app(gpl: GplDb) -> dash.Dash:
         if _row and _row[0] is not None else None
     )
 
+    # Auto-scaled force defaults per force type, matching the
+    # logic in path_visualizer._compute_force_scales.
+    def _compute_auto_scales():
+        if des_bounds is None:
+            return {}
+        dx = des_bounds[1] - des_bounds[0]
+        dy = des_bounds[3] - des_bounds[2]
+        diag = (dx * dx + dy * dy) ** 0.5
+        target = diag * 0.05
+        s = {}
+        try:
+            df = gpl.query("SELECT SQRT(AVG(WlX*WlX+WlY*WlY)) AS r FROM gpl_cell_dense_gradients")
+            v = float(df["r"].iloc[0])
+            if v > 1e-30:
+                s["wl"] = target / v
+        except Exception:
+            pass
+        if gpl._exists("gpl_cell_timing_gradients"):
+            try:
+                df = gpl.query("SELECT SQRT(AVG(TimX*TimX+TimY*TimY)) AS r FROM gpl_cell_timing_gradients")
+                v = float(df["r"].iloc[0])
+                if v > 1e-30:
+                    s["tim"] = target / v
+            except Exception:
+                pass
+        if gpl._exists("gpl_cell_density_forces"):
+            try:
+                df = gpl.query("SELECT SQRT(AVG(EstDensityForceX*EstDensityForceX+EstDensityForceY*EstDensityForceY)) AS r FROM gpl_cell_density_forces")
+                v = float(df["r"].iloc[0])
+                if v > 1e-30:
+                    s["density"] = target / v
+            except Exception:
+                pass
+        if gpl._exists("gpl_cell_density_forces"):
+            try:
+                df = gpl.query("""
+                    SELECT SQRT(AVG(
+                        (d.WlX+COALESCE(t.TimX,0)+df.EstDensityForceX)*
+                        (d.WlX+COALESCE(t.TimX,0)+df.EstDensityForceX)+
+                        (d.WlY+COALESCE(t.TimY,0)+df.EstDensityForceY)*
+                        (d.WlY+COALESCE(t.TimY,0)+df.EstDensityForceY)
+                    )) AS r FROM gpl_cell_dense_gradients d
+                    LEFT JOIN gpl_cell_timing_gradients t
+                      ON d.Iter=t.Iter AND d.CellId=t.CellId
+                    JOIN gpl_cell_density_forces df
+                      ON d.Iter=df.Iter AND d.CellId=df.CellId
+                    LIMIT 50000
+                """)
+                if not df.empty and df["r"].iloc[0] is not None:
+                    v = float(df["r"].iloc[0])
+                    if v > 1e-30:
+                        s["effective"] = target / v
+            except Exception:
+                pass
+        if "effective" not in s and s:
+            s["effective"] = max(s.values())
+        return s
+    auto_scales = _compute_auto_scales() or {}
+    _force_cfg = {
+        k: {**v, "default_scale": auto_scales.get(k, v["default_scale"])}
+        for k, v in FORCE_CONFIG.items()
+    }
+
     # ── Layout ──────────────────────────────────────────────────
     def _force_row(fkey):
-        cfg = FORCE_CONFIG[fkey]
+        cfg = _force_cfg[fkey]
         return html.Div(
             style={"display": "flex", "alignItems": "center", "gap": "6px",
                    "flexWrap": "wrap", "marginBottom": "4px"},
@@ -372,9 +464,10 @@ def make_app(gpl: GplDb) -> dash.Dash:
             "density": bool(tgl_dens), "effective": bool(tgl_eff),
         }
         scales = {
-            "wl": float(scl_wl or 5e5), "tim": float(scl_tim or 5e5),
-            "density": float(scl_dens or 5e5),
-            "effective": float(scl_eff or 5e5),
+            "wl": float(scl_wl or _force_cfg["wl"]["default_scale"]),
+            "tim": float(scl_tim or _force_cfg["tim"]["default_scale"]),
+            "density": float(scl_dens or _force_cfg["density"]["default_scale"]),
+            "effective": float(scl_eff or _force_cfg["effective"]["default_scale"]),
         }
 
         fig = go.Figure()
@@ -414,7 +507,12 @@ def make_app(gpl: GplDb) -> dash.Dash:
             color = colors[ci % len(colors)]
             label = f"Cell {cell_id}"
 
-            # Position marker
+            # Position marker with gradient hover
+            _row = cdata.iloc[0]
+            _wx, _wy = float(_row.get("WlX", 0)), float(_row.get("WlY", 0))
+            _tx, _ty = float(_row.get("TimX", 0)), float(_row.get("TimY", 0))
+            _dx, _dy = float(_row.get("EstDensityForceX", 0)), float(_row.get("EstDensityForceY", 0))
+            _ex, _ey = float(_row.get("EffectiveX", 0)), float(_row.get("EffectiveY", 0))
             fig.add_trace(go.Scatter(
                 x=cdata["PosX"], y=cdata["PosY"],
                 mode="markers",
@@ -422,8 +520,16 @@ def make_app(gpl: GplDb) -> dash.Dash:
                             line=dict(width=1, color="white")),
                 name=label,
                 legendgroup=label,
-                hovertemplate=f"Cell {cell_id}<br>"
-                              f"X=%{{x:.1f}}  Y=%{{y:.1f}}<extra></extra>",
+                hovertemplate=(
+                    f"<b>{label}</b><br>"
+                    f"Iter: {viz_iter}<br>"
+                    "Pos: (%{x:.0f}, %{y:.0f})<br>"
+                    "<b>Gradients</b><br>"
+                    f"WL:  ({_wx:.4f}, {_wy:.4f})<br>"
+                    f"Tim: ({_tx:.4f}, {_ty:.4f})<br>"
+                    f"Den: ({_dx:.4f}, {_dy:.4f})<br>"
+                    f"Eff: ({_ex:.4f}, {_ey:.4f})<extra></extra>"
+                ),
             ))
 
             # Force arrows

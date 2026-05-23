@@ -84,6 +84,9 @@ static gpl::PlaceOptions getOptions(
     checkKey(keys, "-timing_gradpass_slack_upper", options.timingGradPassSlackUpper);
     checkKey(keys, "-timing_gradpass_sta_run_interval", options.timingGradPassStaRunInterval);
     checkKey(keys, "-timing_gradpass_first_iter", options.timingGradPassFirstIter);
+    checkKey(keys, "-timing_gradpass_saturation_kl", options.timingGradPassSaturationKL);
+    checkKey(keys, "-timing_gradpass_saturation_minl", options.timingGradPassSaturationMinL);
+    checkKey(keys, "-timing_gradpass_precond_count_weight", options.timingGradPassPrecondCountWeight);
     checkKey(keys, "-routability_gradpass_sharpness", options.routabilityGradPassSharpness);
     checkKey(keys, "-routability_gradpass_weight", options.routabilityGradPassWeight);
     checkKey(keys, "-routability_gradpass_range", options.routabilityGradPassRange);

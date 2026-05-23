@@ -100,6 +100,99 @@ def _get_design_bounds(gpl):
             float(df["ymin"].iloc[0]), float(df["ymax"].iloc[0]))
 
 
+def _compute_force_scales(gpl, des_bounds):
+    """Compute per-force-type default scale factors from actual data.
+
+    Queries the RMS force magnitude for each force type and computes a
+    scale that maps the RMS arrow length to roughly 5 % of the design
+    diagonal.  The scales are returned as a dict ``{fkey: scale}``.
+
+    Returns ``None`` when *des_bounds* is unavailable or no forces
+    can be queried.
+    """
+    if des_bounds is None:
+        return None
+    dx = des_bounds[1] - des_bounds[0]
+    dy = des_bounds[3] - des_bounds[2]
+    diag = (dx * dx + dy * dy) ** 0.5
+    target = diag * 0.05  # 5 % of design diagonal
+
+    scales = {}
+
+    # ── WL ────────────────────────────────────────────────────
+    try:
+        df = gpl.query(
+            "SELECT SQRT(AVG(WlX*WlX + WlY*WlY)) AS rms "
+            "FROM gpl_cell_dense_gradients"
+        )
+        rms = float(df["rms"].iloc[0])
+        if rms > 1e-30:
+            scales["wl"] = target / rms
+    except Exception:
+        pass
+
+    # ── Timing ────────────────────────────────────────────────
+    if gpl._exists("gpl_cell_timing_gradients"):
+        try:
+            df = gpl.query(
+                "SELECT SQRT(AVG(TimX*TimX + TimY*TimY)) AS rms "
+                "FROM gpl_cell_timing_gradients"
+            )
+            rms = float(df["rms"].iloc[0])
+            if rms > 1e-30:
+                scales["tim"] = target / rms
+        except Exception:
+            pass
+
+    # ── Density ───────────────────────────────────────────────
+    if gpl._exists("gpl_cell_density_forces"):
+        try:
+            df = gpl.query(
+                "SELECT SQRT(AVG(EstDensityForceX*EstDensityForceX "
+                "               + EstDensityForceY*EstDensityForceY)) AS rms "
+                "FROM gpl_cell_density_forces"
+            )
+            rms = float(df["rms"].iloc[0])
+            if rms > 1e-30:
+                scales["density"] = target / rms
+        except Exception:
+            pass
+
+    # ── Effective ─────────────────────────────────────────────
+    # Derived from the three components via a bounded join.
+    if gpl._exists("gpl_cell_density_forces"):
+        try:
+            df = gpl.query("""
+                SELECT SQRT(AVG(
+                    (d.WlX + COALESCE(t.TimX,0) + df.EstDensityForceX)
+                  * (d.WlX + COALESCE(t.TimX,0) + df.EstDensityForceX)
+                  + (d.WlY + COALESCE(t.TimY,0) + df.EstDensityForceY)
+                  * (d.WlY + COALESCE(t.TimY,0) + df.EstDensityForceY)
+                )) AS rms
+                FROM gpl_cell_dense_gradients d
+                LEFT JOIN gpl_cell_timing_gradients t
+                  ON d.Iter = t.Iter AND d.CellId = t.CellId
+                JOIN gpl_cell_density_forces df
+                  ON d.Iter = df.Iter AND d.CellId = df.CellId
+                LIMIT 50000
+            """)
+            if not df.empty and df["rms"].iloc[0] is not None:
+                rms = float(df["rms"].iloc[0])
+                if rms > 1e-30:
+                    scales["effective"] = target / rms
+        except Exception:
+            pass
+
+    # Fallback heuristic when the bounded join is too sparse
+    if "effective" not in scales and scales:
+        # Effective force includes all components, so its RMS is
+        # typically at least as large as the largest single
+        # component → the smallest scale is the safest default.
+        scales["effective"] = max(scales.values())
+
+    return scales if scales else None
+
+
 def _get_worst_phys_ids(gpl, top_n, iter_range, min_sep_ps, max_sim,
                          slack_range_ps=None):
     """Use GplDb.worst_paths_history to find top pathological paths.
@@ -278,11 +371,12 @@ def _build_trajectory_trace(cell_ids_in_path, traj_df, path_label,
 
 
 def _build_snapshot_path_trace(cell_ids_in_path, traj_df, iteration,
-                                path_label, path_color):
+                                path_label, path_color, force_df=None):
     """Build a Scatter trace showing path connectivity at *iteration*.
 
     Draws lines + markers connecting the cells in PathSeq order at the
-    given iteration.
+    given iteration.  When *force_df* is supplied the hover tooltip
+    also shows gradient components for each cell.
     """
     sub = traj_df[
         (traj_df["CellId"].isin(cell_ids_in_path)) &
@@ -294,6 +388,31 @@ def _build_snapshot_path_trace(cell_ids_in_path, traj_df, iteration,
     seq_order = {cid: i for i, cid in enumerate(cell_ids_in_path)}
     sub["_seq"] = sub["CellId"].map(seq_order)
     sub = sub.sort_values("_seq")
+
+    # ── Build hover customdata (CellId, Seq, Pos, forces) ─────
+    # Lookup table: CellId → (WlX, WlY, TimX, TimY, DensX, DensY, EffX, EffY)
+    force_lookup = {}
+    if force_df is not None and not force_df.empty:
+        for _, r in force_df.iterrows():
+            force_lookup[int(r["CellId"])] = (
+                float(r.get("WlX", 0)), float(r.get("WlY", 0)),
+                float(r.get("TimX", 0)), float(r.get("TimY", 0)),
+                float(r.get("EstDensityForceX", 0)),
+                float(r.get("EstDensityForceY", 0)),
+                float(r.get("EffectiveX", 0)),
+                float(r.get("EffectiveY", 0)),
+            )
+
+    custom_rows = []
+    for _, row in sub.iterrows():
+        cid = int(row["CellId"])
+        f = force_lookup.get(cid, (0.0,) * 8)
+        custom_rows.append((
+            cid,
+            int(row["_seq"]),
+            float(row["PosX"]),
+            float(row["PosY"]),
+        ) + f)
 
     return go.Scatter(
         x=sub["PosX"].tolist(),
@@ -312,20 +431,27 @@ def _build_snapshot_path_trace(cell_ids_in_path, traj_df, iteration,
         hovertemplate=(
             f"<b>{path_label}</b><br>"
             f"Iter: {iteration}<br>"
-            f"Cell: %{{customdata[0]}}<br>"
-            f"Seq: %{{customdata[1]}}<br>"
-            f"Pos: (%{{x:.0f}}, %{{y:.0f}})<extra></extra>"
+            "Cell: %{customdata[0]}<br>"
+            "Seq: %{customdata[1]}<br>"
+            "Pos: (%{customdata[2]:.0f}, %{customdata[3]:.0f})<br>"
+            "<b>Gradients</b><br>"
+            "WL:  (%{customdata[4]:.4f}, %{customdata[5]:.4f})<br>"
+            "Tim: (%{customdata[6]:.4f}, %{customdata[7]:.4f})<br>"
+            "Den: (%{customdata[8]:.4f}, %{customdata[9]:.4f})<br>"
+            "Eff: (%{customdata[10]:.4f}, %{customdata[11]:.4f})<extra></extra>"
         ),
-        customdata=np.column_stack([
-            sub["CellId"].values,
-            sub["_seq"].values,
-        ]),
+        customdata=np.column_stack(custom_rows),
     )
 
 
 def _build_arrow_traces(force_df, fkey, scale, color, legendgroup):
     """Build quiver traces for one force type at the snapshot
-    iteration."""
+    iteration.
+
+    The hover tooltip shows the cell ID, position, and all four
+    force components (WL, timing, density, effective) so the user
+    can inspect the actual gradient values for any cell.
+    """
     x = force_df["PosX"].values
     y = force_df["PosY"].values
     cfg = FORCE_CONFIG[fkey]
@@ -353,7 +479,37 @@ def _build_arrow_traces(force_df, fkey, scale, color, legendgroup):
     trace = fig_q.data[0]
     trace.legendgroup = legendgroup
     trace.showlegend = False
-    trace.hoverinfo = "none"
+
+    # ── Build hover customdata ────────────────────────────────
+    # Each arrow renders as 7 Plotly points: 3 for the shaft
+    # (start, end, None) + 4 for the arrow-head lines.  We repeat
+    # the same cell/force info for all 7 points of each arrow.
+    n_arr = keep.sum()
+    kept_df = force_df.iloc[np.where(keep)[0]]
+
+    rows = []
+    for i in range(n_arr):
+        r = kept_df.iloc[i]
+        rows.append((
+            int(r["CellId"]),
+            float(r["PosX"]), float(r["PosY"]),
+            float(r["WlX"]), float(r["WlY"]),
+            float(r["TimX"]), float(r["TimY"]),
+            float(r["EstDensityForceX"]), float(r["EstDensityForceY"]),
+            float(r["EffectiveX"]), float(r["EffectiveY"]),
+        ))
+    # 7 repeats: 3 shaft points + 4 arrow-head points
+    trace.customdata = np.repeat(rows, 7, axis=0)
+    trace.hovertemplate = (
+        f"<b>{cfg['label']} force</b><br>"
+        "Cell %{customdata[0]}<br>"
+        "Pos: (%{customdata[1]:.0f}, %{customdata[2]:.0f})<br>"
+        "<b>Gradients</b><br>"
+        "WL:  (%{customdata[3]:.4f}, %{customdata[4]:.4f})<br>"
+        "Tim: (%{customdata[5]:.4f}, %{customdata[6]:.4f})<br>"
+        "Den: (%{customdata[7]:.4f}, %{customdata[8]:.4f})<br>"
+        "Eff: (%{customdata[9]:.4f}, %{customdata[10]:.4f})<extra></extra>"
+    )
 
     return [trace]
 
@@ -379,6 +535,15 @@ def make_app(db_path, read_only=False):
     # Design bounds (min/max of all cell positions) — computed once
     des_bounds = _get_design_bounds(gpl)
 
+    # Auto-scaled force defaults — each force type gets its own
+    # scale based on its RMS magnitude in the *actual* database,
+    # so that an RMS-magnitude arrow is ~5 % of the design diagonal.
+    auto_scales = _compute_force_scales(gpl, des_bounds) or {}
+    _force_cfg = {
+        k: {**v, "default_scale": auto_scales.get(k, v["default_scale"])}
+        for k, v in FORCE_CONFIG.items()
+    }
+
     cache = diskcache.Cache("./tmp/dash_bg_cache")
     app = dash.Dash(
         __name__,
@@ -389,7 +554,7 @@ def make_app(db_path, read_only=False):
 
     # ── Force control row helper ──────────────────────────────
     def _force_row(fkey):
-        cfg = FORCE_CONFIG[fkey]
+        cfg = _force_cfg[fkey]
         return html.Div(
             style={"display": "flex", "alignItems": "center", "gap": "6px",
                    "flexWrap": "wrap", "marginBottom": "4px"},
@@ -634,10 +799,10 @@ def make_app(db_path, read_only=False):
         show_traj = bool(show_trajectories)
 
         scales = {
-            "wl": float(s_wl or 5e5),
-            "tim": float(s_tim or 5e5),
-            "density": float(s_dens or 5e5),
-            "effective": float(s_eff or 5e5),
+            "wl": float(s_wl or _force_cfg["wl"]["default_scale"]),
+            "tim": float(s_tim or _force_cfg["tim"]["default_scale"]),
+            "density": float(s_dens or _force_cfg["density"]["default_scale"]),
+            "effective": float(s_eff or _force_cfg["effective"]["default_scale"]),
         }
         toggles = {
             "wl": bool(t_wl),
@@ -779,7 +944,7 @@ def make_app(db_path, read_only=False):
 
             # Snapshot Path
             tr = _build_snapshot_path_trace(
-                cids, traj_df, viz_iter, label, color,
+                cids, traj_df, viz_iter, label, color, force_df,
             )
             if tr is not None:
                 fig.add_trace(tr)
