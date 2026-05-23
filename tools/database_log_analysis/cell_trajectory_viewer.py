@@ -94,6 +94,17 @@ def make_app(gpl: GplDb) -> dash.Dash:
         (int(row[0]), int(row[1])) if row and row[0] is not None else (0, 0)
     )
 
+    # Design bounds (min/max of all cell positions) — computed once
+    cur = gpl.conn.execute(
+        "SELECT MIN(PosX), MAX(PosX), MIN(PosY), MAX(PosY) "
+        "FROM gpl_cell_dense_gradients"
+    )
+    _row = cur.fetchone()
+    des_bounds = (
+        (float(_row[0]), float(_row[1]), float(_row[2]), float(_row[3]))
+        if _row and _row[0] is not None else None
+    )
+
     # ── Layout ──────────────────────────────────────────────────
     def _force_row(fkey):
         cfg = FORCE_CONFIG[fkey]
@@ -202,13 +213,23 @@ def make_app(gpl: GplDb) -> dash.Dash:
 
             # Main plot area
             html.Div(
-                style={"flex": "1", "padding": "10px",
+                style={"flex": "1", "min-height": "0",
+                       "padding": "10px",
                        "boxSizing": "border-box", "overflow": "hidden"},
                 children=[
                     dcc.Loading(
                         id="loading", type="circle",
-                        children=[dcc.Graph(id="main-plot",
-                                            style={"height": "100vh"})],
+                        parent_style={"height": "100%",
+                                      "position": "relative"},
+                        style={"height": "100%"},
+                        children=[
+                            dcc.Graph(
+                                id="main-plot",
+                                style={"height": "100%", "width": "100%"},
+                                config={"scrollZoom": True,
+                                        "displayModeBar": True},
+                            ),
+                        ],
                     ),
                 ],
             ),
@@ -366,6 +387,27 @@ def make_app(gpl: GplDb) -> dash.Dash:
             margin=dict(l=40, r=160, t=50, b=40),
             dragmode="pan",
         )
+
+        # Lock aspect ratio to match design bounds
+        if des_bounds is not None:
+            _dx = des_bounds[1] - des_bounds[0]
+            _dy = des_bounds[3] - des_bounds[2]
+            if _dx > 0 and _dy > 0:
+                fig.update_yaxes(
+                    scaleanchor="x",
+                    scaleratio=_dy / _dx,
+                )
+
+        # Design bounds outline (red dashed)
+        if des_bounds is not None:
+            xmin, xmax, ymin, ymax = des_bounds
+            fig.add_shape(
+                type="rect",
+                x0=xmin, y0=ymin, x1=xmax, y1=ymax,
+                line=dict(color="#e74c3c", width=2, dash="dash"),
+                fillcolor="rgba(231, 76, 60, 0.03)",
+                layer="below",
+            )
 
         for ci, cell_id in enumerate(cell_ids):
             cdata = snap[snap["CellId"] == cell_id]

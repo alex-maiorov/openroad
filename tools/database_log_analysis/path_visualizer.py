@@ -83,6 +83,23 @@ def _get_slack_range_ps(gpl):
     return lo, hi
 
 
+def _get_design_bounds(gpl):
+    """Return (xmin, xmax, ymin, ymax) from all cell positions.
+
+    Queries the global min/max of cell coordinates across all
+    iterations in ``gpl_cell_dense_gradients``.
+    """
+    df = gpl.query(
+        "SELECT MIN(PosX) AS xmin, MAX(PosX) AS xmax, "
+        "MIN(PosY) AS ymin, MAX(PosY) AS ymax "
+        "FROM gpl_cell_dense_gradients"
+    )
+    if df.empty or df["xmin"].isna().all():
+        return None
+    return (float(df["xmin"].iloc[0]), float(df["xmax"].iloc[0]),
+            float(df["ymin"].iloc[0]), float(df["ymax"].iloc[0]))
+
+
 def _get_worst_phys_ids(gpl, top_n, iter_range, min_sep_ps, max_sim,
                          slack_range_ps=None):
     """Use GplDb.worst_paths_history to find top pathological paths.
@@ -359,6 +376,9 @@ def make_app(db_path, read_only=False):
     if slack_lo >= slack_hi:
         slack_hi = slack_lo + 10
 
+    # Design bounds (min/max of all cell positions) — computed once
+    des_bounds = _get_design_bounds(gpl)
+
     cache = diskcache.Cache("./tmp/dash_bg_cache")
     app = dash.Dash(
         __name__,
@@ -534,11 +554,15 @@ def make_app(db_path, read_only=False):
             # ── Plot area ─────────────────────────────────────
             html.Div(
                 id="plot-area",
-                style={"flex": "1", "padding": "10px",
+                style={"flex": "1", "min-height": "0",
+                       "padding": "10px",
                        "boxSizing": "border-box", "overflow": "hidden"},
                 children=[
                     dcc.Loading(
                         id="loading", type="circle",
+                        parent_style={"height": "100%",
+                                      "position": "relative"},
+                        style={"height": "100%"},
                         children=[
                             dcc.Graph(
                                 id="main-plot",
@@ -638,6 +662,17 @@ def make_app(db_path, read_only=False):
             dragmode="pan",
         )
 
+        # Lock aspect ratio to match design bounds so the placement
+        # canvas is not visually stretched.
+        if des_bounds is not None:
+            _dx = des_bounds[1] - des_bounds[0]
+            _dy = des_bounds[3] - des_bounds[2]
+            if _dx > 0 and _dy > 0:
+                fig.update_yaxes(
+                    scaleanchor="x",
+                    scaleratio=_dy / _dx,
+                )
+
         # ── 1. Find worst paths ──────────────────────────────
         print(f"[{viz_iter}] Fetching worst paths (top_n={top_n})...")
         phys_with_slack = _get_worst_phys_ids(
@@ -712,6 +747,19 @@ def make_app(db_path, read_only=False):
             )
         except (IndexError, TypeError, ValueError, KeyError):
             pass
+
+        # ── 4b. Design bounds outline ────────────────────────
+        # Red dashed rectangle covering the min/max extent of all
+        # cell positions — shows the actual footprint of the design.
+        if des_bounds is not None:
+            xmin, xmax, ymin, ymax = des_bounds
+            fig.add_shape(
+                type="rect",
+                x0=xmin, y0=ymin, x1=xmax, y1=ymax,
+                line=dict(color="#e74c3c", width=2, dash="dash"),
+                fillcolor="rgba(231, 76, 60, 0.03)",
+                layer="below",
+            )
 
         # ── 5. Build traces per path ─────────────────────────
         print(f"[{viz_iter}] Fetching snapshot forces...")
