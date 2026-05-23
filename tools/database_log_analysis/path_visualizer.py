@@ -675,6 +675,21 @@ def make_app(db_path, read_only=False):
                         tooltip={"placement": "bottom",
                                  "always_visible": True},
                     ),
+                    html.Div(
+                        style={"display": "flex", "gap": "6px",
+                               "justifyContent": "center",
+                               "marginTop": "4px"},
+                        children=[
+                            html.Button("◀ −1", id="step-minus-btn",
+                                        style={"padding": "2px 10px",
+                                               "fontSize": "12px",
+                                               "cursor": "pointer"}),
+                            html.Button("+1 ▶", id="step-plus-btn",
+                                        style={"padding": "2px 10px",
+                                               "fontSize": "12px",
+                                               "cursor": "pointer"}),
+                        ],
+                    ),
                     html.Hr(style={"margin": "14px 0"}),
 
                     html.Label("Force arrows",
@@ -711,8 +726,12 @@ def make_app(db_path, read_only=False):
                                        "border": "none", "borderRadius": "4px",
                                        "cursor": "pointer", "display": "none"}),
                     html.Div(id="status-msg", style={"marginTop": "8px",
-                                                      "fontSize": "12px",
-                                                      "color": "#6c757d"}),
+                                                       "fontSize": "12px",
+                                                       "color": "#6c757d"}),
+                    # Hidden store for caching path/trajectory data
+                    # so the snapshot slider updates instantly without
+                    # re-querying the database.
+                    dcc.Store(id="cached-data", storage_type="memory"),
                 ],
             ),
 
@@ -743,75 +762,32 @@ def make_app(db_path, read_only=False):
     )
 
     # ═════════════════════════════════════════════════════════════
-    #  Callback
+    #  Shared rendering helper  —  used by both callbacks below
     # ═════════════════════════════════════════════════════════════
 
-    @app.callback(
-        Output("main-plot", "figure"),
-        Input("update-btn", "n_clicks"),
-        State("iter-range-slider", "value"),
-        State("slack-range-slider", "value"),
-        State("min-sep-input", "value"),
-        State("max-sim-input", "value"),
-        State("top-n-input", "value"),
-        State("viz-iter-slider", "value"),
-        State("force-wl-scale", "value"),
-        State("force-tim-scale", "value"),
-        State("force-density-scale", "value"),
-        State("force-effective-scale", "value"),
-        State("force-wl-toggle", "value"),
-        State("force-tim-toggle", "value"),
-        State("force-density-toggle", "value"),
-        State("force-effective-toggle", "value"),
-        State("show-trajectories-toggle", "value"),
-        background=True,
-        running=[
-            (Output("update-btn", "disabled"), True, False),
-            (Output("cancel-btn", "style"),
-             {"width": "100%", "marginTop": "6px", "padding": "8px 0",
-              "backgroundColor": "#dc3545", "color": "white",
-              "border": "none", "borderRadius": "4px", "cursor": "pointer",
-              "display": "block"},
-             {"display": "none"}),
-            (Output("status-msg", "children"), "Computing paths...", ""),
-        ],
-        cancel=[Input("cancel-btn", "n_clicks")],
-        prevent_initial_call=False,
-    )
-    def update_plot(
-        n_clicks,
-        iter_range_val, slack_range_val,
-        min_sep, max_sim, top_n,
-        viz_iter,
-        s_wl, s_tim, s_dens, s_eff,
-        t_wl, t_tim, t_dens, t_eff,
-        show_trajectories
-    ):
-        gpl = app._gpl
+    def _render_figure_from_cache(cached, viz_iter, scales, toggles,
+                                   show_traj):
+        """Build a Plotly figure from *cached* path/trajectory data.
 
-        # ── Parse inputs ─────────────────────────────────────
-        iter_lo, iter_hi = (int(v) for v in (iter_range_val or [0, 0]))
-        slo_ps, shi_ps = (float(v) for v in (slack_range_val or [0, 1]))
-        min_sep = float(min_sep or 0)
-        max_sim = float(max_sim or 1)
-        top_n = int(top_n or 5)
-        viz_iter = int(viz_iter or 0)
-        show_traj = bool(show_trajectories)
+        Only ``_build_snapshot_force_df`` hits the database (for the
+        requested *viz_iter*).  All path-discovery and trajectory data
+        lives in the in-memory ``dcc.Store`` so the snapshot slider
+        responds instantly.
+        """
+        path_cell_seqs = {int(k): v
+                          for k, v in cached["path_cell_seqs"].items()}
+        phys_with_slack = [(int(p), float(s))
+                           for p, s in cached["phys_with_slack"]]
+        all_cell_ids = cached["all_cell_ids"]
+        label_lines = cached["label_lines"]
+        iter_lo = cached["iter_lo"]
+        iter_hi = cached["iter_hi"]
 
-        scales = {
-            "wl": float(s_wl or _force_cfg["wl"]["default_scale"]),
-            "tim": float(s_tim or _force_cfg["tim"]["default_scale"]),
-            "density": float(s_dens or _force_cfg["density"]["default_scale"]),
-            "effective": float(s_eff or _force_cfg["effective"]["default_scale"]),
-        }
-        toggles = {
-            "wl": bool(t_wl),
-            "tim": bool(t_tim),
-            "density": bool(t_dens),
-            "effective": bool(t_eff),
-        }
+        traj_df = pd.DataFrame.from_records(cached["traj_records"])
+        for col, dtype in [("CellId", int), ("Iter", int),
+                           ("PosX", float), ("PosY", float)]:
+            traj_df[col] = traj_df[col].astype(dtype)
 
-        # ── Build figure skeleton ────────────────────────────
         fig = go.Figure()
         fig.update_layout(
             title=(f"Cell trajectories for worst timing paths"
@@ -827,74 +803,13 @@ def make_app(db_path, read_only=False):
             dragmode="pan",
         )
 
-        # Lock aspect ratio to match design bounds so the placement
-        # canvas is not visually stretched.
         if des_bounds is not None:
             _dx = des_bounds[1] - des_bounds[0]
             _dy = des_bounds[3] - des_bounds[2]
             if _dx > 0 and _dy > 0:
-                fig.update_yaxes(
-                    scaleanchor="x",
-                    scaleratio=_dy / _dx,
-                )
+                fig.update_yaxes(scaleanchor="x", scaleratio=_dy / _dx)
 
-        # ── 1. Find worst paths ──────────────────────────────
-        print(f"[{viz_iter}] Fetching worst paths (top_n={top_n})...")
-        phys_with_slack = _get_worst_phys_ids(
-            gpl, top_n, (iter_lo, iter_hi), min_sep, max_sim,
-            slack_range_ps=(slo_ps, shi_ps),
-        )
-        phys_ids = [p[0] for p in phys_with_slack]
-        if not phys_ids:
-            fig.add_annotation(
-                text="No paths match the current filters.",
-                xref="paper", yref="paper",
-                x=0.5, y=0.5, showarrow=False,
-                font=dict(size=16, color="#888"),
-            )
-            return fig
-
-        # ── 2. Get stable cell sequences for each path ───────
-        print(f"[{viz_iter}] Gathering cell sequences for paths...")
-        path_cell_seqs = _get_path_cell_sequences(gpl, phys_ids)
-        if not path_cell_seqs:
-            fig.add_annotation(
-                text="Could not retrieve cell sequences for paths.",
-                xref="paper", yref="paper",
-                x=0.5, y=0.5, showarrow=False,
-                font=dict(size=16, color="#888"),
-            )
-            return fig
-
-        # All unique cell IDs across all selected paths
-        all_cell_ids = sorted(set(
-            cid for cids in path_cell_seqs.values() for cid in cids
-        ))
-        label_lines = []
-        for ppid, cids in path_cell_seqs.items():
-            slack_ps = next((s for p, s in phys_with_slack if p == ppid), None)
-            label = f"Path {ppid}"
-            if slack_ps is not None:
-                label += f"  ({slack_ps:.1f} ps)"
-            label += f"  [{len(cids)} cells]"
-            label_lines.append(label)
-
-        # ── 3. Fetch positions across ALL iterations ─────────
-        # This is the key change: get every iteration's data for
-        # the path cells, regardless of whether the path was
-        # "active" (logged by STA) at any particular iteration.
-        print(f"[{viz_iter}] Fetching cell trajectories...")
-        traj_df = _get_cell_trajectories(gpl, all_cell_ids)
-        if traj_df.empty:
-            fig.add_annotation(
-                text="No position data for path cells.",
-                xref="paper", yref="paper",
-                x=0.5, y=0.5, showarrow=False,
-                font=dict(size=16, color="#888"),
-            )
-            return fig
-
-        # ── 4. Core region outline ───────────────────────────
+        # Core region outline
         try:
             m = gpl.get_metadata()
             lx = float(m["region_core_lx"][0])
@@ -913,9 +828,7 @@ def make_app(db_path, read_only=False):
         except (IndexError, TypeError, ValueError, KeyError):
             pass
 
-        # ── 4b. Design bounds outline ────────────────────────
-        # Red dashed rectangle covering the min/max extent of all
-        # cell positions — shows the actual footprint of the design.
+        # Design bounds outline
         if des_bounds is not None:
             xmin, xmax, ymin, ymax = des_bounds
             fig.add_shape(
@@ -926,15 +839,14 @@ def make_app(db_path, read_only=False):
                 layer="below",
             )
 
-        # ── 5. Build traces per path ─────────────────────────
-        print(f"[{viz_iter}] Fetching snapshot forces...")
+        # ── Snapshot forces  (the ONLY database query here) ────
+        print(f"[snapshot] Fetching forces for iter {viz_iter}...")
         force_df = _build_snapshot_force_df(gpl, all_cell_ids, viz_iter)
 
         for idx, (ppid, cids) in enumerate(path_cell_seqs.items()):
             color = _PATH_COLORS[idx % len(_PATH_COLORS)]
             label = f"Path {ppid}"
 
-            # Trajectory
             if show_traj:
                 tr = _build_trajectory_trace(
                     cids, traj_df, label, color, iter_min, iter_max,
@@ -942,14 +854,12 @@ def make_app(db_path, read_only=False):
                 if tr is not None:
                     fig.add_trace(tr)
 
-            # Snapshot Path
             tr = _build_snapshot_path_trace(
                 cids, traj_df, viz_iter, label, color, force_df,
             )
             if tr is not None:
                 fig.add_trace(tr)
 
-            # Force arrows (grouped with this path)
             if force_df is not None:
                 force_sub = force_df[force_df["CellId"].isin(cids)]
                 if not force_sub.empty:
@@ -963,7 +873,6 @@ def make_app(db_path, read_only=False):
                         ):
                             fig.add_trace(tr_arrow)
 
-        # ── 8. Subtitle with path info ───────────────────────
         fig.add_annotation(
             xref="paper", yref="paper",
             x=0.01, y=1.01,
@@ -976,8 +885,230 @@ def make_app(db_path, read_only=False):
             borderpad=4,
             bgcolor="rgba(255,255,255,0.9)",
         )
-
         return fig
+
+    # ── Common State declarations (DRY) ──────────────────────
+    _PATH_STATES = (
+        State("iter-range-slider", "value"),
+        State("slack-range-slider", "value"),
+        State("min-sep-input", "value"),
+        State("max-sim-input", "value"),
+        State("top-n-input", "value"),
+    )
+    _FORCE_STATES = (
+        State("force-wl-scale", "value"),
+        State("force-tim-scale", "value"),
+        State("force-density-scale", "value"),
+        State("force-effective-scale", "value"),
+        State("force-wl-toggle", "value"),
+        State("force-tim-toggle", "value"),
+        State("force-density-toggle", "value"),
+        State("force-effective-toggle", "value"),
+    )
+
+    def _parse_params(iter_range_val, slack_range_val,
+                      min_sep, max_sim, top_n,
+                      s_wl, s_tim, s_dens, s_eff,
+                      t_wl, t_tim, t_dens, t_eff,
+                      show_trajectories):
+        """Parse raw Input values into typed dicts."""
+        iter_lo, iter_hi = (int(v) for v in (iter_range_val or [0, 0]))
+        slo_ps, shi_ps = (float(v) for v in (slack_range_val or [0, 1]))
+        return {
+            "iter_lo": iter_lo,
+            "iter_hi": iter_hi,
+            "slo_ps": slo_ps,
+            "shi_ps": shi_ps,
+            "min_sep": float(min_sep or 0),
+            "max_sim": float(max_sim or 1),
+            "top_n": int(top_n or 5),
+            "show_traj": bool(show_trajectories),
+            "scales": {
+                "wl": float(s_wl or _force_cfg["wl"]["default_scale"]),
+                "tim": float(s_tim or _force_cfg["tim"]["default_scale"]),
+                "density": float(s_dens or _force_cfg["density"]["default_scale"]),
+                "effective": float(s_eff or _force_cfg["effective"]["default_scale"]),
+            },
+            "toggles": {
+                "wl": bool(t_wl),
+                "tim": bool(t_tim),
+                "density": bool(t_dens),
+                "effective": bool(t_eff),
+            },
+        }
+
+    # ═════════════════════════════════════════════════════════════
+    #  Callback  A  —  Update button  (full database fetch)
+    # ═════════════════════════════════════════════════════════════
+
+    @app.callback(
+        Output("main-plot", "figure"),
+        Output("cached-data", "data"),
+        Input("update-btn", "n_clicks"),
+        State("viz-iter-slider", "value"),
+        State("show-trajectories-toggle", "value"),
+        *_PATH_STATES,
+        *_FORCE_STATES,
+        background=True,
+        running=[
+            (Output("update-btn", "disabled"), True, False),
+            (Output("cancel-btn", "style"),
+             {"width": "100%", "marginTop": "6px", "padding": "8px 0",
+              "backgroundColor": "#dc3545", "color": "white",
+              "border": "none", "borderRadius": "4px", "cursor": "pointer",
+              "display": "block"},
+             {"display": "none"}),
+            (Output("status-msg", "children"), "Computing paths...", ""),
+        ],
+        cancel=[Input("cancel-btn", "n_clicks")],
+        prevent_initial_call=False,
+    )
+    def update_plot(
+        n_clicks, viz_iter_val, show_trajectories,
+        iter_range_val, slack_range_val,
+        min_sep, max_sim, top_n,
+        s_wl, s_tim, s_dens, s_eff,
+        t_wl, t_tim, t_dens, t_eff,
+    ):
+        p = _parse_params(
+            iter_range_val, slack_range_val,
+            min_sep, max_sim, top_n,
+            s_wl, s_tim, s_dens, s_eff,
+            t_wl, t_tim, t_dens, t_eff,
+            show_trajectories,
+        )
+        viz_iter = int(viz_iter_val or 0)
+
+        print(f"[update] Fetching worst paths (top_n={p['top_n']})...")
+        phys_with_slack = _get_worst_phys_ids(
+            gpl, p["top_n"], (p["iter_lo"], p["iter_hi"]),
+            p["min_sep"], p["max_sim"],
+            slack_range_ps=(p["slo_ps"], p["shi_ps"]),
+        )
+        empty_fig = go.Figure()
+        empty_fig.add_annotation(
+            text="No paths match the current filters.",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False,
+            font=dict(size=16, color="#888"),
+        )
+        if not phys_with_slack:
+            return empty_fig, {}
+
+        print(f"[update] Gathering cell sequences...")
+        path_cell_seqs = _get_path_cell_sequences(
+            gpl, [p[0] for p in phys_with_slack]
+        )
+        if not path_cell_seqs:
+            empty_fig.data = []
+            empty_fig.add_annotation(
+                text="Could not retrieve cell sequences for paths.",
+                xref="paper", yref="paper",
+                x=0.5, y=0.5, showarrow=False,
+                font=dict(size=16, color="#888"),
+            )
+            return empty_fig, {}
+
+        all_cell_ids = sorted(set(
+            cid for cids in path_cell_seqs.values() for cid in cids
+        ))
+        label_lines = []
+        for ppid, cids in path_cell_seqs.items():
+            slack_ps = next((s for p, s in phys_with_slack if p == ppid), None)
+            label = f"Path {ppid}"
+            if slack_ps is not None:
+                label += f"  ({slack_ps:.1f} ps)"
+            label += f"  [{len(cids)} cells]"
+            label_lines.append(label)
+
+        print(f"[update] Fetching cell trajectories...")
+        traj_df = _get_cell_trajectories(gpl, all_cell_ids)
+        if traj_df.empty:
+            empty_fig.data = []
+            empty_fig.add_annotation(
+                text="No position data for path cells.",
+                xref="paper", yref="paper",
+                x=0.5, y=0.5, showarrow=False,
+                font=dict(size=16, color="#888"),
+            )
+            return empty_fig, {}
+
+        # ── Serialise for dcc.Store ──────────────────────────
+        cached = {
+            "path_cell_seqs": {str(k): v
+                               for k, v in path_cell_seqs.items()},
+            "phys_with_slack": [(int(pp), float(s))
+                                for pp, s in phys_with_slack],
+            "all_cell_ids": all_cell_ids,
+            "label_lines": label_lines,
+            "iter_lo": p["iter_lo"],
+            "iter_hi": p["iter_hi"],
+            "traj_records": traj_df.to_dict("records"),
+        }
+
+        fig = _render_figure_from_cache(cached, viz_iter,
+                                         p["scales"], p["toggles"],
+                                         p["show_traj"])
+        return fig, cached
+
+    # ═════════════════════════════════════════════════════════════
+    #  Callback  B  —  Snapshot slider  (instant from cache)
+    # ═════════════════════════════════════════════════════════════
+
+    @app.callback(
+        Output("main-plot", "figure"),
+        Input("viz-iter-slider", "value"),
+        State("cached-data", "data"),
+        State("show-trajectories-toggle", "value"),
+        *_FORCE_STATES,
+        prevent_initial_call=True,
+    )
+    def on_snapshot_slider(
+        viz_iter_val, cached_data, show_trajectories,
+        s_wl, s_tim, s_dens, s_eff,
+        t_wl, t_tim, t_dens, t_eff,
+    ):
+        if not cached_data:
+            return go.Figure()
+        viz_iter = int(viz_iter_val or 0)
+        scales = {
+            "wl": float(s_wl or _force_cfg["wl"]["default_scale"]),
+            "tim": float(s_tim or _force_cfg["tim"]["default_scale"]),
+            "density": float(s_dens or _force_cfg["density"]["default_scale"]),
+            "effective": float(s_eff or _force_cfg["effective"]["default_scale"]),
+        }
+        toggles = {
+            "wl": bool(t_wl),
+            "tim": bool(t_tim),
+            "density": bool(t_dens),
+            "effective": bool(t_eff),
+        }
+        return _render_figure_from_cache(
+            cached_data, viz_iter, scales, toggles,
+            bool(show_trajectories),
+        )
+
+    # ═════════════════════════════════════════════════════════════
+    #  Callbacks  C / D  —  Step ±1 buttons
+    # ═════════════════════════════════════════════════════════════
+
+    @app.callback(
+        Output("viz-iter-slider", "value"),
+        Input("step-minus-btn", "n_clicks"),
+        State("viz-iter-slider", "value"),
+        prevent_initial_call=True,
+    )
+    def _step_minus(_n, cur):
+        return max(iter_min, (cur or iter_min) - 1)
+
+    @app.callback(
+        Output("viz-iter-slider", "value"),
+        Input("step-plus-btn", "n_clicks"),
+        State("viz-iter-slider", "value"),
+        prevent_initial_call=True,
+    )
+    def _step_plus(_n, cur):
+        return min(iter_max, (cur or iter_max) + 1)
 
     return app
 
