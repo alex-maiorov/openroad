@@ -1080,8 +1080,8 @@ def main():
         print("  Preprocessing (if needed) — this may take several minutes …")
 
     app = make_app(db_path, read_only=args.read_only)
-    print(f"Dash server: http://127.0.0.1:{args.port}")
-    app.run(host="127.0.0.1", port=args.port, debug=False)
+    print(f"Dash server: http://0.0.0.0:{args.port}")
+    app.run(host="0.0.0.0", port=args.port, debug=False)
 
 
 if __name__ == "__main__":

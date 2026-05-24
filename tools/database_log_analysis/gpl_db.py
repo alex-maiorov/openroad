@@ -18,6 +18,7 @@ Usage
 """
 
 import sqlite3
+import time
 import numpy as np
 import pandas as pd
 from typing import List, Optional, Tuple
@@ -70,6 +71,13 @@ class GplDb(DbConnection):
         has data, so the method is **idempotent**.  Pass
         ``force_rebuild=True`` to drop and re-create all three tables.
 
+        Indexing is separated from data generation:
+          Step 0 — indexes on raw source tables
+          Step 1 — gradient metrics table
+          Step 2 — density forces table
+          Step 3 — path signatures table
+          Step 4 — indexes on derived tables
+
         Parameters
         ----------
         force_rebuild : bool
@@ -77,18 +85,39 @@ class GplDb(DbConnection):
         batch_size : int
             Iterations per batch (default 25).
         """
+        t_total = time.time()
         print(f"  [GplDb.preprocess]  batch_size={batch_size}")
 
         if force_rebuild:
             self._drop_derived_tables()
 
+        # ── Step 0: source indexes ────────────────────────────────
+        t0 = time.time()
         self._preprocess_source_indexes()
+        print(f"    source indexes: {time.time()-t0:.1f}s")
+
+        # ── Step 1: gradient metrics ──────────────────────────────
+        t0 = time.time()
         self._preprocess_gradient_metrics(batch_size)
+        print(f"    gradient metrics: {time.time()-t0:.1f}s")
+
+        # ── Step 2: density forces ────────────────────────────────
+        t0 = time.time()
         self._preprocess_density_forces(batch_size)
+        print(f"    density forces: {time.time()-t0:.1f}s")
+
+        # ── Step 3: path signatures ───────────────────────────────
+        t0 = time.time()
         self._preprocess_path_signatures(batch_size)
+        print(f"    path signatures: {time.time()-t0:.1f}s")
+
+        # ── Step 4: derived table indexes ─────────────────────────
+        t0 = time.time()
+        self._preprocess_derived_indexes()
+        print(f"    derived indexes: {time.time()-t0:.1f}s")
 
         self.conn.commit()
-        print("  [GplDb.preprocess] done.\n")
+        print(f"  [GplDb.preprocess] done — {time.time()-t_total:.1f}s total.\n")
 
     def _table_has_data(self, name: str) -> bool:
         """True when *name* exists in sqlite_master and has rows."""
@@ -142,13 +171,18 @@ class GplDb(DbConnection):
 
         Uses ``CREATE INDEX IF NOT EXISTS``, so calling this
         repeatedly is idempotent and cheap.
+
+        Each table's indexing is timed independently — there are no
+        inter-dependencies between index operations.
         """
         def _maybe_index(table: str, col_groups):
             if not self._exists(table):
                 print(f"    [source_index] table '{table}' not found "
                       f"— skipping.")
                 return
+            t0 = time.time()
             _create_indexes(self.conn, table, col_groups)
+            print(f"      {table}: {time.time()-t0:.1f}s")
 
         # ── Tables WITH an Iter column ──────────────────────────
         _maybe_index("gpl_iteration_scalars",
@@ -247,8 +281,6 @@ class GplDb(DbConnection):
                   f"wrote {len(out):>8d}  (total {total})")
             del dense, timing, df, out
 
-        _create_indexes(self.conn, GRADIENT_METRICS_TABLE,
-                        ["Iter", "CellId", "Iter, CellId"])
         print(f"    [{GRADIENT_METRICS_TABLE}] done — {total} rows.")
 
     # ── Step 2: Density forces ─────────────────────────────────────
@@ -410,8 +442,6 @@ class GplDb(DbConnection):
                   f"wrote {len(out):>8d}  (total {total})")
             del bins, cells, out, sat_x, sat_y
 
-        _create_indexes(self.conn, DENSITY_FORCES_TABLE,
-                        ["Iter", "CellId", "Iter, CellId"])
         print(f"    [{DENSITY_FORCES_TABLE}] done — {total} rows.")
 
     # ── Step 3: Path signatures ────────────────────────────────────
@@ -492,9 +522,34 @@ class GplDb(DbConnection):
                            if_exists="append", index=False)
             total += len(mapping)
 
-        _create_indexes(self.conn, PATH_SIGNATURES_TABLE,
-                        ["Iter, PathId", "PhysicalPathId"])
         print(f"    [{PATH_SIGNATURES_TABLE}] done — {total} rows.")
+
+    # ── Step 4: Derived table indexes ────────────────────────────
+
+    def _preprocess_derived_indexes(self):
+        """Create indexes on all three derived tables.
+
+        Separated from the data-generation steps so that indexing is
+        batched and timed independently.  Uses ``CREATE INDEX IF NOT
+        EXISTS`` so repeated calls are idempotent and cheap.
+
+        Each table's indexing is timed independently — there are no
+        inter-dependencies between index operations.
+        """
+        for table, col_groups in [
+            (GRADIENT_METRICS_TABLE,
+             ["Iter", "CellId", "Iter, CellId"]),
+            (DENSITY_FORCES_TABLE,
+             ["Iter", "CellId", "Iter, CellId"]),
+            (PATH_SIGNATURES_TABLE,
+             ["Iter, PathId", "PhysicalPathId"]),
+        ]:
+            if not self._table_has_data(table):
+                print(f"    [idx] {table} empty — skip indexes.")
+                continue
+            t0 = time.time()
+            _create_indexes(self.conn, table, col_groups)
+            print(f"      {table}: {time.time()-t0:.1f}s")
 
     # ================================================================
     #  QUERY HELPERS

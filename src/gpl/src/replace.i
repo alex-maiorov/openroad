@@ -65,6 +65,7 @@ static gpl::PlaceOptions getOptions(
            "-timing_driven_net_reweight_overflow",
            options.timingNetWeightOverflows);
   checkKey(keys, "-overflow", options.overflow);
+  checkKey(keys, "-max_nesterov_iter", options.nesterovPlaceMaxIter);
   checkKey(keys, "-timing_driven_net_weight_max", options.timingNetWeightMax);
   checkKey(
       keys, "-keep_resize_below_overflow", options.keepResizeBelowOverflow);

@@ -1073,6 +1073,13 @@ void NesterovPlace::reportResults(int nesterov_iter,
   }
 
   if (nesterov_iter >= npVars_.maxNesterovIter) {
+    log_->info(GPL,
+               374,
+               "[EXIT A] Maximum iterations ({}) reached. "
+               "Final overflow: {:.4f}, target: {:.4f}.",
+               npVars_.maxNesterovIter,
+               average_overflow_unscaled_,
+               npVars_.targetOverflow);
     log_->warn(GPL,
                1010,
                "GPL reached the maximum number of iterations for nesterov {}. "
@@ -1170,6 +1177,11 @@ int NesterovPlace::doNesterovPlace(int start_iter)
 
   // if replace diverged in init() function, Nesterov must be skipped.
   if (num_region_diverged_ > 0) {
+    log_->info(GPL,
+               370,
+               "[EXIT E] Initial step-length computation diverged "
+               "(code {}). Skipping Nesterov placement.",
+               divergeCode_);
     log_->error(GPL, divergeCode_, divergeMsg_);
   }
 
@@ -1252,6 +1264,13 @@ int NesterovPlace::doNesterovPlace(int start_iter)
     }
 
     if (num_region_diverged_ > 0) {
+      log_->info(GPL,
+                 371,
+                 "[EXIT B] Numerical divergence in backtracking at iter {} "
+                 "(code {}). {} region(s) affected.",
+                 nesterov_iter,
+                 divergeCode_,
+                 num_region_diverged_);
       break;
     }
 
@@ -1283,6 +1302,13 @@ int NesterovPlace::doNesterovPlace(int start_iter)
     if (isDiverged(diverge_snapshot_WlCoefX,
                    diverge_snapshot_WlCoefY,
                    is_diverge_snapshot_saved)) {
+      log_->info(GPL,
+                 372,
+                 "[EXIT C] HPWL/overflow divergence at iter {} "
+                 "(code {}). {} region(s) affected.",
+                 nesterov_iter,
+                 divergeCode_,
+                 num_region_diverged_);
       break;
     }
 
@@ -1302,6 +1328,13 @@ int NesterovPlace::doNesterovPlace(int start_iter)
                                routability_driven_revert_count);
 
     if (isConverged(nesterov_iter, routability_gpl_iter_count_)) {
+      log_->info(GPL,
+                 373,
+                 "[EXIT D] Converged at iter {}: "
+                 "overflow {:.4f} <= target {:.4f}.",
+                 nesterov_iter,
+                 average_overflow_unscaled_,
+                 npVars_.targetOverflow);
       break;
     }
   }

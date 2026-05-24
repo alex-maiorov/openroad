@@ -17,6 +17,7 @@ sta::define_cmd_args "global_placement" {\
     [-max_phi_coef max_phi_coef]\
     [-reference_hpwl reference_hpwl]\
     [-overflow overflow]\
+    [-max_nesterov_iter max_nesterov_iter]\
     [-initial_place_max_iter initial_place_max_iter]\
     [-initial_place_max_fanout initial_place_max_fanout]\
     [-routability_use_grt]\
@@ -62,6 +63,7 @@ proc global_placement { args } {
     keys {-bin_grid_count -density \
       -init_density_penalty -init_wirelength_coef \
       -min_phi_coef -max_phi_coef -overflow \
+      -max_nesterov_iter \
       -reference_hpwl \
       -initial_place_max_iter -initial_place_max_fanout \
       -routability_check_overflow -routability_snapshot_overflow \

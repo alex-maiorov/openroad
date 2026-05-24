@@ -853,8 +853,8 @@ def main():
         gpl = GplDb(db_path)
 
     app = make_app(gpl)
-    print(f"Dash server: http://127.0.0.1:{args.port}")
-    app.run(host="127.0.0.1", port=args.port, debug=False)
+    print(f"Dash server: http://0.0.0.0:{args.port}")
+    app.run(host="0.0.0.0", port=args.port, debug=False)
 
 
 if __name__ == "__main__":

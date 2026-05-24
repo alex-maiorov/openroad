@@ -3561,19 +3561,37 @@ void NesterovBase::updateNextIter(const int iter)
   int64_t hpwl = nbc_->getHpwl();
 
   float hpwl_percent_change = 0.0;
-  if (iter == 0 || (iter) % 10 == 0) {
-    if (prev_reported_hpwl_ != 0) {
-      hpwl_percent_change = (static_cast<double>(hpwl - prev_reported_hpwl_)
-                             / static_cast<double>(prev_reported_hpwl_))
+  {
+    // Update 10-iteration rolling reference for divergence detection
+    if (iter == 0 || (iter) % 10 == 0) {
+      prev_reported_hpwl_ = hpwl;
+      prev_reported_overflow_unscaled_ = sum_overflow_unscaled_;
+    }
+
+    // Per-iteration HPWL change for the table
+    if (iter > 0 && prev_hpwl_ != 0) {
+      hpwl_percent_change = (static_cast<double>(hpwl - prev_hpwl_)
+                             / static_cast<double>(prev_hpwl_))
                             * 100.0;
     }
-    prev_reported_hpwl_ = hpwl;
-    prev_reported_overflow_unscaled_ = sum_overflow_unscaled_;
 
     std::string group_name;
     if (pb_->getGroup()) {
       group_name = fmt::format(" ({})", pb_->getGroup()->getName());
     }
+
+    // Compute timing metrics from cached violating paths (no STA call needed).
+    // Values are in seconds; convert to ns for display.
+    float wns_ns = 0.0f;
+    float tns_ns = 0.0f;
+    for (const auto& path : violating_paths_) {
+      const float slack_ns = path.slack * 1e9f;
+      tns_ns += std::min(slack_ns, 0.0f);
+      if (slack_ns < wns_ns) {
+        wns_ns = slack_ns;
+      }
+    }
+    const int vpath_count = static_cast<int>(violating_paths_.size());
 
     if ((iter == 0 || reprint_iter_header_) && !pb_->getGroup()) {
       if (iter == 0) {
@@ -3581,28 +3599,41 @@ void NesterovBase::updateNextIter(const int iter)
       }
 
       const std::string nesterov_header
-          = fmt::format("{:>9} | {:>8} | {:>13} | {:>8} | {:>9} | {:>5}",
+          = fmt::format("{:>9} | {:>8} | {:>13} | {:>8} | {:>9} | {:>8} | {:>9} | {:>8} | {:>6} | {:>9} | {:>9} | {:>5}",
                         "Iteration",
                         "Overflow",
                         "HPWL (um)",
                         "HPWL(%)",
                         "Penalty",
+                        "StepLen",
+                        "GradNorm",
+                        "Phi",
+                        "VPaths",
+                        "WNS (ns)",
+                        "TNS (ns)",
                         "Group");
 
       log_->report(nesterov_header);
       log_->report(
-          "---------------------------------------------------------------");
+          "----------------------------------------------------------------------------------------------------");
 
       reprint_iter_header_ = false;
     }
 
+    const float grad_norm = getSecondNorm(curSLPSumGrads_);
     dbBlock* block = pb_->db()->getChip()->getBlock();
-    log_->report("{:9d} | {:8.4f} | {:13.6e} | {:+7.2f}% | {:9.2e} | {:>5}",
+    log_->report("{:9d} | {:8.4f} | {:13.6e} | {:+7.2f}% | {:9.2e} | {:8.4f} | {:9.2e} | {:8.4f} | {:6d} | {:9.3f} | {:9.3f} | {:>5}",
                  iter,
                  sum_overflow_unscaled_,
                  block->dbuToMicrons(hpwl),
                  hpwl_percent_change,
                  densityPenalty_,
+                 stepLength_,
+                 grad_norm,
+                 phiCoef_,
+                 vpath_count,
+                 wns_ns,
+                 tns_ns,
                  group_name);
   }
 
@@ -5964,11 +5995,12 @@ void gpl::NesterovBase::dumpGradientsToDb(int iter)
   //HACK: Dumping the full netlist graph EVERY iteration produces a diabolical
   // amount of data (multiple GB per second). This is for DEBUGGING ONLY.
   // NEVER run this in production — it will fill your disk and bottleneck
-  // the placer with logging overhead. Revert to the once-only dump
-  // (the commented-out block below) before any production use.
+  // the placer with logging overhead. Uncomment the line below to dump the
+  // netlist (e.g. to verify GPL netlist stability over time, especially after
+  // the resizer is called). Re-comment before any production use.
   //
   // if (!has_logged_netlist_) { ... has_logged_netlist_ = true; }
-  dumpNetlistToDb(iter);
+  // dumpNetlistToDb(iter);
   dumpBaseIterationScalars(iter);
   dumpBinGrid(iter);
   dumpCellDenseGradients(iter);

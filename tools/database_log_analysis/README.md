@@ -19,6 +19,7 @@ database_log_analysis/
 ├── core.py              # DbConnection base class (connection + metadata)
 ├── gpl_db.py            # GplDb     — GPL placement analysis
 ├── exa_db.py            # ExaDb     — example tool analysis
+├── preprocess_db.py     # standalone CLI to preprocess before analysis
 ├── plotting.py          # convenience matplotlib plots
 └── README.md
 ```
@@ -116,6 +117,35 @@ gpl = GplDb("placement.sqlite", must_be_preprocessed=True)
 ```python
 gpl = GplDb("placement.sqlite")
 gpl.preprocess(force_rebuild=True)   # drop + re-create all derived tables
+```
+
+### Standalone preprocessor CLI
+
+The `preprocess_db.py` script preprocesses a database **without** launching
+a Dash GUI — useful for CI pipelines, Docker containers, or pre-warming
+before serving multiple analysis tools in read-only mode.
+
+```bash
+# Auto-preprocess (skips tables that already exist):
+python -m tools.database_log_analysis.preprocess_db --db path/to/db.sqlite
+
+# Custom batch size (smaller = less RAM):
+python -m tools.database_log_analysis.preprocess_db --db path/to/db.sqlite --batch-size 10
+
+# Verify preprocessing is complete (read-only check):
+python -m tools.database_log_analysis.preprocess_db --db path/to/db.sqlite --read-only
+```
+
+To force-rebuild derived tables, use ``GplDb`` directly in Python:
+```python
+gpl = GplDb("path/to/db.sqlite")
+gpl.preprocess(force_rebuild=True)
+```
+
+After preprocessing, launch any analysis tool with `--read-only`:
+
+```bash
+python -m tools.database_log_analysis.path_visualizer --db path/to/db.sqlite --read-only --port 8050
 ```
 
 ## Method reference

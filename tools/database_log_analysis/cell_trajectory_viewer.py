@@ -564,7 +564,8 @@ def main():
     else:
         gpl = GplDb(args.db)
     app = make_app(gpl)
-    app.run(debug=False, port=args.port)
+    print(f"Dash server: http://0.0.0.0:{args.port}")
+    app.run(host="0.0.0.0", port=args.port, debug=False)
 
 
 if __name__ == "__main__":

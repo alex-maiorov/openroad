@@ -354,7 +354,8 @@ def main():
     
     gpl = GplDb(args.db, must_be_preprocessed=False)
     app = make_app(gpl)
-    app.run(debug=True, port=args.port)
+    print(f"Dash server: http://0.0.0.0:{args.port}")
+    app.run(host="0.0.0.0", port=args.port, debug=False)
 
 if __name__ == "__main__":
     main()
