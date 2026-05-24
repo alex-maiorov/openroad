@@ -1097,6 +1097,8 @@ NesterovBaseVars::NesterovBaseVars(const PlaceOptions& options)
       timing_pass_proj_weight(options.timingGradPassProjWeight),
       timing_pass_end_to_end_weight(options.timingGradPassEndToEndWeight),
       timing_pass_slack_sharpness(options.timingGradPassSlackSharpness),
+      timing_pass_slack_slope(options.timingGradPassSlackSlope),
+      timing_pass_slack_clamp(options.timingGradPassSlackClamp),
       timing_pass_slack_offset(options.timingGradPassSlackOffset),
       timing_pass_slack_upper(options.timingGradPassSlackUpper),
       timing_pass_sta_run_interval(options.timingGradPassStaRunInterval),
@@ -3190,7 +3192,7 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
   int num_nonzero_tim = 0;
   float mean_wl_where_timing_nz = 0.0;
   float mean_tim_where_timing_nz = 0.0;
-  const float timing_to_wirelength_warning_thresh = 5.0;
+  const float timing_to_wirelength_warning_thresh = 100.0;
 
   // Two-phase: parallel per-cell compute, then deterministic serial reduce.
   // The previous single-phase loop used `reduction(+: ...)`, whose combine
@@ -5999,8 +6001,10 @@ void gpl::NesterovBase::dumpGradientsToDb(int iter)
   // netlist (e.g. to verify GPL netlist stability over time, especially after
   // the resizer is called). Re-comment before any production use.
   //
-  // if (!has_logged_netlist_) { ... has_logged_netlist_ = true; }
-  // dumpNetlistToDb(iter);
+  if (!has_logged_netlist_) {
+    dumpNetlistToDb(iter);
+    has_logged_netlist_ = true;
+  }
   dumpBaseIterationScalars(iter);
   dumpBinGrid(iter);
   dumpCellDenseGradients(iter);

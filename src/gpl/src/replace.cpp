@@ -363,17 +363,19 @@ int Replace::doNesterovPlace(const int threads,
   if (options.timingDrivenMode) {
     log_->info(GPL,
                88,
-               "Timing driven mode enabled. timing_gradpass parameters: "
-               "top_n={}, n_paths_per_endpoint={}, proj_weight={}, end_to_end_weight={}, "
-               "slack_sharpness={}, slack_offset={}, slack_upper={}, "
-               "sta_run_interval={}, first_iter={}, "
-               "saturation_kl={}, saturation_minl={}, precond_count_weight={}",
-               options.timingGradPassTopN,
-               options.timingGradPassNPathsPerEndpoint,
-               options.timingGradPassProjWeight,
-               options.timingGradPassEndToEndWeight,
-               options.timingGradPassSlackSharpness,
-               options.timingGradPassSlackOffset,
+                "Timing driven mode enabled. timing_gradpass parameters: "
+                "top_n={}, n_paths_per_endpoint={}, proj_weight={}, end_to_end_weight={}, "
+                "slack_sharpness={}, slack_slope={}, slack_clamp={}, slack_offset={}, slack_upper={}, "
+                "sta_run_interval={}, first_iter={}, "
+                "saturation_kl={}, saturation_minl={}, precond_count_weight={}",
+                options.timingGradPassTopN,
+                options.timingGradPassNPathsPerEndpoint,
+                options.timingGradPassProjWeight,
+                options.timingGradPassEndToEndWeight,
+                options.timingGradPassSlackSharpness,
+                options.timingGradPassSlackSlope,
+                options.timingGradPassSlackClamp,
+                options.timingGradPassSlackOffset,
                options.timingGradPassSlackUpper,
                options.timingGradPassStaRunInterval,
                options.timingGradPassFirstIter,

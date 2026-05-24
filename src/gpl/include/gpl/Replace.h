@@ -104,6 +104,8 @@ struct PlaceOptions
    float timingGradPassProjWeight = 1.0F;
    float timingGradPassEndToEndWeight = 1.0F;
    float timingGradPassSlackSharpness = 1.0F;
+   float timingGradPassSlackSlope = 0.0F;
+   float timingGradPassSlackClamp = INFINITY;
    float timingGradPassSlackOffset = 0.0F;
    float timingGradPassSlackUpper = 0.0F;
    int timingGradPassStaRunInterval = 10;

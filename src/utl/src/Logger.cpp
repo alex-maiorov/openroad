@@ -608,6 +608,12 @@ void Logger::logDbLoop()
   // their prepared statements.
   local_registry.clear();
 
+  // Checkpoint the WAL into the main database before closing.
+  // Without this, data in the WAL may not be fully integrated into the
+  // main DB file. TRUNCATE mode checkpoints all pages and resets the WAL
+  // file to zero bytes for a clean shutdown.
+  sqlite3_exec(db_, "PRAGMA wal_checkpoint(TRUNCATE);", nullptr, nullptr, nullptr);
+
   sqlite3_close(db_);
   db_ = nullptr;
   db_ready_ = false;

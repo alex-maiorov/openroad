@@ -1155,6 +1155,8 @@ int NesterovPlace::doNesterovPlace(int start_iter)
       log_->logToDbMetadata(utl::GPL, "timing_gradpass_proj_weight", fmt::format("{:e}", (double)nbv.timing_pass_proj_weight));
       log_->logToDbMetadata(utl::GPL, "timing_gradpass_end_to_end_weight", fmt::format("{:e}", (double)nbv.timing_pass_end_to_end_weight));
       log_->logToDbMetadata(utl::GPL, "timing_gradpass_slack_sharpness", fmt::format("{:e}", (double)nbv.timing_pass_slack_sharpness));
+      log_->logToDbMetadata(utl::GPL, "timing_gradpass_slack_slope", fmt::format("{:e}", (double)nbv.timing_pass_slack_slope));
+      log_->logToDbMetadata(utl::GPL, "timing_gradpass_slack_clamp", fmt::format("{:e}", (double)nbv.timing_pass_slack_clamp));
       log_->logToDbMetadata(utl::GPL, "timing_gradpass_slack_offset", fmt::format("{:e}", (double)nbv.timing_pass_slack_offset));
       log_->logToDbMetadata(utl::GPL, "timing_gradpass_slack_upper", fmt::format("{:e}", (double)nbv.timing_pass_slack_upper));
       log_->logToDbMetadata(utl::GPL, "timing_gradpass_saturation_kl", fmt::format("{:e}", (double)nbv.timing_pass_saturation_kL));
