@@ -21,6 +21,13 @@ database_log_analysis/
 ├── exa_db.py            # ExaDb     — example tool analysis
 ├── preprocess_db.py     # standalone CLI to preprocess before analysis
 ├── plotting.py          # convenience matplotlib plots
+├── path_visualizer.py   # Dash: path tracing with force arrows  (port 8050)
+├── cell_force_analyzer.py         # Dash: cell force statistics  (port 8051)
+├── path_similarity_analyzer.py    # Dash: path similarity        (port 8052)
+├── cell_trajectory_viewer.py      # Dash: trajectory scrubbing   (port 8053)
+├── cell_path_stats.py             # Dash: cell-path statistics   (port 8054)
+├── path_transience.py             # Dash: path lifecycle         (port 8055)
+├── cell_timing_stability.py       # Dash: timing stability       (port 8056)
 └── README.md
 ```
 
@@ -146,6 +153,29 @@ After preprocessing, launch any analysis tool with `--read-only`:
 
 ```bash
 python -m tools.database_log_analysis.path_visualizer --db path/to/db.sqlite --read-only --port 8050
+```
+
+## Interactive analysis tools
+
+Each tool is a standalone Dash web application that serves on a unique
+default port.  All bind to `0.0.0.0` so they are accessible from any
+network interface.
+
+| Tool | Port | Description |
+|------|------|-------------|
+| `path_visualizer.py` | 8050 | Trace worst-slacked timing paths with force arrows |
+| `cell_force_analyzer.py` | 8051 | Statistical properties of cells affected by timing forces |
+| `path_similarity_analyzer.py` | 8052 | LCS-based path similarity and connected-component clustering |
+| `cell_trajectory_viewer.py` | 8053 | Position evolution scrubbing for top timing-critical cells |
+| `cell_path_stats.py` | 8054 | Force scatter, distributions, and movement statistics by path count |
+| `path_transience.py` | 8055 | Path lifecycle heatmaps, turnover, and cell-path scatter |
+| `cell_timing_stability.py` | 8056 | Oscillation, opposition, and wander detection under timing forces |
+
+Launch any tool with:
+
+```bash
+python -m tools.database_log_analysis.<tool_name> \
+    --db path/to/db.sqlite --read-only --port <port>
 ```
 
 ## Method reference

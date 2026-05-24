@@ -17,18 +17,52 @@ Usage
 >>> gpl = GplDb("tmp/test_gpl.sqlite", must_be_preprocessed=True)  # read-only
 """
 
+import os
 import sqlite3
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 import pandas as pd
 from typing import List, Optional, Tuple
 
 from .core import DbConnection
 
+# ── Write serialization for parallel workers ─────────────────────
+# SQLite allows only one writer at a time (even in WAL mode).
+# Parallel index workers share this lock so they don't collide.
+_WRITE_LOCK = threading.Lock()
+
 # ── Derived table names (single source of truth) ───────────────────
 GRADIENT_METRICS_TABLE = "gpl_cell_gradient_metrics"
 DENSITY_FORCES_TABLE = "gpl_cell_density_forces"
 PATH_SIGNATURES_TABLE = "gpl_path_signatures"
+
+# ── Source index definitions  (table → list of column groups) ─────
+_SOURCE_INDEX_TABLES = [
+    ("gpl_iteration_scalars",           ["Iter"]),
+    ("gpl_bin_grid",                    ["Iter", "BinIdx", "Iter, BinIdx"]),
+    ("gpl_cell_dense_gradients",        ["Iter", "CellId", "Iter, CellId"]),
+    ("gpl_cell_timing_gradients",       ["Iter", "CellId", "Iter, CellId"]),
+    ("gpl_cell_routability_gradients",  ["Iter", "CellId", "Iter, CellId"]),
+    ("gpl_cell_positions",              ["Iter", "CellId", "Iter, CellId"]),
+    ("gpl_path_slacks",                 ["Iter", "PathId", "Iter, PathId"]),
+    ("gpl_path_cells",                  ["Iter", "PathId", "CellId",
+                                          "Iter, PathId", "Iter, CellId"]),
+    ("gpl_netlist_cells",              ["Iter", "CellId", "Iter, CellId"]),
+    ("gpl_netlist_nets",               ["Iter", "NetId", "Iter, NetId"]),
+    ("gpl_netlist_connectivity",       ["Iter", "PinId", "NetId", "CellId",
+                                          "Iter, PinId", "Iter, NetId",
+                                          "Iter, CellId"]),
+    ("gpl_cell_static_info",            ["CellId"]),
+]
+
+# ── Derived index definitions  (table → list of column groups) ────
+_DERIVED_INDEX_TABLES = [
+    (GRADIENT_METRICS_TABLE,  ["Iter", "CellId", "Iter, CellId"]),
+    (DENSITY_FORCES_TABLE,    ["Iter", "CellId", "Iter, CellId"]),
+    (PATH_SIGNATURES_TABLE,   ["Iter, PathId", "PhysicalPathId"]),
+]
 
 
 class GplDb(DbConnection):
@@ -52,13 +86,31 @@ class GplDb(DbConnection):
         db_path: str,
         must_be_preprocessed: bool = False,
         batch_size: int = 25,
+        _skip_preprocess: bool = False,
     ):
+        """Open a GPL database.
+
+        Parameters
+        ----------
+        db_path : str
+        must_be_preprocessed : bool
+            If True, open read-only and raise when derived tables are
+            missing.  If False (default), open read-write and run any
+            missing preprocessing steps.
+        batch_size : int
+            Iterations per batch during preprocessing (default 25).
+        _skip_preprocess : bool
+            Internal flag for parallel workers — open read-write but
+            do NOT run preprocessing.  Callers are responsible for
+            running the desired preprocessing step manually.
+        """
         if must_be_preprocessed:
             super().__init__(db_path, read_only=True)
             self._ensure_preprocessed()
         else:
             super().__init__(db_path, read_only=False)
-            self.preprocess(batch_size=batch_size)
+            if not _skip_preprocess:
+                self.preprocess(batch_size=batch_size)
 
     # ================================================================
     #  PREPROCESSING  (inlined — no separate module needed)
@@ -72,11 +124,11 @@ class GplDb(DbConnection):
         ``force_rebuild=True`` to drop and re-create all three tables.
 
         Indexing is separated from data generation:
-          Step 0 — indexes on raw source tables
+          Step 0 — indexes on raw source tables  (parallel per-table)
           Step 1 — gradient metrics table
-          Step 2 — density forces table
+          Step 2 — density forces table             }  run in parallel
           Step 3 — path signatures table
-          Step 4 — indexes on derived tables
+          Step 4 — indexes on derived tables      (parallel per-table)
 
         Parameters
         ----------
@@ -88,32 +140,30 @@ class GplDb(DbConnection):
         t_total = time.time()
         print(f"  [GplDb.preprocess]  batch_size={batch_size}")
 
+        # ── Speed PRAGMAs (safe: this is a one-shot preprocess run) ──
+        self.conn.execute("PRAGMA synchronous = OFF")
+        self.conn.execute("PRAGMA journal_mode = WAL")
+        self.conn.execute("PRAGMA cache_size = -500000")
+        self.conn.execute("PRAGMA temp_store = MEMORY")
+        self.conn.execute("PRAGMA mmap_size = 2147483648")
+        self.conn.execute("PRAGMA busy_timeout = 30000")
+
         if force_rebuild:
             self._drop_derived_tables()
 
-        # ── Step 0: source indexes ────────────────────────────────
+        # ── Step 0: source indexes (parallel per-table) ─────────────
         t0 = time.time()
-        self._preprocess_source_indexes()
+        self._preprocess_source_indexes_parallel()
         print(f"    source indexes: {time.time()-t0:.1f}s")
 
-        # ── Step 1: gradient metrics ──────────────────────────────
+        # ── Steps 1–3: data generation (parallel) ───────────────────
         t0 = time.time()
-        self._preprocess_gradient_metrics(batch_size)
-        print(f"    gradient metrics: {time.time()-t0:.1f}s")
+        self._preprocess_data_parallel(batch_size)
+        print(f"    data generation: {time.time()-t0:.1f}s")
 
-        # ── Step 2: density forces ────────────────────────────────
+        # ── Step 4: derived table indexes (parallel per-table) ──────
         t0 = time.time()
-        self._preprocess_density_forces(batch_size)
-        print(f"    density forces: {time.time()-t0:.1f}s")
-
-        # ── Step 3: path signatures ───────────────────────────────
-        t0 = time.time()
-        self._preprocess_path_signatures(batch_size)
-        print(f"    path signatures: {time.time()-t0:.1f}s")
-
-        # ── Step 4: derived table indexes ─────────────────────────
-        t0 = time.time()
-        self._preprocess_derived_indexes()
+        self._preprocess_derived_indexes_parallel()
         print(f"    derived indexes: {time.time()-t0:.1f}s")
 
         self.conn.commit()
@@ -154,65 +204,57 @@ class GplDb(DbConnection):
                 "Open GplDb with must_be_preprocessed=False to auto-build."
             )
 
-    # ── Step 0: Source table indexes ───────────────────────────────
+    # ── Step 0: Source table indexes (parallel per-table) ──────────
 
-    def _preprocess_source_indexes(self):
-        """Create indexes on every raw source table for fast lookup.
+    def _preprocess_source_indexes_parallel(self):
+        """Create indexes on every raw source table — parallel per table.
 
-        Creates an index on ``Iter`` for every table that has an
-        ``Iter`` column, as well as composite indexes on the natural
-        lookup key (e.g. ``CellId``, ``PathId``, ``BinIdx``).  Static
-        tables (netlist, cell_static_info) get indexes on their
-        primary key only.
-
-        Tables that do not exist in the database are silently skipped
-        with a warning — this handles databases that are missing
-        optional sources (e.g. timing/routability gradients).
-
-        Uses ``CREATE INDEX IF NOT EXISTS``, so calling this
-        repeatedly is idempotent and cheap.
-
-        Each table's indexing is timed independently — there are no
-        inter-dependencies between index operations.
+        Each table's indexes are fully independent, so we dispatch one
+        thread per table.  Missing tables are silently skipped.
         """
-        def _maybe_index(table: str, col_groups):
-            if not self._exists(table):
+        db_path = self.db_path
+
+        def _index_one(table, col_groups):
+            try:
+                conn = sqlite3.connect(
+                    f"file:{db_path}?mode=rw", uri=True,
+                    check_same_thread=False,
+                )
+                conn.execute("PRAGMA journal_mode = WAL")
+                conn.execute("PRAGMA synchronous = OFF")
+                conn.execute("PRAGMA busy_timeout = 30000")
+            except sqlite3.OperationalError:
                 print(f"    [source_index] table '{table}' not found "
                       f"— skipping.")
                 return
-            t0 = time.time()
-            _create_indexes(self.conn, table, col_groups)
-            print(f"      {table}: {time.time()-t0:.1f}s")
+            try:
+                t0 = time.time()
+                with _WRITE_LOCK:
+                    _create_indexes(conn, table, col_groups)
+                print(f"      {table}: {time.time()-t0:.1f}s")
+            finally:
+                conn.close()
 
-        # ── Tables WITH an Iter column ──────────────────────────
-        _maybe_index("gpl_iteration_scalars",
-                     ["Iter"])
-        _maybe_index("gpl_bin_grid",
-                     ["Iter", "BinIdx", "Iter, BinIdx"])
-        _maybe_index("gpl_cell_dense_gradients",
-                     ["Iter", "CellId", "Iter, CellId"])
-        _maybe_index("gpl_cell_timing_gradients",
-                     ["Iter", "CellId", "Iter, CellId"])
-        _maybe_index("gpl_cell_routability_gradients",
-                     ["Iter", "CellId", "Iter, CellId"])
-        _maybe_index("gpl_cell_positions",
-                     ["Iter", "CellId", "Iter, CellId"])
-        _maybe_index("gpl_path_slacks",
-                     ["Iter", "PathId", "Iter, PathId"])
-        _maybe_index("gpl_path_cells",
-                     ["Iter", "PathId", "CellId",
-                      "Iter, PathId", "Iter, CellId"])
-        _maybe_index("gpl_netlist_cells",
-                     ["Iter", "CellId", "Iter, CellId"])
-        _maybe_index("gpl_netlist_nets",
-                     ["Iter", "NetId", "Iter, NetId"])
-        _maybe_index("gpl_netlist_connectivity",
-                     ["Iter", "PinId", "NetId", "CellId",
-                      "Iter, PinId", "Iter, NetId", "Iter, CellId"])
+        # Only submit tables that exist; others skip with a message
+        existing = []
+        for table, col_groups in _SOURCE_INDEX_TABLES:
+            if not self._exists(table):
+                print(f"    [source_index] table '{table}' not found "
+                      f"— skipping.")
+                continue
+            existing.append((table, col_groups))
 
-        # ── Static tables (no Iter column) ──────────────────────
-        _maybe_index("gpl_cell_static_info",
-                     ["CellId"])
+        if not existing:
+            return
+
+        n_workers = min(len(existing), os.cpu_count())
+        with ThreadPoolExecutor(max_workers=n_workers) as ex:
+            futures = [
+                ex.submit(_index_one, table, col_groups)
+                for table, col_groups in existing
+            ]
+            for f in as_completed(futures):
+                f.result()  # propagate any exception
 
     # ── Step 1: Gradient metrics ───────────────────────────────────
 
@@ -524,32 +566,79 @@ class GplDb(DbConnection):
 
         print(f"    [{PATH_SIGNATURES_TABLE}] done — {total} rows.")
 
-    # ── Step 4: Derived table indexes ────────────────────────────
+    # ── Data generation parallel orchestrator (Steps 1–3) ─────────
 
-    def _preprocess_derived_indexes(self):
-        """Create indexes on all three derived tables.
+    def _preprocess_data_parallel(self, batch_size: int):
+        """Run gradient metrics, density forces, and path signatures
+        in parallel — each in its own GplDb instance.
 
-        Separated from the data-generation steps so that indexing is
-        batched and timed independently.  Uses ``CREATE INDEX IF NOT
-        EXISTS`` so repeated calls are idempotent and cheap.
-
-        Each table's indexing is timed independently — there are no
-        inter-dependencies between index operations.
+        All three steps read from different (or shared-reader-safe)
+        source tables and write to disjoint derived tables, so they
+        do not conflict.
         """
-        for table, col_groups in [
-            (GRADIENT_METRICS_TABLE,
-             ["Iter", "CellId", "Iter, CellId"]),
-            (DENSITY_FORCES_TABLE,
-             ["Iter", "CellId", "Iter, CellId"]),
-            (PATH_SIGNATURES_TABLE,
-             ["Iter, PathId", "PhysicalPathId"]),
-        ]:
+        db_path = self.db_path
+
+        def _run_step(method_name: str):
+            gpl = GplDb(db_path, _skip_preprocess=True)
+            try:
+                getattr(gpl, method_name)(batch_size)
+            finally:
+                gpl.close()
+
+        steps = [
+            "_preprocess_gradient_metrics",
+            "_preprocess_density_forces",
+            "_preprocess_path_signatures",
+        ]
+        with ThreadPoolExecutor(max_workers=len(steps)) as ex:
+            futures = {ex.submit(_run_step, s): s for s in steps}
+            for f in as_completed(futures):
+                f.result()  # propagate any exception
+
+    # ── Step 4: Derived table indexes (parallel per-table) ─────────
+
+    def _preprocess_derived_indexes_parallel(self):
+        """Create indexes on all three derived tables — parallel.
+
+        Each table's indexes are fully independent; dispatch one
+        thread per table that has data.
+        """
+        db_path = self.db_path
+
+        def _index_one(table, col_groups):
+            conn = sqlite3.connect(
+                f"file:{db_path}?mode=rw", uri=True,
+                check_same_thread=False,
+            )
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute("PRAGMA synchronous = OFF")
+            conn.execute("PRAGMA busy_timeout = 30000")
+            try:
+                t0 = time.time()
+                with _WRITE_LOCK:
+                    _create_indexes(conn, table, col_groups)
+                print(f"      {table}: {time.time()-t0:.1f}s")
+            finally:
+                conn.close()
+
+        # Collect tables that have data
+        existing = []
+        for table, col_groups in _DERIVED_INDEX_TABLES:
             if not self._table_has_data(table):
                 print(f"    [idx] {table} empty — skip indexes.")
                 continue
-            t0 = time.time()
-            _create_indexes(self.conn, table, col_groups)
-            print(f"      {table}: {time.time()-t0:.1f}s")
+            existing.append((table, col_groups))
+
+        if not existing:
+            return
+
+        with ThreadPoolExecutor(max_workers=len(existing)) as ex:
+            futures = [
+                ex.submit(_index_one, table, col_groups)
+                for table, col_groups in existing
+            ]
+            for f in as_completed(futures):
+                f.result()  # propagate any exception
 
     # ================================================================
     #  QUERY HELPERS
