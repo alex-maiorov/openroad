@@ -1426,6 +1426,11 @@ EOF
             ;;
     esac
 
+    # Cannot do this due to insane debian/ubuntu defaults
+    # if [ -f tools/database_log_analysis/requirements.txt ]; then
+    #     _execute "Installing Database Log Analysis Pip Dependencies" python3 -m pip install -r tools/database_log_analysis/requirements.txt
+    # fi
+
     if [[ -n "${SAVE_DEPS_PREFIXES}" ]]; then
         mkdir -p "$(dirname "${SAVE_DEPS_PREFIXES}")"
         echo "${CMAKE_PACKAGE_ROOT_ARGS}" > "${SAVE_DEPS_PREFIXES}"

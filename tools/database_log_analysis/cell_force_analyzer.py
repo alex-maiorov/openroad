@@ -24,7 +24,7 @@ _TOOLS = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _TOOLS not in sys.path:
     sys.path.insert(0, _TOOLS)
 
-from database_log_analysis import GplDb
+from database_log_analysis import GplDb, make_metadata_panel
 
 def make_app(gpl: GplDb) -> dash.Dash:
     cache = diskcache.Cache("./tmp/dash_bg_cache")
@@ -83,7 +83,8 @@ def make_app(gpl: GplDb) -> dash.Dash:
                                        "border": "none", "borderRadius": "4px",
                                        "cursor": "pointer", "display": "none"}),
                     html.Div(id="status-msg", style={"marginTop": "10px", "fontSize": "13px",
-                                                      "color": "#6c757d"}),
+                                                       "color": "#6c757d"}),
+                    make_metadata_panel(gpl),
                 ]
             ),
             

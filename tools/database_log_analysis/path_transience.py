@@ -38,7 +38,7 @@ _TOOLS = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _TOOLS not in sys.path:
     sys.path.insert(0, _TOOLS)
 
-from database_log_analysis import GplDb
+from database_log_analysis import GplDb, make_metadata_panel
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -182,8 +182,9 @@ def make_app(gpl: GplDb) -> dash.Dash:
                                     "color": "#6c757d"}),
                     html.Div(id="summary-stats",
                              style={"marginTop": "8px", "fontSize": "11px",
-                                    "color": "#2c3e50",
-                                    "lineHeight": "1.5"}),
+                                     "color": "#2c3e50",
+                                     "lineHeight": "1.5"}),
+                    make_metadata_panel(gpl),
                 ],
             ),
 

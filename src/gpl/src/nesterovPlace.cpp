@@ -4,7 +4,6 @@
 // Debug controls: npinit, updateGrad, np, updateNextIter
 
 #include "nesterovPlace.h"
-
 #include <algorithm>
 #include <cmath>
 #include <cstdint>

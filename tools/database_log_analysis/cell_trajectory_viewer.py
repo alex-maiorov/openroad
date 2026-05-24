@@ -31,7 +31,7 @@ _TOOLS = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _TOOLS not in sys.path:
     sys.path.insert(0, _TOOLS)
 
-from database_log_analysis import GplDb
+from database_log_analysis import GplDb, make_metadata_panel
 
 # ── Force config (matches path_visualizer) ──────────────────────
 FORCE_CONFIG = {
@@ -300,6 +300,7 @@ def make_app(gpl: GplDb) -> dash.Dash:
                              style={"fontSize": "11px", "color": "#6c757d",
                                     "marginBottom": "6px"}),
                     html.Div(children=[_force_row(k) for k in FORCE_ORDER]),
+                    make_metadata_panel(gpl),
                 ]
             ),
 

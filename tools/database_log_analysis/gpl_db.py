@@ -94,27 +94,27 @@ class GplDb(DbConnection):
         # ── Step 0: source indexes ────────────────────────────────
         t0 = time.time()
         self._preprocess_source_indexes()
-        print(f"    source indexes: {time.time()-t0:.1f}s")
+        print(f"    [source_index] done — {time.time()-t0:.1f}s")
 
         # ── Step 1: gradient metrics ──────────────────────────────
         t0 = time.time()
         self._preprocess_gradient_metrics(batch_size)
-        print(f"    gradient metrics: {time.time()-t0:.1f}s")
+        print(f"    [gradient_metrics] done — {time.time()-t0:.1f}s")
 
         # ── Step 2: density forces ────────────────────────────────
         t0 = time.time()
         self._preprocess_density_forces(batch_size)
-        print(f"    density forces: {time.time()-t0:.1f}s")
+        print(f"    [density_forces] done — {time.time()-t0:.1f}s")
 
         # ── Step 3: path signatures ───────────────────────────────
         t0 = time.time()
         self._preprocess_path_signatures(batch_size)
-        print(f"    path signatures: {time.time()-t0:.1f}s")
+        print(f"    [path_signatures] done — {time.time()-t0:.1f}s")
 
         # ── Step 4: derived table indexes ─────────────────────────
         t0 = time.time()
         self._preprocess_derived_indexes()
-        print(f"    derived indexes: {time.time()-t0:.1f}s")
+        print(f"    [derived_index] done — {time.time()-t0:.1f}s")
 
         self.conn.commit()
         print(f"  [GplDb.preprocess] done — {time.time()-t_total:.1f}s total.\n")
@@ -132,7 +132,7 @@ class GplDb(DbConnection):
         return cur.fetchone()[0] > 0
 
     def _drop_derived_tables(self):
-        print("    Force rebuild — dropping tables …")
+        print("    [preprocess] force rebuild — dropping derived tables …")
         for t in (GRADIENT_METRICS_TABLE, DENSITY_FORCES_TABLE,
                   PATH_SIGNATURES_TABLE):
             self.conn.execute(f"DROP TABLE IF EXISTS [{t}]")
@@ -180,9 +180,10 @@ class GplDb(DbConnection):
                 print(f"    [source_index] table '{table}' not found "
                       f"— skipping.")
                 return
+            print(f"    [source_index] creating indexes on {table} …")
             t0 = time.time()
             _create_indexes(self.conn, table, col_groups)
-            print(f"      {table}: {time.time()-t0:.1f}s")
+            print(f"    [source_index]   • {table}: {time.time()-t0:.1f}s")
 
         # ── Tables WITH an Iter column ──────────────────────────
         _maybe_index("gpl_iteration_scalars",
@@ -219,7 +220,7 @@ class GplDb(DbConnection):
     def _preprocess_gradient_metrics(self, batch_size: int):
         """Create ``gpl_cell_gradient_metrics`` if missing."""
         if self._table_has_data(GRADIENT_METRICS_TABLE):
-            print(f"    [{GRADIENT_METRICS_TABLE}] exists — skip.")
+            print(f"    [gradient_metrics] table already populated — skip.")
             return
 
         cur = self.conn.execute(
@@ -228,10 +229,10 @@ class GplDb(DbConnection):
         )
         row = cur.fetchone()
         if not row or row[1] == 0:
-            print("    gpl_cell_dense_gradients empty — skip gradient metrics.")
+            print("    [gradient_metrics] source table empty — skip.")
             return
         imin, imax = int(row[0]), int(row[1])
-        print(f"    [{GRADIENT_METRICS_TABLE}]  iters {imin}–{imax}  "
+        print(f"    [gradient_metrics]  iters {imin}–{imax}  "
               f"batch={batch_size}")
 
         self.conn.execute(f"""
@@ -277,18 +278,18 @@ class GplDb(DbConnection):
             out.to_sql(GRADIENT_METRICS_TABLE, self.conn,
                        if_exists="append", index=False)
             total += len(out)
-            print(f"      batch {start:>5d}–{end:<5d}  "
+            print(f"    [gradient_metrics] batch {start:>5d}–{end:<5d}  "
                   f"wrote {len(out):>8d}  (total {total})")
             del dense, timing, df, out
 
-        print(f"    [{GRADIENT_METRICS_TABLE}] done — {total} rows.")
+        print(f"    [gradient_metrics] done — {total} rows.")
 
     # ── Step 2: Density forces ─────────────────────────────────────
 
     def _preprocess_density_forces(self, batch_size: int):
         """Create ``gpl_cell_density_forces`` if missing."""
         if self._table_has_data(DENSITY_FORCES_TABLE):
-            print(f"    [{DENSITY_FORCES_TABLE}] exists — skip.")
+            print(f"    [density_forces] table already populated — skip.")
             return
 
         # Grid metadata
@@ -303,7 +304,7 @@ class GplDb(DbConnection):
             bin_cnt_x = int(_get("region_core_binCntX"))
             bin_cnt_y = int(_get("region_core_binCntY"))
         except (TypeError, IndexError):
-            print("    Missing region_core_* metadata — skip density forces.")
+            print("    [density_forces] missing region metadata — skip.")
             return
 
         cur = self.conn.execute(
@@ -312,10 +313,10 @@ class GplDb(DbConnection):
         )
         row = cur.fetchone()
         if not row or row[1] == 0:
-            print("    gpl_cell_dense_gradients empty — skip density forces.")
+            print("    [density_forces] source table empty — skip.")
             return
         imin, imax = int(row[0]), int(row[1])
-        print(f"    [{DENSITY_FORCES_TABLE}]  iters {imin}–{imax}  "
+        print(f"    [density_forces]  iters {imin}–{imax}  "
               f"batch={batch_size}")
 
         self.conn.execute(f"""
@@ -334,7 +335,7 @@ class GplDb(DbConnection):
             self.conn,
         )
         if static.empty:
-            print("    gpl_cell_static_info empty — skip density forces.")
+            print("    [density_forces] cell static info empty — skip.")
             return
 
         bin_area = bin_size_x * bin_size_y
@@ -438,18 +439,18 @@ class GplDb(DbConnection):
             out.to_sql(DENSITY_FORCES_TABLE, self.conn,
                        if_exists="append", index=False)
             total += len(out)
-            print(f"      batch {start:>5d}–{end:<5d}  "
+            print(f"    [density_forces] batch {start:>5d}–{end:<5d}  "
                   f"wrote {len(out):>8d}  (total {total})")
             del bins, cells, out, sat_x, sat_y
 
-        print(f"    [{DENSITY_FORCES_TABLE}] done — {total} rows.")
+        print(f"    [density_forces] done — {total} rows.")
 
     # ── Step 3: Path signatures ────────────────────────────────────
 
     def _preprocess_path_signatures(self, batch_size: int):
         """Create ``gpl_path_signatures`` via two-pass batch."""
         if self._table_has_data(PATH_SIGNATURES_TABLE):
-            print(f"    [{PATH_SIGNATURES_TABLE}] exists — skip.")
+            print(f"    [path_signatures] table already populated — skip.")
             return
 
         try:
@@ -458,18 +459,18 @@ class GplDb(DbConnection):
                 "FROM gpl_path_cells"
             )
         except pd.errors.DatabaseError:
-            print("    gpl_path_cells not found — skip path signatures.")
+            print("    [path_signatures] source table not found — skip.")
             return
         row = cur.fetchone()
         if not row or row[1] == 0:
-            print("    gpl_path_cells empty — skip path signatures.")
+            print("    [path_signatures] source table empty — skip.")
             return
         imin, imax = int(row[0]), int(row[1])
-        print(f"    [{PATH_SIGNATURES_TABLE}]  iters {imin}–{imax}  "
+        print(f"    [path_signatures]  iters {imin}–{imax}  "
               f"batch={batch_size}")
 
         # ── Pass 1: collect unique cell-id sequences ───────────────
-        print("      Pass 1 — collecting unique sequences …")
+        print("    [path_signatures] pass 1 — collecting unique sequences …")
         unique_seqs: set = set()
         for start in range(imin, imax + 1, batch_size):
             end = min(start + batch_size - 1, imax)
@@ -485,12 +486,12 @@ class GplDb(DbConnection):
             unique_seqs.update(seqs)
 
         if not unique_seqs:
-            print("      No sequences found — skip.")
+            print("    [path_signatures] no sequences found — skip.")
             return
 
         seq_to_id = {seq: i for i, seq in enumerate(unique_seqs)}
         del unique_seqs
-        print(f"      Found {len(seq_to_id)} unique physical paths.")
+        print(f"    [path_signatures]   • {len(seq_to_id)} unique physical paths.")
 
         # ── Pass 2: write mapping ──────────────────────────────────
         self.conn.execute(f"DROP TABLE IF EXISTS [{PATH_SIGNATURES_TABLE}]")
@@ -522,7 +523,7 @@ class GplDb(DbConnection):
                            if_exists="append", index=False)
             total += len(mapping)
 
-        print(f"    [{PATH_SIGNATURES_TABLE}] done — {total} rows.")
+        print(f"    [path_signatures] done — {total} rows.")
 
     # ── Step 4: Derived table indexes ────────────────────────────
 
@@ -545,11 +546,12 @@ class GplDb(DbConnection):
              ["Iter, PathId", "PhysicalPathId"]),
         ]:
             if not self._table_has_data(table):
-                print(f"    [idx] {table} empty — skip indexes.")
+                print(f"    [derived_index] {table} empty — skip.")
                 continue
+            print(f"    [derived_index] creating indexes on {table} …")
             t0 = time.time()
             _create_indexes(self.conn, table, col_groups)
-            print(f"      {table}: {time.time()-t0:.1f}s")
+            print(f"    [derived_index]   • {table}: {time.time()-t0:.1f}s")
 
     # ================================================================
     #  QUERY HELPERS

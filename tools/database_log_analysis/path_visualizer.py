@@ -32,7 +32,7 @@ _TOOLS = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _TOOLS not in sys.path:
     sys.path.insert(0, _TOOLS)
 
-from database_log_analysis import GplDb
+from database_log_analysis import GplDb, make_metadata_panel
 
 # ══════════════════════════════════════════════════════════════════
 #  Constants
@@ -678,8 +678,9 @@ def make_app(db_path, read_only=False):
                                        "border": "none", "borderRadius": "4px",
                                        "cursor": "pointer", "display": "none"}),
                     html.Div(id="status-msg", style={"marginTop": "8px",
-                                                       "fontSize": "12px",
-                                                       "color": "#6c757d"}),
+                                                        "fontSize": "12px",
+                                                        "color": "#6c757d"}),
+                    make_metadata_panel(gpl),
                     # Hidden store for caching path/trajectory data
                     # so the snapshot slider updates instantly without
                     # re-querying the database.
