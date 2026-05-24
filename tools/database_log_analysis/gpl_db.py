@@ -17,9 +17,7 @@ Usage
 >>> gpl = GplDb("tmp/test_gpl.sqlite", must_be_preprocessed=True)  # read-only
 """
 
-import os
 import sqlite3
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
@@ -27,11 +25,6 @@ import pandas as pd
 from typing import List, Optional, Tuple
 
 from .core import DbConnection
-
-# ── Write serialization for parallel workers ─────────────────────
-# SQLite allows only one writer at a time (even in WAL mode).
-# Parallel index workers share this lock so they don't collide.
-_WRITE_LOCK = threading.Lock()
 
 # ── Derived table names (single source of truth) ───────────────────
 GRADIENT_METRICS_TABLE = "gpl_cell_gradient_metrics"
@@ -151,9 +144,9 @@ class GplDb(DbConnection):
         if force_rebuild:
             self._drop_derived_tables()
 
-        # ── Step 0: source indexes (parallel per-table) ─────────────
+        # ── Step 0: source indexes (sequential — writes cannot overlap) ─
         t0 = time.time()
-        self._preprocess_source_indexes_parallel()
+        self._preprocess_source_indexes()
         print(f"    source indexes: {time.time()-t0:.1f}s")
 
         # ── Steps 1–3: data generation (parallel) ───────────────────
@@ -161,9 +154,9 @@ class GplDb(DbConnection):
         self._preprocess_data_parallel(batch_size)
         print(f"    data generation: {time.time()-t0:.1f}s")
 
-        # ── Step 4: derived table indexes (parallel per-table) ──────
+        # ── Step 4: derived table indexes (sequential) ──────────────
         t0 = time.time()
-        self._preprocess_derived_indexes_parallel()
+        self._preprocess_derived_indexes()
         print(f"    derived indexes: {time.time()-t0:.1f}s")
 
         self.conn.commit()
@@ -204,57 +197,23 @@ class GplDb(DbConnection):
                 "Open GplDb with must_be_preprocessed=False to auto-build."
             )
 
-    # ── Step 0: Source table indexes (parallel per-table) ──────────
+    # ── Step 0: Source table indexes (sequential — writes cannot overlap) ─
 
-    def _preprocess_source_indexes_parallel(self):
-        """Create indexes on every raw source table — parallel per table.
+    def _preprocess_source_indexes(self):
+        """Create indexes on every raw source table — sequential.
 
-        Each table's indexes are fully independent, so we dispatch one
-        thread per table.  Missing tables are silently skipped.
+        SQLite serializes all writers at the database level regardless
+        of threading, so parallel index creation provides no speedup
+        and just adds contention.  Each table is timed independently.
         """
-        db_path = self.db_path
-
-        def _index_one(table, col_groups):
-            try:
-                conn = sqlite3.connect(
-                    f"file:{db_path}?mode=rw", uri=True,
-                    check_same_thread=False,
-                )
-                conn.execute("PRAGMA journal_mode = WAL")
-                conn.execute("PRAGMA synchronous = OFF")
-                conn.execute("PRAGMA busy_timeout = 30000")
-            except sqlite3.OperationalError:
-                print(f"    [source_index] table '{table}' not found "
-                      f"— skipping.")
-                return
-            try:
-                t0 = time.time()
-                with _WRITE_LOCK:
-                    _create_indexes(conn, table, col_groups)
-                print(f"      {table}: {time.time()-t0:.1f}s")
-            finally:
-                conn.close()
-
-        # Only submit tables that exist; others skip with a message
-        existing = []
         for table, col_groups in _SOURCE_INDEX_TABLES:
             if not self._exists(table):
                 print(f"    [source_index] table '{table}' not found "
                       f"— skipping.")
                 continue
-            existing.append((table, col_groups))
-
-        if not existing:
-            return
-
-        n_workers = min(len(existing), os.cpu_count())
-        with ThreadPoolExecutor(max_workers=n_workers) as ex:
-            futures = [
-                ex.submit(_index_one, table, col_groups)
-                for table, col_groups in existing
-            ]
-            for f in as_completed(futures):
-                f.result()  # propagate any exception
+            t0 = time.time()
+            _create_indexes(self.conn, table, col_groups)
+            print(f"      {table}: {time.time()-t0:.1f}s")
 
     # ── Step 1: Gradient metrics ───────────────────────────────────
 
@@ -595,50 +554,21 @@ class GplDb(DbConnection):
             for f in as_completed(futures):
                 f.result()  # propagate any exception
 
-    # ── Step 4: Derived table indexes (parallel per-table) ─────────
+    # ── Step 4: Derived table indexes (sequential) ────────────────
 
-    def _preprocess_derived_indexes_parallel(self):
-        """Create indexes on all three derived tables — parallel.
+    def _preprocess_derived_indexes(self):
+        """Create indexes on all three derived tables — sequential.
 
-        Each table's indexes are fully independent; dispatch one
-        thread per table that has data.
+        SQLite serializes all writers regardless of threading, so
+        parallel index creation provides no speedup.
         """
-        db_path = self.db_path
-
-        def _index_one(table, col_groups):
-            conn = sqlite3.connect(
-                f"file:{db_path}?mode=rw", uri=True,
-                check_same_thread=False,
-            )
-            conn.execute("PRAGMA journal_mode = WAL")
-            conn.execute("PRAGMA synchronous = OFF")
-            conn.execute("PRAGMA busy_timeout = 30000")
-            try:
-                t0 = time.time()
-                with _WRITE_LOCK:
-                    _create_indexes(conn, table, col_groups)
-                print(f"      {table}: {time.time()-t0:.1f}s")
-            finally:
-                conn.close()
-
-        # Collect tables that have data
-        existing = []
         for table, col_groups in _DERIVED_INDEX_TABLES:
             if not self._table_has_data(table):
                 print(f"    [idx] {table} empty — skip indexes.")
                 continue
-            existing.append((table, col_groups))
-
-        if not existing:
-            return
-
-        with ThreadPoolExecutor(max_workers=len(existing)) as ex:
-            futures = [
-                ex.submit(_index_one, table, col_groups)
-                for table, col_groups in existing
-            ]
-            for f in as_completed(futures):
-                f.result()  # propagate any exception
+            t0 = time.time()
+            _create_indexes(self.conn, table, col_groups)
+            print(f"      {table}: {time.time()-t0:.1f}s")
 
     # ================================================================
     #  QUERY HELPERS
