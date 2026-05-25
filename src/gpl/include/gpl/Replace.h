@@ -41,7 +41,6 @@ class PlacerBase;
 class NesterovBaseCommon;
 class NesterovBase;
 class RouteBase;
-class TimingBase;
 
 class InitialPlace;
 class NesterovPlace;
@@ -62,13 +61,8 @@ struct PlaceOptions
   bool timingDrivenMode = false;
   bool routabilityDrivenMode = false;
   bool uniformTargetDensityMode = false;
-  std::vector<int> timingNetWeightOverflows{64, 20};
-  float timingNetWeightMax = 5;
-  float timingDrivenNetsPercentage = 10;
   float overflow = 0.1;
   int nesterovPlaceMaxIter = 5000;
-  // timing driven check overflow to keep resizer changes (non-virtual resizer)
-  float keepResizeBelowOverflow = 1.0;
   bool routabilityUseRudy = true;
   bool disableRevertIfDiverge = false;
   bool disablePinDensityAdjust = false;
@@ -194,7 +188,6 @@ class Replace
   std::vector<std::shared_ptr<PlacerBase>> pbVec_;
   std::vector<std::shared_ptr<NesterovBase>> nbVec_;
   std::shared_ptr<RouteBase> rb_;
-  std::shared_ptr<TimingBase> tb_;
 
   std::unique_ptr<InitialPlace> ip_;
   std::unique_ptr<NesterovPlace> np_;

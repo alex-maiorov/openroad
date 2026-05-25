@@ -10,7 +10,7 @@ create_clock -name core_clock -period 2 clk
 set_wire_rc -signal -layer metal3
 set_wire_rc -clock -layer metal5
 
-global_placement -timing_driven -timing_driven_nets_percentage 100
+global_placement -timing_driven
 
 # check reported wns
 estimate_parasitics -placement

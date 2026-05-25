@@ -33,7 +33,6 @@ class PlacerBase;
 class PlacerBaseCommon;
 class Instance;
 class RouteBase;
-class TimingBase;
 
 class NesterovPlace
 {
@@ -45,7 +44,6 @@ class NesterovPlace
                  std::vector<std::shared_ptr<PlacerBase>>& pbVec,
                  std::vector<std::shared_ptr<NesterovBase>>& nbVec,
                  std::shared_ptr<RouteBase> rb,
-                 std::shared_ptr<TimingBase> tb,
                  sta::dbSta* sta,
                  std::unique_ptr<AbstractGraphics> graphics,
                  utl::Logger* log);
@@ -92,13 +90,6 @@ class NesterovPlace
                           int routability_driven_count,
                           int timing_driven_count,
                           bool& final_routability_image_saved);
-  void runTimingDriven(int iter,
-                       const std::string& timing_driven_dir,
-                       int routability_driven_count,
-                       int& timing_driven_count,
-                       int64_t& td_accumulated_delta_area,
-                       bool is_routability_gpl_iter);
-
   void runTimingPass(int iter,
                      const std::string& timing_driven_dir,
                      int routability_driven_count,
@@ -145,7 +136,6 @@ class NesterovPlace
   std::vector<std::shared_ptr<NesterovBase>> nbVec_;
   utl::Logger* log_ = nullptr;
   std::shared_ptr<RouteBase> rb_;
-  std::shared_ptr<TimingBase> tb_;
   sta::dbSta* sta_ = nullptr;
 
   NesterovPlaceVars npVars_;

@@ -26,7 +26,6 @@
 #include "sta/Path.hh"
 #include "sta/StaMain.hh"
 #include "sta/StaState.hh"
-#include "timingBase.h"
 #include "utl/Logger.h"
 #include "utl/validation.h"
 
@@ -99,7 +98,6 @@ void Replace::reset()
   nbVec_.clear();
   nbVec_.shrink_to_fit();
 
-  tb_.reset();
   rb_.reset();
 }
 
@@ -308,13 +306,6 @@ bool Replace::initNesterovPlace(const PlaceOptions& options,
     rb_ = std::make_shared<RouteBase>(rbVars, db_, fr_, nbc_, nbVec_, log_);
   }
 
-  if (!tb_) {
-    tb_ = std::make_shared<TimingBase>(nbc_, fr_, rs_, log_);
-    tb_->setTimingNetWeightOverflows(options.timingNetWeightOverflows);
-    tb_->setTimingNetWeightMax(options.timingNetWeightMax);
-    tb_->setTimingNetsPercentage(options.timingDrivenNetsPercentage);
-  }
-
   if (!np_) {
     NesterovPlaceVars npVars(options);
 
@@ -339,7 +330,6 @@ bool Replace::initNesterovPlace(const PlaceOptions& options,
                                           pbVec_,
                                           nbVec_,
                                           rb_,
-                                          tb_,
                                           sta_,
                                           graphics_->MakeNew(log_),
                                           log_);
@@ -506,19 +496,6 @@ void PlaceOptions::validate(utl::Logger* logger)
       "routability_rc_coefficients k3", routabilityRcK3, 420);
   val.check_non_negative(
       "routability_rc_coefficients k4", routabilityRcK4, 421);
-
-  for (const auto& timingNetOverflow : timingNetWeightOverflows) {
-    val.check_positive(
-        "timing_driven_net_reweight_overflow", timingNetOverflow, 422);
-  }
-  val.check_positive("timing_driven_net_weight_max", timingNetWeightMax, 423);
-  val.check_range("timing_driven_nets_percentage",
-                  timingDrivenNetsPercentage,
-                  0.0f,
-                  100.0f,
-                  424);
-  val.check_range(
-      "keep_resize_below_overflow", keepResizeBelowOverflow, 0.0f, 1.0f, 425);
 }
 
 void PlaceOptions::skipIo()

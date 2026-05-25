@@ -28,10 +28,6 @@ sta::define_cmd_args "global_placement" {\
     [-routability_inflation_ratio_coef routability_inflation_ratio_coef]\
     [-routability_max_inflation_ratio routability_max_inflation_ratio]\
     [-routability_rc_coefficients routability_rc_coefficients]\
-    [-keep_resize_below_overflow keep_resize_below_overflow]\
-    [-timing_driven_net_reweight_overflow timing_driven_net_reweight_overflow]\
-    [-timing_driven_net_weight_max timing_driven_net_weight_max]\
-    [-timing_driven_nets_percentage timing_driven_nets_percentage]\
     [-pad_left pad_left]\
     [-pad_right pad_right]\
     [-disable_revert_if_diverge]\
@@ -74,10 +70,6 @@ proc global_placement { args } {
       -routability_inflation_ratio_coef \
       -routability_max_inflation_ratio \
       -routability_rc_coefficients \
-      -timing_driven_net_reweight_overflow \
-      -timing_driven_net_weight_max \
-      -timing_driven_nets_percentage \
-      -keep_resize_below_overflow \
       -pad_left -pad_right \
       -timing_gradpass_top_n \
       -timing_gradpass_n_paths_per_endpoint \

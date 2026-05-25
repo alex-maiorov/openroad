@@ -16,9 +16,6 @@ design.evalTclString("set_wire_rc -signal -layer metal3")
 design.evalTclString("set_wire_rc -clock  -layer metal5")
 
 options = helpers.PlaceOptions()
-options.timingNetWeightOverflows.clear()
-for val in [80, 70, 60, 50, 40, 30, 20]:
-    options.timingNetWeightOverflows.push_back(val)
 options.timingDrivenMode = True
 design.getReplace().doPlace(1, options)
 

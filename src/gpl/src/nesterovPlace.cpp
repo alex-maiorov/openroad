@@ -22,7 +22,6 @@
 #include "placerBase.h"
 #include "routeBase.h"
 #include "sta/Sta.hh"
-#include "timingBase.h"
 #include "utl/Logger.h"
 
 namespace sta {
@@ -39,7 +38,6 @@ NesterovPlace::NesterovPlace(const NesterovPlaceVars& npVars,
                               std::vector<std::shared_ptr<PlacerBase>>& pbVec,
                               std::vector<std::shared_ptr<NesterovBase>>& nbVec,
                               std::shared_ptr<RouteBase> rb,
-                              std::shared_ptr<TimingBase> tb,
                               sta::dbSta* sta,
                               std::unique_ptr<gpl::AbstractGraphics> graphics,
                               utl::Logger* log)
@@ -50,7 +48,6 @@ NesterovPlace::NesterovPlace(const NesterovPlaceVars& npVars,
   pbVec_ = pbVec;
   nbVec_ = nbVec;
   rb_ = std::move(rb);
-  tb_ = std::move(tb);
   sta_ = sta;
   log_ = log;
   // Timing pass parameters are now in NesterovBaseVars (nbVars_)
@@ -381,189 +378,6 @@ void NesterovPlace::updateIterGraphics(
                       timing_driven_count));
     }
     final_routability_image_saved = true;
-  }
-}
-
-void NesterovPlace::runTimingDriven(int iter,
-                                    const std::string& timing_driven_dir,
-                                    int routability_driven_revert_count,
-                                    int& timing_driven_count,
-                                    int64_t& td_accumulated_delta_area,
-                                    bool is_routability_gpl_iter)
-{
-  // timing driven feature
-  // if virtual, do reweight on timing-critical nets,
-  // otherwise keep all modifications by rsz.
-  if (npVars_.timingDrivenMode
-      && tb_->isTimingNetWeightOverflow(average_overflow_unscaled_)
-      && (!is_routability_gpl_iter || !npVars_.routability_driven_mode)) {
-    // update db's instance location from current density coordinates
-    updateDb();
-
-    if (graphics_ && graphics_->enabled()) {
-      graphics_->addTimingDrivenIter(iter);
-
-      if (npVars_.debug_generate_images) {
-        graphics_->saveLabeledImage(
-            fmt::format("{}/timing_{:05d}_0.png", timing_driven_dir, iter),
-            fmt::format("Iter {} |R: {} |T: {} before TD",
-                        iter,
-                        routability_driven_revert_count,
-                        timing_driven_count));
-      }
-    }
-
-    // Call resizer's estimateRC API to fill in PEX using placed locations,
-    // Call sta's API to extract worst timing paths,
-    // and update GNet's weights from worst timing paths.
-    //
-    // See timingBase.cpp in detail
-    bool virtual_td_iter
-        = (average_overflow_unscaled_ > npVars_.keepResizeBelowOverflow);
-
-    log_->info(GPL,
-               100,
-               "Timing-driven iteration {}/{}, virtual: {}.",
-               ++npVars_.timingDrivenIterCounter,
-               tb_->getTimingNetWeightOverflowSize(),
-               virtual_td_iter);
-
-    log_->info(GPL,
-               101,
-               "   Iter: {}, overflow: {:.3f}, keep resizer changes at: {}, "
-               "HPWL: {}",
-               iter + 1,
-               average_overflow_unscaled_,
-               npVars_.keepResizeBelowOverflow,
-               nbc_->getHpwl());
-
-    if (!virtual_td_iter) {
-      db_cbk_->addOwner(pbc_->db()->getChip()->getBlock());
-    } else {
-      db_cbk_->removeOwner();
-    }
-
-    auto block = pbc_->db()->getChip()->getBlock();
-    int nb_gcells_before_td = 0;
-    int nb_gcells_after_td = 0;
-    int nbc_total_gcells_before_td = nbc_->getGCells().size();
-
-    for (auto& nb : nbVec_) {
-      nb_gcells_before_td += nb->getGCells().size();
-    }
-
-    bool shouldTdProceed = tb_->executeTimingDriven(virtual_td_iter);
-    // TODO remove fillers for TD iterations
-    // for (auto& nesterov : nbVec_) {
-    //   nesterov->cutFillerCells(nbc_->getDeltaArea());
-    // }
-
-    nbVec_[0]->setTrueReprintIterHeader();
-    ++timing_driven_count;
-
-    const int nbc_total_gcells_delta
-        = nbc_->getNewGcellsCount() - nbc_->getDeletedGcellsCount();
-    td_accumulated_delta_area += nbc_->getDeltaArea();
-    for (auto& nb : nbVec_) {
-      nb_gcells_after_td += nb->getGCells().size();
-    }
-    const int nb_total_gcells_delta = nb_gcells_after_td - nb_gcells_before_td;
-    if (nb_total_gcells_delta != nbc_total_gcells_delta) {
-      log_->warn(GPL,
-                 92,
-                 "Mismatch in #cells between central object and all regions. "
-                 "NesterovBaseCommon: {}, Summing all regions: {}",
-                 nbc_total_gcells_delta,
-                 nb_total_gcells_delta);
-    }
-
-    if (graphics_ && graphics_->enabled() && npVars_.debug_generate_images) {
-      updateDb();
-      graphics_->saveLabeledImage(
-          fmt::format("{}/timing_{:05d}_1.png", timing_driven_dir, iter),
-          fmt::format("Iter {} |R: {} |T: {} after TD",
-                      iter,
-                      routability_driven_revert_count,
-                      timing_driven_count));
-    }
-
-    if (!virtual_td_iter) {
-      for (auto& nesterov : nbVec_) {
-        nesterov->updateGCellState(wireLengthCoefX_, wireLengthCoefY_);
-        // updates order in routability:
-        // 1. change areas
-        // 2. set target density with delta area
-        // 3. updateareas
-        // 4. updateDensitySize
-
-        nesterov->setTargetDensity(
-            static_cast<float>(nbc_->getDeltaArea()
-                               + nesterov->getNesterovInstsArea()
-                               + nesterov->getTotalFillerArea())
-            / static_cast<float>(nesterov->getWhiteSpaceArea()));
-
-        nesterov->setMovableArea(nesterov->getTargetDensity()
-                                 * nesterov->getWhiteSpaceArea());
-        float rsz_delta_area_microns
-            = block->dbuAreaToMicrons(nbc_->getDeltaArea());
-        float rsz_delta_area_percentage
-            = (nbc_->getDeltaArea()
-               / static_cast<float>(nesterov->getNesterovInstsArea()))
-              * 100.0f;
-        log_->info(
-            GPL,
-            107,
-            "Timing-driven: repair_design delta area: {:.3f} um^2 ({:+.2f}%)",
-            rsz_delta_area_microns,
-            rsz_delta_area_percentage);
-
-        float delta_gcells_percentage = 0.0f;
-        if (nbc_total_gcells_before_td > 0) {
-          delta_gcells_percentage
-              = ((nbc_total_gcells_delta)
-                 / static_cast<float>(nbc_total_gcells_before_td))
-                * 100.0f;
-        }
-        log_->info(
-            GPL,
-            108,
-            "Timing-driven: repair_design, gpl delta gcells: {} ({:+.2f}%)",
-            (nbc_total_gcells_delta),
-            delta_gcells_percentage);
-        log_->info(
-            GPL,
-            109,
-            "Timing-driven: repair_design, gcells created: {}, deleted: {}",
-            nbc_->getNewGcellsCount(),
-            nbc_->getDeletedGcellsCount());
-
-        log_->info(GPL,
-                   110,
-                   "Timing-driven: new target density: {}",
-                   nesterov->getTargetDensity());
-        nbc_->resetDeltaArea();
-        nbc_->resetNewGcellsCount();
-        nesterov->updateAreas();
-        nesterov->updateDensitySize();
-        nesterov->checkConsistency();
-      }
-
-      // update snapshot after non-virtual TD
-      int64_t hpwl = nbc_->getHpwl();
-      if (average_overflow_unscaled_ <= 0.25) {
-        min_hpwl_ = hpwl;
-        diverge_snapshot_average_overflow_unscaled_
-            = average_overflow_unscaled_;
-        diverge_snapshot_iter_ = iter + 1;
-        is_min_hpwl_ = true;
-      }
-    }
-
-    // problem occured
-    // escape timing driven later
-    if (!shouldTdProceed) {
-      npVars_.timingDrivenMode = false;
-    }
   }
 }
 
@@ -1140,7 +954,6 @@ int NesterovPlace::doNesterovPlace(int start_iter)
     log_->logToDbMetadata(utl::GPL, "referenceHpwl", fmt::format("{:e}", (double)npVars_.referenceHpwl));
     log_->logToDbMetadata(utl::GPL, "routability_end_overflow", fmt::format("{:e}", (double)npVars_.routability_end_overflow));
     log_->logToDbMetadata(utl::GPL, "routability_snapshot_overflow", fmt::format("{:e}", (double)npVars_.routability_snapshot_overflow));
-    log_->logToDbMetadata(utl::GPL, "keepResizeBelowOverflow", fmt::format("{:e}", (double)npVars_.keepResizeBelowOverflow));
     log_->logToDbMetadata(utl::GPL, "timingDrivenMode", std::to_string(npVars_.timingDrivenMode));
     log_->logToDbMetadata(utl::GPL, "routability_driven_mode", std::to_string(npVars_.routability_driven_mode));
     log_->logToDbMetadata(utl::GPL, "timingGradPassStaRunInterval", std::to_string(npVars_.timingGradPassStaRunInterval));

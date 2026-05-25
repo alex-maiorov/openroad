@@ -53,8 +53,6 @@ cc_library(
         "src/routeBase.cpp",
         "src/solver.cpp",
         "src/solver.h",
-        "src/timingBase.cpp",
-        "src/timingBase.h",
     ],
     hdrs = [
         "include/gpl/Replace.h",

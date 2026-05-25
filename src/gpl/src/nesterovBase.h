@@ -814,7 +814,6 @@ struct NesterovPlaceVars
   const float referenceHpwl;                       // refDeltaHpwl
   const float routability_end_overflow;
   const float routability_snapshot_overflow;
-  const float keepResizeBelowOverflow;
 
   static constexpr int maxRecursionWlCoef = 10;
   static constexpr int maxRecursionInitSLPCoef = 10;

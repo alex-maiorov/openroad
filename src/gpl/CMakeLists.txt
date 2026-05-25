@@ -36,7 +36,6 @@ add_library(gpl_lib
   src/fftsg.cpp
   src/fftsg2d.cpp
   src/routeBase.cpp
-  src/timingBase.cpp
   src/graphicsNone.cpp
   src/solver.cpp
   src/mbff.cpp

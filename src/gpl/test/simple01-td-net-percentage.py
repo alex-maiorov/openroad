@@ -17,7 +17,6 @@ design.evalTclString("set_wire_rc -clock  -layer metal5")
 
 options = helpers.PlaceOptions()
 options.timingDrivenMode = True
-options.timingDrivenNetsPercentage = 100
 design.getReplace().doPlace(1, options)
 
 design.evalTclString("estimate_parasitics -placement")

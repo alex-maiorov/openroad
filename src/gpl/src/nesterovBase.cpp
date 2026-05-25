@@ -41,7 +41,6 @@
 #include "sta/PathGroup.hh"
 #include "sta/Search.hh"
 #include "sta/Sta.hh"
-#include "timingBase.h"
 #include "utl/Logger.h"
 
 #define REPLACE_SQRT2 1.414213562373095048801L
@@ -1127,7 +1126,6 @@ NesterovPlaceVars::NesterovPlaceVars(const PlaceOptions& options)
       referenceHpwl(options.referenceHpwl),
       routability_end_overflow(options.routabilityCheckOverflow),
       routability_snapshot_overflow(options.routabilitySnapshotOverflow),
-      keepResizeBelowOverflow(options.keepResizeBelowOverflow),
       timingDrivenMode(options.timingDrivenMode),
       routability_driven_mode(options.routabilityDrivenMode),
       disableRevertIfDiverge(options.disableRevertIfDiverge),
@@ -5014,7 +5012,8 @@ static float getSecondNorm(const std::vector<FloatPoint>& a)
   return std::sqrt(norm / (2.0 * a.size()));
 }
 
-// TimingPass functionality merged from timingBase.cpp
+// Timing gradient pass: query STA for violating paths and compute
+// per-cell gradient forces to improve timing during placement.
 
 std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
     int top_n,
