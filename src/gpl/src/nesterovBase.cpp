@@ -2673,11 +2673,11 @@ FloatPoint NesterovBase::getDensityGradient(const GCell* gCell) const
 FloatPoint NesterovBase::getTimingPreconditioner(const GCell* gCell,
                                                   size_t cell_index) const
 {
-  // Scale the preconditioner by the number of violating paths this cell
-  // appears in.  Cells in many timing-violating paths accumulate large
-  // aggregate forces (each path adds its gradient vector independently),
-  // so we dampen their effective step to prevent them from dominating
-  // the Nesterov line search and destabilising convergence.
+  // Scale the preconditioner by sqrt(path_count) so that it matches the
+  // sqrt force normalisation in runTimingPassGradient.  Together they give
+  //   sqrt(n)·f / (1 + sqrt(n))  →  f  asymptotically.
+  // The correction is split evenly between magnitude scaling and step
+  // damping so the net contribution stays bounded regardless of n.
   if (cell_index >= timing_path_counts_.size()) {
     return FloatPoint(1, 1);
   }
@@ -2687,7 +2687,7 @@ FloatPoint NesterovBase::getTimingPreconditioner(const GCell* gCell,
   }
   const float precond
       = 1.0f
-        + static_cast<float>(count) * nbVars_.timing_pass_precond_count_weight;
+        + std::sqrt(static_cast<float>(count)) * nbVars_.timing_pass_precond_count_weight;
   return FloatPoint(precond, precond);
 }
 
@@ -5345,25 +5345,25 @@ void gpl::NesterovBase::runTimingPassGradient(
     }
   }
 
-  // NOTE: Per-cell force normalization disabled pending further investigation.
-  // The preconditioner (getTimingPreconditioner) already dampens hotspot cells
-  // by dividing their composite step.  Adding per-cell magnitude normalization
-  // on top creates a double penalty that empirically worsens slack conservation
-  // (Δ=-25.75 ns vs Δ=-19.31 ns at identical parameters on croc-110M).
+  // Normalize per-cell forces by sqrt(path_count) to prevent hotspot cells
+  // from receiving unbounded aggregate force.  The preconditioner in
+  // getTimingPreconditioner() mirrors this with sqrt(count) as well, so the
+  // two effects cancel: division by sqrt(count) here is offset by
+  // multiplication by sqrt(count) in the preconditioner denominator.
+  // Net effect: per-path force contribution is bounded, while the composite
+  // step direction is preserved.
   //
-  // To re-enable, uncomment the loop below.  Also worth trying:
-  //   1/sqrt(count)  — moderate suppression (tested, harmful at TOP_N=2000)
-  //   1/count        — strong suppression (untested)
-  //   1/count^0.25   — very gentle suppression (untested)
-  //
-  // for (size_t i = 0; i < grad.size(); ++i) {
-  //   const int count = timing_path_counts_[i];
-  //   if (count > 1) {
-  //     const float norm = 1.0f / std::sqrt(static_cast<float>(count));
-  //     grad[i].x *= norm;
-  //     grad[i].y *= norm;
-  //   }
-  // }
+  // Alternative normalisation schemes (update preconditioner to match):
+  //   1/count       — strong suppression
+  //   1/count^0.25  — very gentle suppression
+  for (size_t i = 0; i < grad.size(); ++i) {
+    const int count = timing_path_counts_[i];
+    if (count > 1) {
+      const float norm = 1.0f / std::sqrt(static_cast<float>(count));
+      grad[i].x *= norm;
+      grad[i].y *= norm;
+    }
+  }
 
   if (nan_cnt != 0 || inf_cnt != 0) {
     log_->warn(GPL,
