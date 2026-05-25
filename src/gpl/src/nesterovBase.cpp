@@ -2674,11 +2674,11 @@ FloatPoint NesterovBase::getDensityGradient(const GCell* gCell) const
 FloatPoint NesterovBase::getTimingPreconditioner(const GCell* gCell,
                                                  size_t cell_index) const
 {
-  // Scale the preconditioner by sqrt(path_count) so that it matches the
-  // sqrt force normalisation in runTimingPassGradient.  Together they give
-  //   sqrt(n)·f / (1 + sqrt(n))  →  f  asymptotically.
-  // The correction is split evenly between magnitude scaling and step
-  // damping so the net contribution stays bounded regardless of n.
+  // Scale the preconditioner by log2(1+path_count) to match the
+  // log2(1+n)/n force normalisation in runTimingPassGradient.  Together:
+  //   n·f · log(n)/n / (1 + c·log(n)) = f · log(n)/(1 + c·log(n)) → f/c
+  // log grows far more slowly than sqrt, so the preconditioner is a
+  // gentler penalty — at n=48 000, log₂ ≈ 15.5 vs sqrt ≈ 219.
   if (cell_index >= timing_path_counts_.size()) {
     return FloatPoint(1, 1);
   }
@@ -2686,9 +2686,10 @@ FloatPoint NesterovBase::getTimingPreconditioner(const GCell* gCell,
   if (count <= 0) {
     return FloatPoint(1, 1);
   }
-  const float precond = 1.0f
-                        + std::sqrt(static_cast<float>(count))
-                              * nbVars_.timing_pass_precond_count_weight;
+  const float precond
+      = 1.0f
+        + std::log2(1.0f + static_cast<float>(count))
+              * nbVars_.timing_pass_precond_count_weight;
   return FloatPoint(precond, precond);
 }
 
@@ -5359,21 +5360,19 @@ void gpl::NesterovBase::runTimingPassGradient(
     }
   }
 
-  // Normalize per-cell forces by sqrt(path_count) to prevent hotspot cells
-  // from receiving unbounded aggregate force.  The preconditioner in
-  // getTimingPreconditioner() mirrors this with sqrt(count) as well, so the
-  // two effects cancel: division by sqrt(count) here is offset by
-  // multiplication by sqrt(count) in the preconditioner denominator.
-  // Net effect: per-path force contribution is bounded, while the composite
-  // step direction is preserved.
-  //
-  // Alternative normalisation schemes (update preconditioner to match):
-  //   1/count       — strong suppression
-  //   1/count^0.25  — very gentle suppression
+  // Normalize per-cell forces by log2(1+count)/count to prevent hotspot
+  // cells from receiving unbounded aggregate force.  The preconditioner
+  // in getTimingPreconditioner() mirrors this with log2(1+count) so that
+  // the two effects cancel:
+  //   effective = n*f * log(n)/n / (1 + log(n)*w) → f/w  asymptotically.
+  // log grows much more slowly than sqrt, so the preconditioner applies
+  // a gentler penalty to hotspot cells while still keeping the per-path
+  // force contribution bounded.
   for (size_t i = 0; i < grad.size(); ++i) {
     const int count = timing_path_counts_[i];
     if (count > 1) {
-      const float norm = 1.0f / std::sqrt(static_cast<float>(count));
+      const float norm = std::log2(1.0f + static_cast<float>(count))
+                         / static_cast<float>(count);
       grad[i].x *= norm;
       grad[i].y *= norm;
     }
