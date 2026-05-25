@@ -248,6 +248,7 @@ class GplDb(DbConnection):
         self.conn.commit()
 
         total = 0
+        has_timing = self._exists("gpl_cell_timing_gradients")
         for start in range(imin, imax + 1, batch_size):
             end = min(start + batch_size - 1, imax)
 
@@ -256,15 +257,19 @@ class GplDb(DbConnection):
                 "FROM gpl_cell_dense_gradients WHERE Iter BETWEEN ? AND ?",
                 self.conn, params=(start, end),
             )
-            timing = pd.read_sql_query(
-                "SELECT Iter, CellId, TimX, TimY "
-                "FROM gpl_cell_timing_gradients WHERE Iter BETWEEN ? AND ?",
-                self.conn, params=(start, end),
-            )
-
-            df = pd.merge(dense, timing, on=["Iter", "CellId"], how="left")
-            df["TimX"] = pd.to_numeric(df["TimX"], errors="coerce").fillna(0.0)
-            df["TimY"] = pd.to_numeric(df["TimY"], errors="coerce").fillna(0.0)
+            if has_timing:
+                timing = pd.read_sql_query(
+                    "SELECT Iter, CellId, TimX, TimY "
+                    "FROM gpl_cell_timing_gradients WHERE Iter BETWEEN ? AND ?",
+                    self.conn, params=(start, end),
+                )
+                df = pd.merge(dense, timing, on=["Iter", "CellId"], how="left")
+                df["TimX"] = pd.to_numeric(df["TimX"], errors="coerce").fillna(0.0)
+                df["TimY"] = pd.to_numeric(df["TimY"], errors="coerce").fillna(0.0)
+            else:
+                df = dense.copy()
+                df["TimX"] = 0.0
+                df["TimY"] = 0.0
 
             df["mag_wl"] = np.sqrt(df["WlX"] ** 2 + df["WlY"] ** 2)
             df["mag_tim"] = np.sqrt(df["TimX"] ** 2 + df["TimY"] ** 2)
@@ -280,7 +285,9 @@ class GplDb(DbConnection):
             total += len(out)
             print(f"    [gradient_metrics] batch {start:>5d}–{end:<5d}  "
                   f"wrote {len(out):>8d}  (total {total})")
-            del dense, timing, df, out
+            del dense, df, out
+            if has_timing:
+                del timing
 
         print(f"    [gradient_metrics] done — {total} rows.")
 
@@ -453,6 +460,9 @@ class GplDb(DbConnection):
             print(f"    [path_signatures] table already populated — skip.")
             return
 
+        if not self._exists("gpl_path_cells"):
+            print("    [path_signatures] source table gpl_path_cells not found — skip.")
+            return
         try:
             cur = self.conn.execute(
                 "SELECT COALESCE(MIN(Iter),0), COALESCE(MAX(Iter),0) "
