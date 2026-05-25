@@ -3259,37 +3259,19 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
     FloatPoint timingPrecondi = getTimingPreconditioner(gCell, i);
     FloatPoint routabilityPrecondi = getRoutabilityPreconditioner(gCell);
 
-    // Per-component preconditioning: the timing preconditioner applies
-    // ONLY to the timing gradient, not to WL/density/routability movement.
-    // Otherwise hotspot cells have their WL/density steps suppressed,
-    // creating a gradient discontinuity that crashes the Nesterov line
-    // search (step-length collapse at timing onset).
-    FloatPoint baseSumPrecondi(
+    FloatPoint sumPrecondi(
         wireLengthPreCondi.x + (densityPenalty_ * densityPrecondi.x)
-            + routabilityPrecondi.x,
+            + timingPrecondi.x + routabilityPrecondi.x,
         wireLengthPreCondi.y + (densityPenalty_ * densityPrecondi.y)
-            + routabilityPrecondi.y);
+            + timingPrecondi.y + routabilityPrecondi.y);
 
-    baseSumPrecondi.x
-        = std::max(baseSumPrecondi.x, NesterovPlaceVars::minPreconditioner);
-    baseSumPrecondi.y
-        = std::max(baseSumPrecondi.y, NesterovPlaceVars::minPreconditioner);
+    sumPrecondi.x
+        = std::max(sumPrecondi.x, NesterovPlaceVars::minPreconditioner);
+    sumPrecondi.y
+        = std::max(sumPrecondi.y, NesterovPlaceVars::minPreconditioner);
 
-    // WL/density/routability: preconditioned independently of timing
-    sumGrads[i].x = (wireLengthGrads[i].x
-                     + densityPenalty_ * densityGrads[i].x
-                     + routabilityGrads[i].x)
-                        / baseSumPrecondi.x
-                    + timingGrads[i].x
-                          / std::max(timingPrecondi.x,
-                                     NesterovPlaceVars::minPreconditioner);
-    sumGrads[i].y = (wireLengthGrads[i].y
-                     + densityPenalty_ * densityGrads[i].y
-                     + routabilityGrads[i].y)
-                        / baseSumPrecondi.y
-                    + timingGrads[i].y
-                          / std::max(timingPrecondi.y,
-                                     NesterovPlaceVars::minPreconditioner);
+    sumGrads[i].x /= sumPrecondi.x;
+    sumGrads[i].y /= sumPrecondi.y;
   }
 
   // Different compiler has different results on the following formula.
@@ -3469,34 +3451,17 @@ void NesterovBase::updateSingleGradient(
   FloatPoint timingPrecondi = getTimingPreconditioner(gCell, gCellIndex);
   FloatPoint routabilityPrecondi = getRoutabilityPreconditioner(gCell);
 
-  // Per-component preconditioning (see updateGradients for rationale).
-  FloatPoint baseSumPrecondi(
+  FloatPoint sumPrecondi(
       wireLengthPreCond.x + (densityPenalty_ * densityPrecondi.x)
-          + routabilityPrecondi.x,
+          + timingPrecondi.x + routabilityPrecondi.x,
       wireLengthPreCond.y + (densityPenalty_ * densityPrecondi.y)
-          + routabilityPrecondi.y);
+          + timingPrecondi.y + routabilityPrecondi.y);
 
-  baseSumPrecondi.x
-      = std::max(baseSumPrecondi.x, NesterovPlaceVars::minPreconditioner);
-  baseSumPrecondi.y
-      = std::max(baseSumPrecondi.y, NesterovPlaceVars::minPreconditioner);
+  sumPrecondi.x = std::max(sumPrecondi.x, NesterovPlaceVars::minPreconditioner);
+  sumPrecondi.y = std::max(sumPrecondi.y, NesterovPlaceVars::minPreconditioner);
 
-  sumGrads[gCellIndex].x
-      = (wireLengthGrads[gCellIndex].x
-         + densityPenalty_ * densityGrads[gCellIndex].x
-         + routabilityGrads[gCellIndex].x)
-            / baseSumPrecondi.x
-        + timingGrads[gCellIndex].x
-              / std::max(timingPrecondi.x,
-                         NesterovPlaceVars::minPreconditioner);
-  sumGrads[gCellIndex].y
-      = (wireLengthGrads[gCellIndex].y
-         + densityPenalty_ * densityGrads[gCellIndex].y
-         + routabilityGrads[gCellIndex].y)
-            / baseSumPrecondi.y
-        + timingGrads[gCellIndex].y
-              / std::max(timingPrecondi.y,
-                         NesterovPlaceVars::minPreconditioner);
+  sumGrads[gCellIndex].x /= sumPrecondi.x;
+  sumGrads[gCellIndex].y /= sumPrecondi.y;
 }
 
 void NesterovBase::updateInitialPrevSLPCoordi()
