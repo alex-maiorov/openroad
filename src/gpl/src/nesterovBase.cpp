@@ -25,10 +25,10 @@
 #include "boost/polygon/polygon.hpp"
 #include "db_sta/dbNetwork.hh"
 #include "fft.h"
-#include "math_helpers.h"
 #include "gpl/Replace.h"
 #include "grt/GlobalRouter.h"
 #include "grt/Rudy.h"
+#include "math_helpers.h"
 #include "nesterovPlace.h"
 #include "odb/db.h"
 #include "omp.h"
@@ -1105,7 +1105,8 @@ NesterovBaseVars::NesterovBaseVars(const PlaceOptions& options)
       timing_pass_first_iter(options.timingGradPassFirstIter),
       timing_pass_saturation_kL(options.timingGradPassSaturationKL),
       timing_pass_saturation_minL(options.timingGradPassSaturationMinL),
-      timing_pass_precond_count_weight(options.timingGradPassPrecondCountWeight),
+      timing_pass_precond_count_weight(
+          options.timingGradPassPrecondCountWeight),
       timing_pass_blend(options.timingGradPassBlend),
       routability_pass_sharpness(options.routabilityGradPassSharpness),
       routability_pass_weight(options.routabilityGradPassWeight),
@@ -2671,7 +2672,7 @@ FloatPoint NesterovBase::getDensityGradient(const GCell* gCell) const
 }
 
 FloatPoint NesterovBase::getTimingPreconditioner(const GCell* gCell,
-                                                  size_t cell_index) const
+                                                 size_t cell_index) const
 {
   // Scale the preconditioner by sqrt(path_count) so that it matches the
   // sqrt force normalisation in runTimingPassGradient.  Together they give
@@ -2685,9 +2686,9 @@ FloatPoint NesterovBase::getTimingPreconditioner(const GCell* gCell,
   if (count <= 0) {
     return FloatPoint(1, 1);
   }
-  const float precond
-      = 1.0f
-        + std::sqrt(static_cast<float>(count)) * nbVars_.timing_pass_precond_count_weight;
+  const float precond = 1.0f
+                        + std::sqrt(static_cast<float>(count))
+                              * nbVars_.timing_pass_precond_count_weight;
   return FloatPoint(precond, precond);
 }
 
@@ -3200,8 +3201,10 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
     const float alpha = nbVars_.timing_pass_blend;
     const float beta = 1.0f - alpha;
     for (size_t i = 0; i < timingGrads.size(); ++i) {
-      timingGrads[i].x = alpha * timingGrads[i].x + beta * prev_timing_grads[i].x;
-      timingGrads[i].y = alpha * timingGrads[i].y + beta * prev_timing_grads[i].y;
+      timingGrads[i].x
+          = alpha * timingGrads[i].x + beta * prev_timing_grads[i].x;
+      timingGrads[i].y
+          = alpha * timingGrads[i].y + beta * prev_timing_grads[i].y;
     }
   }
 
@@ -3621,43 +3624,47 @@ void NesterovBase::updateNextIter(const int iter)
         log_->info(GPL, 31, "HPWL: Half-Perimeter Wirelength");
       }
 
-      const std::string nesterov_header
-          = fmt::format("{:>9} | {:>8} | {:>13} | {:>8} | {:>9} | {:>8} | {:>9} | {:>8} | {:>6} | {:>9} | {:>9} | {:>5}",
-                        "Iteration",
-                        "Overflow",
-                        "HPWL (um)",
-                        "HPWL(%)",
-                        "Penalty",
-                        "StepLen",
-                        "GradNorm",
-                        "Phi",
-                        "VPaths",
-                        "WNS (ns)",
-                        "TNS (ns)",
-                        "Group");
+      const std::string nesterov_header = fmt::format(
+          "{:>9} | {:>8} | {:>13} | {:>8} | {:>9} | {:>8} | {:>9} | {:>8} | "
+          "{:>6} | {:>9} | {:>9} | {:>5}",
+          "Iteration",
+          "Overflow",
+          "HPWL (um)",
+          "HPWL(%)",
+          "Penalty",
+          "StepLen",
+          "GradNorm",
+          "Phi",
+          "VPaths",
+          "WNS (ns)",
+          "TNS (ns)",
+          "Group");
 
       log_->report(nesterov_header);
       log_->report(
-          "----------------------------------------------------------------------------------------------------");
+          "--------------------------------------------------------------------"
+          "--------------------------------");
 
       reprint_iter_header_ = false;
     }
 
     const float grad_norm = getSecondNorm(curSLPSumGrads_);
     dbBlock* block = pb_->db()->getChip()->getBlock();
-    log_->report("{:9d} | {:8.4f} | {:13.6e} | {:+7.2f}% | {:9.2e} | {:8.4f} | {:9.2e} | {:8.4f} | {:6d} | {:9.3f} | {:9.3f} | {:>5}",
-                 iter,
-                 sum_overflow_unscaled_,
-                 block->dbuToMicrons(hpwl),
-                 hpwl_percent_change,
-                 densityPenalty_,
-                 stepLength_,
-                 grad_norm,
-                 phiCoef_,
-                 vpath_count,
-                 wns_ns,
-                 tns_ns,
-                 group_name);
+    log_->report(
+        "{:9d} | {:8.4f} | {:13.6e} | {:+7.2f}% | {:9.2e} | {:8.4f} | {:9.2e} "
+        "| {:8.4f} | {:6d} | {:9.3f} | {:9.3f} | {:>5}",
+        iter,
+        sum_overflow_unscaled_,
+        block->dbuToMicrons(hpwl),
+        hpwl_percent_change,
+        densityPenalty_,
+        stepLength_,
+        grad_norm,
+        phiCoef_,
+        vpath_count,
+        wns_ns,
+        tns_ns,
+        group_name);
   }
 
   float phiCoef = getPhiCoef(static_cast<float>(hpwl - prev_hpwl_)
@@ -5064,7 +5071,8 @@ std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
   int endpoint_path_count = n_paths_per_endpoint;
   bool unique_pins = false;   // Don't filter for unique pins
   bool unique_edges = false;  // Don't filter for unique edges
-  float slack_min = -1e30f;   // Essentially -inf. Capture all paths (no lower bound)
+  float slack_min
+      = -1e30f;  // Essentially -inf. Capture all paths (no lower bound)
   float slack_max = nbVars_.timing_pass_slack_upper;
   bool sort_by_slack = true;  // Sort results by slack (most negative first)
 
@@ -5202,9 +5210,8 @@ std::vector<gpl::ViolatingPath> gpl::NesterovBase::getViolatingPaths(
 void gpl::NesterovBase::queryTimingViolations(NesterovBaseCommon& nbc, int iter)
 {
   // Query STA for violating paths and store them
-  violating_paths_ = getViolatingPaths(nbVars_.timing_pass_top_n,
-                                         nbVars_.timing_pass_n_paths_per_endpoint,
-                                         nbc);
+  violating_paths_ = getViolatingPaths(
+      nbVars_.timing_pass_top_n, nbVars_.timing_pass_n_paths_per_endpoint, nbc);
 
   // Logging
   static int base_path_id = 0;
@@ -5253,21 +5260,25 @@ void gpl::NesterovBase::queryTimingViolations(NesterovBaseCommon& nbc, int iter)
 }
 
 // Helper to compute the timing slack weight.
-// Smooth approximation of if(slack < offset) return min(clamp, -1 * (slack - offset) * slope) else {return 0}
+// Smooth approximation of if(slack < offset) return min(clamp, (offset -
+// slack) * slope) else {return 0}
 static float calculateTimingSlackWeight(float slack,
                                         float sharpness,
                                         float offset,
                                         float slope,
                                         float clamp)
 {
-    if(slope == 0.0f){
-      return 0.0f;
-    }
-    //FIXME: Way too precise for what we are doing
-    float clamp_offset = offset + (clamp/(-1.0f * slope));
-    float slack_penalty_component = softplus_exact(slack, offset, -1.0f * slope, sharpness);
-    float slack_clamp_component = softplus_exact(slack, clamp_offset, -1.0f * slope, sharpness);
-    return slack_penalty_component - slack_clamp_component;
+  if (slope == 0.0f) {
+    return 0.0f;
+  }
+  float clamp_offset = offset + (clamp / (-1.0f * slope));
+  // softplus_exact only takes (x, sharpness).  Offset, direction,
+  // and slope scaling are all done at the call site.
+  float slack_penalty_component
+      = slope * softplus_exact(offset - slack, sharpness);
+  float slack_clamp_component
+      = slope * softplus_exact(clamp_offset - slack, sharpness);
+  return slack_penalty_component - slack_clamp_component;
 }
 
 void gpl::NesterovBase::runTimingPassGradient(
@@ -5430,8 +5441,7 @@ FloatPoint NesterovBase::calculateTimingGradientValue(
     const FloatPoint e1_to_e2_vec{end2_pos.x - end1_pos.x,
                                   end2_pos.y - end1_pos.y};
     const float position_scaling_factor
-        = static_cast<float>(cell_index)
-          / static_cast<float>(path_length - 1);
+        = static_cast<float>(cell_index) / static_cast<float>(path_length - 1);
     const FloatPoint point_to_attract_cell_to
         = end1_pos + (e1_to_e2_vec * position_scaling_factor);
     const FloatPoint offset{point_to_attract_cell_to.x - cell_pos.x,
@@ -5806,6 +5816,10 @@ void gpl::NesterovBase::dumpCellDenseGradients(int iter)
   std::vector<float> pos_y(nb_gcells_.size());
   std::vector<float> wl_x(nb_gcells_.size());
   std::vector<float> wl_y(nb_gcells_.size());
+  std::vector<float> dens_x(nb_gcells_.size());
+  std::vector<float> dens_y(nb_gcells_.size());
+  std::vector<float> sum_x(nb_gcells_.size());
+  std::vector<float> sum_y(nb_gcells_.size());
 
   for (size_t i = 0; i < nb_gcells_.size(); i++) {
     ids[i] = i;
@@ -5813,18 +5827,28 @@ void gpl::NesterovBase::dumpCellDenseGradients(int iter)
     pos_y[i] = curSLPCoordi_[i].y;
     wl_x[i] = curSLPWireLengthGrads_[i].x;
     wl_y[i] = curSLPWireLengthGrads_[i].y;
+    dens_x[i] = curSLPDensityGrads_[i].x;
+    dens_y[i] = curSLPDensityGrads_[i].y;
+    sum_x[i] = curSLPSumGrads_[i].x;
+    sum_y[i] = curSLPSumGrads_[i].y;
   }
 
-  log_->logToDbBulk<"Iter,CellId,PosX,PosY,WlX,WlY">(utl::GPL,
-                                                     813,
-                                                     "gpl_cell_dense_gradients",
-                                                     nb_gcells_.size(),
-                                                     iters.begin(),
-                                                     ids.begin(),
-                                                     pos_x.begin(),
-                                                     pos_y.begin(),
-                                                     wl_x.begin(),
-                                                     wl_y.begin());
+  log_->logToDbBulk<"Iter,CellId,PosX,PosY,WlX,WlY,DensX,DensY,SumX,SumY">(
+      utl::GPL,
+      813,
+      "gpl_cell_dense_"
+      "gradients",
+      nb_gcells_.size(),
+      iters.begin(),
+      ids.begin(),
+      pos_x.begin(),
+      pos_y.begin(),
+      wl_x.begin(),
+      wl_y.begin(),
+      dens_x.begin(),
+      dens_y.begin(),
+      sum_x.begin(),
+      sum_y.begin());
 }
 
 void gpl::NesterovBase::dumpCellSparseTiming(int iter)
@@ -5933,22 +5957,22 @@ void gpl::NesterovBase::dumpNetlistCells(int iter)
     num_pins[i] = static_cast<int>(gcell->gPins().size());
   }
 
-  log_->logToDbBulk<"Iter,CellId,Cx,Cy,Width,Height,IsMacro,IsLocked,"
-                     "NumInstances,NumPins">(
-      utl::GPL,
-      817,
-      "gpl_netlist_cells",
-      nb_gcells_.size(),
-      iters.begin(),
-      cell_ids.begin(),
-      cx.begin(),
-      cy.begin(),
-      width.begin(),
-      height.begin(),
-      is_macro.begin(),
-      is_locked.begin(),
-      num_instances.begin(),
-      num_pins.begin());
+  log_->logToDbBulk<
+      "Iter,CellId,Cx,Cy,Width,Height,IsMacro,IsLocked,"
+      "NumInstances,NumPins">(utl::GPL,
+                              817,
+                              "gpl_netlist_cells",
+                              nb_gcells_.size(),
+                              iters.begin(),
+                              cell_ids.begin(),
+                              cx.begin(),
+                              cy.begin(),
+                              width.begin(),
+                              height.begin(),
+                              is_macro.begin(),
+                              is_locked.begin(),
+                              num_instances.begin(),
+                              num_pins.begin());
 }
 
 void gpl::NesterovBase::dumpNetlistNets(int iter)
@@ -6047,12 +6071,12 @@ void gpl::NesterovBase::dumpGradientsToDb(int iter)
     dumpCellStaticInfo();
     has_logged_static_ = true;
   }
-  //HACK: Dumping the full netlist graph EVERY iteration produces a diabolical
-  // amount of data (multiple GB per second). This is for DEBUGGING ONLY.
-  // NEVER run this in production — it will fill your disk and bottleneck
-  // the placer with logging overhead. Uncomment the line below to dump the
-  // netlist (e.g. to verify GPL netlist stability over time, especially after
-  // the resizer is called). Re-comment before any production use.
+  // HACK: Dumping the full netlist graph EVERY iteration produces a diabolical
+  //  amount of data (multiple GB per second). This is for DEBUGGING ONLY.
+  //  NEVER run this in production — it will fill your disk and bottleneck
+  //  the placer with logging overhead. Uncomment the line below to dump the
+  //  netlist (e.g. to verify GPL netlist stability over time, especially after
+  //  the resizer is called). Re-comment before any production use.
   //
   if (!has_logged_netlist_) {
     dumpNetlistToDb(iter);

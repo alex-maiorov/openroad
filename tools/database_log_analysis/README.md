@@ -247,7 +247,7 @@ returned.
 | Method | Table | Filters | Description |
 |--------|-------|---------|-------------|
 | `cell_static_info()` | `gpl_cell_static_info` | — | Width, Height, IsMacro, IsLocked per cell |
-| `cell_dense_gradients()` | `gpl_cell_dense_gradients` | `iter_range`, `cell_ids` | WL gradient (PosX, PosY, WlX, WlY) every cell every iter |
+| `cell_dense_gradients()` | `gpl_cell_dense_gradients` | `iter_range`, `cell_ids` | Pos, WL, density, sum gradients (PosX/Y, WlX/Y, DensX/Y, SumX/Y) every cell every iter |
 | `cell_timing_gradients()` | `gpl_cell_timing_gradients` | `iter_range`, `cell_ids` | Timing gradient (TimX, TimY) — sparse |
 | `iteration_scalars()` | `gpl_iteration_scalars` | — | StepLength, DensityPenalty, WlCoefX/Y, BaseWlCoef, SumOverflow per iter |
 | `bin_grid()` | `gpl_bin_grid` | `iter_range` | ElectroFieldX/Y, Density per (iter, bin) |
@@ -324,7 +324,7 @@ global placement.
 | Table | Contents | Method |
 |-------|----------|--------|
 | `gpl_cell_gradient_metrics` | `mag_wl`, `mag_tim`, `dot_wl_tim`, `opposition` per (Iter, CellId) | Merges dense + timing gradients; iteration batching. |
-| `gpl_cell_density_forces` | `EstDensityForceX`, `EstDensityForceY`, `EstDensityForceMag` | Summed Area Table of electrostatic field over cell bounding boxes. |
+| `gpl_cell_density_forces` | `EstDensityForceX`, `EstDensityForceY`, `EstDensityForceMag` | Raw density gradient × DensityPenalty, read directly from ``gpl_cell_dense_gradients.DensX/DensY`` when the placer dumps them (fallback: Summed Area Table reconstruction). |
 | `gpl_path_signatures` | Maps `(PathId, Iter)` → `PhysicalPathId` | Two-pass batch: collect unique cell sequences, assign stable IDs. |
 
 All three use iteration batching to keep peak RAM under 1 GiB.

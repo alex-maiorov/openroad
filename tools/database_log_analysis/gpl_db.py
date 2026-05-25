@@ -293,12 +293,99 @@ class GplDb(DbConnection):
 
     # ── Step 2: Density forces ─────────────────────────────────────
 
+    def _dense_has_column(self, col: str) -> bool:
+        """Check whether ``gpl_cell_dense_gradients`` has column *col*."""
+        if not self._exists("gpl_cell_dense_gradients"):
+            return False
+        cols = {row[1] for row in self.conn.execute(
+            "PRAGMA table_info(gpl_cell_dense_gradients)"
+        ).fetchall()}
+        return col in cols
+
     def _preprocess_density_forces(self, batch_size: int):
-        """Create ``gpl_cell_density_forces`` if missing."""
+        """Create ``gpl_cell_density_forces`` if missing.
+
+        If the source table ``gpl_cell_dense_gradients`` already
+        contains ``DensX`` / ``DensY`` columns (dumped directly from
+        the placer), a fast SQL-only path is used.  Otherwise falls
+        back to the Summed-Area-Table reconstruction.
+        """
         if self._table_has_data(DENSITY_FORCES_TABLE):
             print(f"    [density_forces] table already populated — skip.")
             return
 
+        if self._dense_has_column("DensX") and self._dense_has_column("DensY"):
+            self._preprocess_density_forces_fast(batch_size)
+        else:
+            self._preprocess_density_forces_sat(batch_size)
+
+    def _preprocess_density_forces_fast(self, batch_size: int):
+        """Populate ``gpl_cell_density_forces`` directly from the
+        ``DensX`` / ``DensY`` columns already dumped by the placer.
+
+        The placer writes the *raw* density gradient (without the
+        ``DensityPenalty`` multiplier) — consistent with how ``WlX``
+        / ``WlY`` are raw.  We multiply by ``DensityPenalty`` from
+        ``gpl_iteration_scalars`` to obtain the effective force.
+        """
+        cur = self.conn.execute(
+            "SELECT COALESCE(MIN(Iter),0), COALESCE(MAX(Iter),0) "
+            "FROM gpl_cell_dense_gradients"
+        )
+        row = cur.fetchone()
+        if not row or row[1] == 0:
+            print("    [density_forces] source table empty — skip.")
+            return
+        imin, imax = int(row[0]), int(row[1])
+        print(f"    [density_forces]  fast-path  iters {imin}–{imax}  "
+              f"batch={batch_size}")
+
+        self.conn.execute(f"""
+            CREATE TABLE IF NOT EXISTS [{DENSITY_FORCES_TABLE}] (
+                Iter INTEGER,
+                CellId INTEGER,
+                EstDensityForceX REAL,
+                EstDensityForceY REAL,
+                EstDensityForceMag REAL
+            )
+        """)
+        self.conn.commit()
+
+        total = 0
+        for start in range(imin, imax + 1, batch_size):
+            end = min(start + batch_size - 1, imax)
+            _t0 = time.time()
+            n = self.conn.execute(
+                f"""
+                INSERT INTO [{DENSITY_FORCES_TABLE}]
+                    (Iter, CellId, EstDensityForceX,
+                     EstDensityForceY, EstDensityForceMag)
+                SELECT
+                    g.Iter,
+                    g.CellId,
+                    g.DensX * s.DensityPenalty,
+                    g.DensY * s.DensityPenalty,
+                    SQRT(g.DensX * g.DensX + g.DensY * g.DensY)
+                        * s.DensityPenalty
+                FROM gpl_cell_dense_gradients g
+                JOIN gpl_iteration_scalars s ON g.Iter = s.Iter
+                WHERE g.Iter BETWEEN ? AND ?
+                """,
+                (start, end),
+            ).rowcount
+            total += n
+            self.conn.commit()
+            print(f"    [density_forces] batch {start:>5d}–{end:<5d}  "
+                  f"wrote {n:>8d}   ({time.time() - _t0:.2f}s)")
+        print(f"    [density_forces] done — {total} rows (fast-path).")
+
+    def _preprocess_density_forces_sat(self, batch_size: int):
+        """Fallback: SAT reconstruction from ``gpl_bin_grid``.
+
+        Used when the source ``gpl_cell_dense_gradients`` table was
+        written by an older placer that does not include ``DensX`` /
+        ``DensY`` columns.
+        """
         # Grid metadata
         try:
             _get = lambda k: float(self.conn.execute(
@@ -323,7 +410,7 @@ class GplDb(DbConnection):
             print("    [density_forces] source table empty — skip.")
             return
         imin, imax = int(row[0]), int(row[1])
-        print(f"    [density_forces]  iters {imin}–{imax}  "
+        print(f"    [density_forces]  SAT-fallback  iters {imin}–{imax}  "
               f"batch={batch_size}")
 
         self.conn.execute(f"""
@@ -450,7 +537,7 @@ class GplDb(DbConnection):
                   f"wrote {len(out):>8d}  (total {total})")
             del bins, cells, out, sat_x, sat_y
 
-        print(f"    [density_forces] done — {total} rows.")
+        print(f"    [density_forces] done — {total} rows (SAT-fallback).")
 
     # ── Step 3: Path signatures ────────────────────────────────────
 
@@ -628,7 +715,12 @@ class GplDb(DbConnection):
         iter_range: Optional[Tuple[int, int]] = None,
         cell_ids: Optional[List[int]] = None,
     ) -> pd.DataFrame:
-        """Wirelength gradient components (dense — every cell every iter)."""
+        """Per-cell dense vectors: position, WL/density/sum gradients.
+
+        Columns (newer placer builds include all; older builds omit
+        trailing columns):
+        ``Iter, CellId, PosX, PosY, WlX, WlY[, DensX, DensY, SumX, SumY]``.
+        """
         sql, params = self._make_select(
             "gpl_cell_dense_gradients",
             iter_range=iter_range,
