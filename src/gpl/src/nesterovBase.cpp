@@ -1106,6 +1106,7 @@ NesterovBaseVars::NesterovBaseVars(const PlaceOptions& options)
       timing_pass_saturation_kL(options.timingGradPassSaturationKL),
       timing_pass_saturation_minL(options.timingGradPassSaturationMinL),
       timing_pass_precond_count_weight(options.timingGradPassPrecondCountWeight),
+      timing_pass_blend(options.timingGradPassBlend),
       routability_pass_sharpness(options.routabilityGradPassSharpness),
       routability_pass_weight(options.routabilityGradPassWeight),
       routability_pass_range(options.routabilityGradPassRange),
@@ -3178,9 +3179,30 @@ void NesterovBase::updateGradients(std::vector<FloatPoint>& sumGrads,
 
   // First, compute timing gradients using the merged TimingPass functionality
   // This computes gradient contributions from timing violations
+  std::vector<FloatPoint> prev_timing_grads;
+  const bool do_blend = sta_ != nullptr && npVars_->timingDrivenMode
+                        && nbVars_.timing_pass_blend > 0.0f
+                        && nbVars_.timing_pass_blend < 1.0f;
+  if (do_blend) {
+    // Save previous gradient before it is zeroed below, so we can blend.
+    prev_timing_grads = timingGrads;
+  }
   std::fill(timingGrads.begin(), timingGrads.end(), FloatPoint(0, 0));
   if (sta_ != nullptr && npVars_->timingDrivenMode) {
     runTimingPassGradient(*nbc_, nbVars_, coordi, timingGrads);
+  }
+
+  // Smoothly blend old and new timing gradients to prevent discontinuities
+  // in the composite gradient when STA is re-queried and the violating-path
+  // set changes.  blend=0.3 means 30 % new, 70 % old — the solver sees a
+  // gradual transition instead of an abrupt jump.
+  if (do_blend) {
+    const float alpha = nbVars_.timing_pass_blend;
+    const float beta = 1.0f - alpha;
+    for (size_t i = 0; i < timingGrads.size(); ++i) {
+      timingGrads[i].x = alpha * timingGrads[i].x + beta * prev_timing_grads[i].x;
+      timingGrads[i].y = alpha * timingGrads[i].y + beta * prev_timing_grads[i].y;
+    }
   }
 
   // NOTE: Routability tile congestion data is refreshed periodically by
@@ -5322,6 +5344,23 @@ void gpl::NesterovBase::runTimingPassGradient(
       timing_path_counts_[cell_idx] += 1;
     }
   }
+
+  // Normalize per-cell forces to prevent hotspot cells (those on many
+  // violating paths) from receiving unbounded aggregate force.
+  // Without this, a cell on 500 paths receives 500× the force of a cell
+  // on 1 path, creating a two-tier system that wastes optimizer budget.
+  // Division by sqrt(path_count) preserves directional signal while
+  // bounding magnitude growth.  Also worth trying: division by path_count
+  // (no sqrt) for stronger suppression of hotspot dominance.
+  for (size_t i = 0; i < grad.size(); ++i) {
+    const int count = timing_path_counts_[i];
+    if (count > 1) {
+      const float norm = 1.0f / std::sqrt(static_cast<float>(count));
+      grad[i].x *= norm;
+      grad[i].y *= norm;
+    }
+  }
+
   if (nan_cnt != 0 || inf_cnt != 0) {
     log_->warn(GPL,
                350,

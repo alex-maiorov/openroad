@@ -108,6 +108,7 @@ struct PlaceOptions
    float timingGradPassSaturationKL = 3.0F;
    float timingGradPassSaturationMinL = 1000.0F;
    float timingGradPassPrecondCountWeight = 1.0F;
+   float timingGradPassBlend = 0.3F;
 
   // RoutabilityGradPass parameters for gradient-based routability optimization
    float routabilityGradPassSharpness = 1.0F;

@@ -787,6 +787,7 @@ struct NesterovBaseVars
   const float timing_pass_saturation_kL;
   const float timing_pass_saturation_minL;
   const float timing_pass_precond_count_weight;
+  const float timing_pass_blend;
 
   // Routability gradient pass parameters
   const float routability_pass_sharpness;
