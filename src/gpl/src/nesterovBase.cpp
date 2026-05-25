@@ -5345,21 +5345,25 @@ void gpl::NesterovBase::runTimingPassGradient(
     }
   }
 
-  // Normalize per-cell forces to prevent hotspot cells (those on many
-  // violating paths) from receiving unbounded aggregate force.
-  // Without this, a cell on 500 paths receives 500× the force of a cell
-  // on 1 path, creating a two-tier system that wastes optimizer budget.
-  // Division by sqrt(path_count) preserves directional signal while
-  // bounding magnitude growth.  Also worth trying: division by path_count
-  // (no sqrt) for stronger suppression of hotspot dominance.
-  for (size_t i = 0; i < grad.size(); ++i) {
-    const int count = timing_path_counts_[i];
-    if (count > 1) {
-      const float norm = 1.0f / std::sqrt(static_cast<float>(count));
-      grad[i].x *= norm;
-      grad[i].y *= norm;
-    }
-  }
+  // NOTE: Per-cell force normalization disabled pending further investigation.
+  // The preconditioner (getTimingPreconditioner) already dampens hotspot cells
+  // by dividing their composite step.  Adding per-cell magnitude normalization
+  // on top creates a double penalty that empirically worsens slack conservation
+  // (Δ=-25.75 ns vs Δ=-19.31 ns at identical parameters on croc-110M).
+  //
+  // To re-enable, uncomment the loop below.  Also worth trying:
+  //   1/sqrt(count)  — moderate suppression (tested, harmful at TOP_N=2000)
+  //   1/count        — strong suppression (untested)
+  //   1/count^0.25   — very gentle suppression (untested)
+  //
+  // for (size_t i = 0; i < grad.size(); ++i) {
+  //   const int count = timing_path_counts_[i];
+  //   if (count > 1) {
+  //     const float norm = 1.0f / std::sqrt(static_cast<float>(count));
+  //     grad[i].x *= norm;
+  //     grad[i].y *= norm;
+  //   }
+  // }
 
   if (nan_cnt != 0 || inf_cnt != 0) {
     log_->warn(GPL,
