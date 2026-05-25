@@ -5273,11 +5273,14 @@ static float calculateTimingSlackWeight(float slack,
   }
   float clamp_offset = offset + (clamp / (-1.0f * slope));
   // softplus_exact only takes (x, sharpness).  Offset, direction,
-  // and slope scaling are all done at the call site.
+  // and slope scaling are all done at the call site.  sharpness is
+  // normalized by slope so that it becomes a dimensionless knee-width
+  // multiplier — the transition tracks the operating range rather
+  // than depending on the absolute slack unit.
   float slack_penalty_component
-      = slope * softplus_exact(offset - slack, sharpness);
+      = slope * softplus_exact(offset - slack, sharpness * slope);
   float slack_clamp_component
-      = slope * softplus_exact(clamp_offset - slack, sharpness);
+      = slope * softplus_exact(clamp_offset - slack, sharpness * slope);
   return slack_penalty_component - slack_clamp_component;
 }
 

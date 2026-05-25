@@ -6,6 +6,10 @@ namespace gpl {
 // scaling are all done by the caller on the input and output.
 //
 //   softplus_exact(x)  ≈  max(0, x)  for large |sharpness·x|
+//
+// sharpness should be normalized by the caller (e.g. multiplied by
+// a slope parameter) so that it becomes a dimensionless knee-width
+// factor rather than depending on the absolute unit of x.
 template <typename T>
 T softplus_exact(T x, T sharpness)
 {
