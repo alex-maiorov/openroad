@@ -15,19 +15,22 @@ separate "preprocessing module"; every tool class is a single file.
 
 ```
 database_log_analysis/
-├── __init__.py          # exports: DbConnection, GplDb, ExaDb
-├── core.py              # DbConnection base class (connection + metadata)
-├── gpl_db.py            # GplDb     — GPL placement analysis
-├── exa_db.py            # ExaDb     — example tool analysis
-├── preprocess_db.py     # standalone CLI to preprocess before analysis
-├── plotting.py          # convenience matplotlib plots
-├── path_visualizer.py   # Dash: path tracing with force arrows  (port 8050)
-├── cell_force_analyzer.py         # Dash: cell force statistics  (port 8051)
-├── path_similarity_analyzer.py    # Dash: path similarity        (port 8052)
-├── cell_trajectory_viewer.py      # Dash: trajectory scrubbing   (port 8053)
-├── cell_path_stats.py             # Dash: cell-path statistics   (port 8054)
-├── path_transience.py             # Dash: path lifecycle         (port 8055)
-├── cell_timing_stability.py       # Dash: timing stability       (port 8056)
+├── __init__.py                     # exports: DbConnection, GplDb, ExaDb
+├── core.py                         # DbConnection base class (connection + metadata)
+├── gpl_db.py                       # GplDb     — GPL placement analysis
+├── exa_db.py                       # ExaDb     — example tool analysis
+├── preprocess_db.py                # standalone CLI to preprocess before analysis
+├── plotting.py                     # convenience matplotlib plots
+├── setup_venv.sh                   # shell: create .venv + install deps
+├── run_analysis_suite.sh           # shell: preprocess + launch all 7 tools
+├── path_visualizer.py              # Dash: path tracing with force arrows  (port 8050)
+├── cell_force_analyzer.py          # Dash: cell force statistics  (port 8051)
+├── path_similarity_analyzer.py     # Dash: path similarity        (port 8052)
+├── cell_trajectory_viewer.py       # Dash: trajectory scrubbing   (port 8053)
+├── cell_path_stats.py              # Dash: cell-path statistics   (port 8054)
+├── path_transience.py              # Dash: path lifecycle         (port 8055)
+├── cell_timing_stability.py        # Dash: timing stability       (port 8056)
+├── requirements.txt                # pinned Python dependencies
 └── README.md
 ```
 
@@ -177,6 +180,61 @@ Launch any tool with:
 python -m tools.database_log_analysis.<tool_name> \
     --db path/to/db.sqlite --read-only --port <port>
 ```
+
+## Shell scripts
+
+Two convenience scripts automate the full lifecycle: environment setup,
+preprocessing, and launching the entire analysis suite at once.
+
+### `setup_venv.sh` — create virtual environment
+
+Creates a ``.venv/`` directory (idempotent — skips if it already exists)
+and installs all pinned dependencies from ``requirements.txt``.
+
+```bash
+cd tools/database_log_analysis
+./setup_venv.sh
+```
+
+After it finishes you can activate the environment with
+``source .venv/bin/activate``, though ``run_analysis_suite.sh`` activates
+it automatically.
+
+### `run_analysis_suite.sh` — preprocess + launch everything
+
+Preprocesses a GPL database and then launches **all 7 analysis tools**
+simultaneously in read-only mode on their dedicated ports (8050–8056).
+
+```bash
+./run_analysis_suite.sh <path/to/database.sqlite>
+```
+
+**What it does:**
+
+1. Activates the ``.venv`` (created by ``setup_venv.sh``).
+2. Runs the standalone preprocessor (idempotent — skips derived tables
+   that already exist).
+3. Launches all 7 Dash servers in the background, each with ``--read-only``.
+4. Prints the URLs and waits.  Press ``Ctrl+C`` to stop all servers.
+
+All 7 tools run concurrently and bind to ``0.0.0.0``:
+
+| Port | Tool |
+|------|------|
+| 8050 | Path Visualizer |
+| 8051 | Cell Force Analyzer |
+| 8052 | Path Similarity Analyzer |
+| 8053 | Cell Trajectory Viewer |
+| 8054 | Cell Path Statistics |
+| 8055 | Path Transience |
+| 8056 | Cell Timing Stability |
+
+**Customizing:**
+
+- **Batch size** — edit ``run_analysis_suite.sh`` to pass ``--batch-size N``
+  to the preprocessor line (smaller = less RAM, more passes).
+- **Single tool** — you can still launch individual tools manually
+  (see `Interactive analysis tools`_ above).
 
 ## Method reference
 

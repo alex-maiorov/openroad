@@ -5,9 +5,18 @@ namespace gpl{
 // Negate slope for the negative slack usecase
 template <typename T>
 T softplus_exact(T x, T x0, T slope, T sharpness){
-    return std::log<T>(
-        T(1) +
-        std::exp<T>(slope * sharpness * (x - x0))
-    )/sharpness;
+    T kx = slope * sharpness * (x - x0);
+    T retval;
+
+    // Gated to avoid taking the exponential of a large number and getting infinity
+    if (kx > T(0)){
+        retval =  kx / sharpness + std::log1p(std::exp(-kx)) / sharpness;
+    }
+    else{
+        retval = std::log1p(std::exp(kx)) / sharpness;
+    }
+    return retval;
 }
+
+
 }; // namespace gpl

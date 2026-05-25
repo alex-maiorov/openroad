@@ -25,6 +25,7 @@
 #include "boost/polygon/polygon.hpp"
 #include "db_sta/dbNetwork.hh"
 #include "fft.h"
+#include "math_helpers.h"
 #include "gpl/Replace.h"
 #include "grt/GlobalRouter.h"
 #include "grt/Rudy.h"
@@ -5231,17 +5232,21 @@ void gpl::NesterovBase::queryTimingViolations(NesterovBaseCommon& nbc, int iter)
 }
 
 // Helper to compute the timing slack weight.
-// Weight function: exp(-sharpness * (slack - offset))
-// Negative slack (violation) increases weight; zero slack gives weight =
-// exp(-offset).
+// Smooth approximation of if(slack < offset) return min(clamp, -1 * (slack - offset) * slope) else {return 0}
 static float calculateTimingSlackWeight(float slack,
                                         float sharpness,
-                                        float offset)
+                                        float offset,
+                                        float slope,
+                                        float clamp)
 {
-  // Positive Normalized Logistic Function. Numerically friendly version of
-  // if(slack < offset) return else return 0
-  return 1.0f
-         - (1.0f / (1.0f + std::exp(-1.0f * sharpness * (slack - offset))));
+    if(slope == 0.0f){
+      return 0.0f;
+    }
+    //FIXME: Way too precise for what we are doing
+    float clamp_offset = offset + (clamp/(-1.0f * slope));
+    float slack_penalty_component = softplus_exact(slack, offset, -1.0f * slope, sharpness);
+    float slack_clamp_component = softplus_exact(slack, clamp_offset, -1.0f * slope, sharpness);
+    return slack_penalty_component - slack_clamp_component;
 }
 
 void gpl::NesterovBase::runTimingPassGradient(
@@ -5283,7 +5288,9 @@ void gpl::NesterovBase::runTimingPassGradient(
     const float slack_weight
         = calculateTimingSlackWeight(path.slack,
                                      nbv.timing_pass_slack_sharpness,
-                                     nbv.timing_pass_slack_offset);
+                                     nbv.timing_pass_slack_offset,
+                                     nbv.timing_pass_slack_slope,
+                                     nbv.timing_pass_slack_clamp);
 
     for (size_t i = 0; i < gCell_indices.size(); ++i) {
       const size_t cell_idx = gCell_indices[i];
@@ -5430,7 +5437,9 @@ FloatPoint NesterovBase::getTimingGradient(
     const float slack_weight
         = calculateTimingSlackWeight(path.slack,
                                      nbVars_.timing_pass_slack_sharpness,
-                                     nbVars_.timing_pass_slack_offset);
+                                     nbVars_.timing_pass_slack_offset,
+                                     nbVars_.timing_pass_slack_slope,
+                                     nbVars_.timing_pass_slack_clamp);
 
     const size_t i = std::distance(gCell_indices.begin(), it);
     const bool is_endpoint = (i == 0 || i == gCell_indices.size() - 1);
@@ -5550,7 +5559,9 @@ FloatPoint NesterovBase::getTimingGradient(const GCell* gCell) const
     const float slack_weight
         = calculateTimingSlackWeight(path.slack,
                                      nbVars_.timing_pass_slack_sharpness,
-                                     nbVars_.timing_pass_slack_offset);
+                                     nbVars_.timing_pass_slack_offset,
+                                     nbVars_.timing_pass_slack_slope,
+                                     nbVars_.timing_pass_slack_clamp);
 
     const size_t i = std::distance(gCell_indices.begin(), it);
     const bool is_endpoint = (i == 0 || i == gCell_indices.size() - 1);

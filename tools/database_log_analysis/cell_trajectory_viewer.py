@@ -25,7 +25,6 @@ import plotly.figure_factory as ff
 import plotly.express as px
 import numpy as np
 import pandas as pd
-import json
 
 _TOOLS = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _TOOLS not in sys.path:
@@ -36,24 +35,25 @@ from database_log_analysis import GplDb, make_metadata_panel
 # ── Force config (matches path_visualizer) ──────────────────────
 FORCE_CONFIG = {
     "wl":       {"label": "Wirelength", "color": "#1f77b4",
-                 "xcol": "WlX", "ycol": "WlY", "default_scale": 5e5},
+                 "xcol": "WlX", "ycol": "WlY"},
     "tim":      {"label": "Timing",     "color": "#d62728",
-                 "xcol": "TimX", "ycol": "TimY", "default_scale": 5e5},
+                 "xcol": "TimX", "ycol": "TimY"},
     "density":  {"label": "Density",    "color": "#2ca02c",
-                 "xcol": "EstDensityForceX", "ycol": "EstDensityForceY",
-                 "default_scale": 5e5},
+                 "xcol": "EstDensityForceX", "ycol": "EstDensityForceY"},
     "effective":{"label": "Effective",  "color": "#9467bd",
-                 "xcol": "EffectiveX", "ycol": "EffectiveY",
-                 "default_scale": 5e5},
+                 "xcol": "EffectiveX", "ycol": "EffectiveY"},
 }
 FORCE_ORDER = ["wl", "tim", "density", "effective"]
 
 
-def _build_arrow_trace(force_df, fkey, scale, color):
+def _build_arrow_trace(force_df, fkey, arrow_length, color, legendgroup):
     """Build a quiver trace for one force type with hover info.
 
-    The hover tooltip shows cell ID, position, and all four gradient
-    components (WL, timing, density, effective).
+    All arrows are normalised to the same length *arrow_length* so the
+    user can compare directions without magnitude bias.  The hover
+    tooltip shows cell ID, position, and all four gradient components
+    (WL, timing, density, effective) so the actual gradient values can
+    be inspected for any cell.
     """
     x = force_df["PosX"].values
     y = force_df["PosY"].values
@@ -67,18 +67,24 @@ def _build_arrow_trace(force_df, fkey, scale, color):
         return None
 
     xn, yn = x[keep], y[keep]
-    fxn, fyn = fx[keep], fy[keep]
+    # Normalise to unit vectors, then scale uniformly to *arrow_length*
+    fxn = fx[keep] / mag[keep] * arrow_length
+    fyn = fy[keep] / mag[keep] * arrow_length
 
     fig_q = ff.create_quiver(
         x=xn, y=yn, u=fxn, v=fyn,
-        scale=scale, arrow_scale=0.15, angle=np.pi / 7,
+        scale=1.0,
+        arrow_scale=0.15, angle=np.pi / 7,
         name=f"{cfg['label']} force",
         line_color=color, line_width=1.5,
     )
     trace = fig_q.data[0]
-    trace.showlegend = True
+    trace.legendgroup = legendgroup
+    trace.showlegend = False
 
     # ── Build hover customdata ────────────────────────────────
+    # Each arrow renders as multiple Plotly points; repeat the same
+    # cell/force info for all points of each arrow.
     n_arr = keep.sum()
     kept_df = force_df.iloc[np.where(keep)[0]]
     rows = []
@@ -92,7 +98,10 @@ def _build_arrow_trace(force_df, fkey, scale, color):
             float(r["EstDensityForceX"]), float(r["EstDensityForceY"]),
             float(r["EffectiveX"]), float(r["EffectiveY"]),
         ))
-    trace.customdata = np.repeat(rows, 7, axis=0)
+    # Repeat each cell's info for every plotly point that makes up
+    # one quiver arrow (the exact count varies by plotly version).
+    n_per_arrow = len(trace.x) // n_arr
+    trace.customdata = np.repeat(rows, n_per_arrow, axis=0)
     trace.hovertemplate = (
         f"<b>{cfg['label']} force</b><br>"
         "Cell %{customdata[0]}<br>"
@@ -104,6 +113,7 @@ def _build_arrow_trace(force_df, fkey, scale, color):
         "Eff: (%{customdata[9]:.4f}, %{customdata[10]:.4f})<extra></extra>"
     )
     return trace
+
 
 
 def make_app(gpl: GplDb) -> dash.Dash:
@@ -134,72 +144,19 @@ def make_app(gpl: GplDb) -> dash.Dash:
         if _row and _row[0] is not None else None
     )
 
-    # Auto-scaled force defaults per force type, matching the
-    # logic in path_visualizer._compute_force_scales.
-    def _compute_auto_scales():
+    # Default arrow length in data coordinates (~3 % of design diag.)
+    def _compute_default_arrow_length():
         if des_bounds is None:
-            return {}
+            return 1000.0
         dx = des_bounds[1] - des_bounds[0]
         dy = des_bounds[3] - des_bounds[2]
         diag = (dx * dx + dy * dy) ** 0.5
-        target = diag * 0.05
-        s = {}
-        try:
-            df = gpl.query("SELECT SQRT(AVG(WlX*WlX+WlY*WlY)) AS r FROM gpl_cell_dense_gradients")
-            v = float(df["r"].iloc[0])
-            if v > 1e-30:
-                s["wl"] = target / v
-        except Exception:
-            pass
-        if gpl._exists("gpl_cell_timing_gradients"):
-            try:
-                df = gpl.query("SELECT SQRT(AVG(TimX*TimX+TimY*TimY)) AS r FROM gpl_cell_timing_gradients")
-                v = float(df["r"].iloc[0])
-                if v > 1e-30:
-                    s["tim"] = target / v
-            except Exception:
-                pass
-        if gpl._exists("gpl_cell_density_forces"):
-            try:
-                df = gpl.query("SELECT SQRT(AVG(EstDensityForceX*EstDensityForceX+EstDensityForceY*EstDensityForceY)) AS r FROM gpl_cell_density_forces")
-                v = float(df["r"].iloc[0])
-                if v > 1e-30:
-                    s["density"] = target / v
-            except Exception:
-                pass
-        if gpl._exists("gpl_cell_density_forces"):
-            try:
-                df = gpl.query("""
-                    SELECT SQRT(AVG(
-                        (d.WlX+COALESCE(t.TimX,0)+df.EstDensityForceX)*
-                        (d.WlX+COALESCE(t.TimX,0)+df.EstDensityForceX)+
-                        (d.WlY+COALESCE(t.TimY,0)+df.EstDensityForceY)*
-                        (d.WlY+COALESCE(t.TimY,0)+df.EstDensityForceY)
-                    )) AS r FROM gpl_cell_dense_gradients d
-                    LEFT JOIN gpl_cell_timing_gradients t
-                      ON d.Iter=t.Iter AND d.CellId=t.CellId
-                    JOIN gpl_cell_density_forces df
-                      ON d.Iter=df.Iter AND d.CellId=df.CellId
-                    LIMIT 50000
-                """)
-                if not df.empty and df["r"].iloc[0] is not None:
-                    v = float(df["r"].iloc[0])
-                    if v > 1e-30:
-                        s["effective"] = target / v
-            except Exception:
-                pass
-        if "effective" not in s and s:
-            s["effective"] = max(s.values())
-        return s
-    auto_scales = _compute_auto_scales() or {}
-    _force_cfg = {
-        k: {**v, "default_scale": auto_scales.get(k, v["default_scale"])}
-        for k, v in FORCE_CONFIG.items()
-    }
+        return diag * 0.03
+    _default_arrow_length = _compute_default_arrow_length()
 
     # ── Layout ──────────────────────────────────────────────────
     def _force_row(fkey):
-        cfg = _force_cfg[fkey]
+        cfg = FORCE_CONFIG[fkey]
         return html.Div(
             style={"display": "flex", "alignItems": "center", "gap": "6px",
                    "flexWrap": "wrap", "marginBottom": "4px"},
@@ -214,12 +171,6 @@ def make_app(gpl: GplDb) -> dash.Dash:
                     "fontWeight": "bold", "color": cfg["color"],
                     "minWidth": "80px", "fontSize": "13px",
                 }),
-                html.Span("scale:", style={"fontSize": "11px", "color": "#888"}),
-                dcc.Input(
-                    id=f"force-{fkey}-scale", type="number",
-                    value=cfg["default_scale"], min=0, step=1e4,
-                    style={"width": "90px", "fontSize": "12px", "padding": "2px 4px"},
-                ),
             ],
         )
 
@@ -296,10 +247,29 @@ def make_app(gpl: GplDb) -> dash.Dash:
 
                     html.Label("Force arrows",
                                style={"fontWeight": "bold", "fontSize": "13px"}),
-                    html.Div("Check to show | scale factor",
+                    html.Div("Check to show force component",
                              style={"fontSize": "11px", "color": "#6c757d",
                                     "marginBottom": "6px"}),
                     html.Div(children=[_force_row(k) for k in FORCE_ORDER]),
+                    html.Div([
+                        html.Label("Global arrow length multiplier:",
+                                   style={"fontSize": "12px", "fontWeight": "bold",
+                                          "marginTop": "8px"}),
+                        html.Div("All arrows have the same length; "
+                                 "hover to see actual force magnitudes.",
+                                 style={"fontSize": "10px", "color": "#888",
+                                        "marginBottom": "2px"}),
+                        dcc.Slider(
+                            id="global-force-multiplier",
+                            min=0.01, max=10.0, step=0.01,
+                            value=1.0,
+                            marks={0.01: "0.01x", 0.1: "0.1x", 0.5: "0.5x",
+                                   1.0: "1x", 2.0: "2x", 5.0: "5x",
+                                   10.0: "10x"},
+                            tooltip={"placement": "bottom",
+                                     "always_visible": True},
+                        ),
+                    ]),
                     make_metadata_panel(gpl),
                 ]
             ),
@@ -434,16 +404,13 @@ def make_app(gpl: GplDb) -> dash.Dash:
         State("force-tim-toggle", "value"),
         State("force-density-toggle", "value"),
         State("force-effective-toggle", "value"),
-        State("force-wl-scale", "value"),
-        State("force-tim-scale", "value"),
-        State("force-density-scale", "value"),
-        State("force-effective-scale", "value"),
+        State("global-force-multiplier", "value"),
         prevent_initial_call=False,
     )
     def render_plot(
         viz_iter, store_json,
         tgl_wl, tgl_tim, tgl_dens, tgl_eff,
-        scl_wl, scl_tim, scl_dens, scl_eff,
+        global_mult,
     ):
         if store_json is None:
             return go.Figure(layout={"title": "Click 'Fetch Data' to load cells."})
@@ -464,12 +431,7 @@ def make_app(gpl: GplDb) -> dash.Dash:
             "wl": bool(tgl_wl), "tim": bool(tgl_tim),
             "density": bool(tgl_dens), "effective": bool(tgl_eff),
         }
-        scales = {
-            "wl": float(scl_wl or _force_cfg["wl"]["default_scale"]),
-            "tim": float(scl_tim or _force_cfg["tim"]["default_scale"]),
-            "density": float(scl_dens or _force_cfg["density"]["default_scale"]),
-            "effective": float(scl_eff or _force_cfg["effective"]["default_scale"]),
-        }
+        arrow_length = _default_arrow_length * float(global_mult or 1.0)
 
         fig = go.Figure()
         fig.update_layout(
@@ -538,10 +500,9 @@ def make_app(gpl: GplDb) -> dash.Dash:
                 if not toggles.get(fkey):
                     continue
                 cfg = FORCE_CONFIG[fkey]
-                tr = _build_arrow_trace(cdata, fkey, scales[fkey], cfg["color"])
+                tr = _build_arrow_trace(cdata, fkey, arrow_length,
+                                         cfg["color"], label)
                 if tr is not None:
-                    tr.legendgroup = label
-                    tr.showlegend = False
                     fig.add_trace(tr)
 
         return fig

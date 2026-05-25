@@ -282,9 +282,15 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", required=True, help="Path to GPL SQLite database")
     parser.add_argument("--port", type=int, default=8051, help="Dash port")
+    parser.add_argument("--read-only", action="store_true",
+                        help="Open database read-only (must be preprocessed)")
     args = parser.parse_args()
-    
-    gpl = GplDb(args.db, must_be_preprocessed=False)
+
+    if args.read_only:
+        print("  Opening read-only (derived tables must already exist)")
+        gpl = GplDb(args.db, must_be_preprocessed=True)
+    else:
+        gpl = GplDb(args.db)
     app = make_app(gpl)
     print(f"Dash server: http://0.0.0.0:{args.port}")
     app.run(host="0.0.0.0", port=args.port, debug=False)
