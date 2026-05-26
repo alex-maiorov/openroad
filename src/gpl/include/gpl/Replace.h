@@ -111,12 +111,20 @@ struct PlaceOptions
    float timingGradPassBlend = 0.3F;
 
   // RoutabilityGradPass parameters for gradient-based routability optimization
+   // Penalty function mirrors the timing slack-weight pattern:
+   //   penalty = slope × [softplus_exact(congestion − offset, sharpness×slope)
+   //                     − softplus_exact(congestion − clamp_offset, sharpness×slope)]
+   //   where clamp_offset = offset + clamp / slope.
+   // The force is normalised by log₂(1+V)/V (V = cone volume) and the
+   // preconditioner is 1 + w × log₂(1+V), forming a bounded pair → penalty / w.
    float routabilityGradPassSharpness = 1.0F;
-   float routabilityGradPassWeight = 1.0F;
-   float routabilityGradPassRange = 1.0F;
-   float routabilityGradPassOffset = 0.0F;
-   int routabilityGradPassFirstIter = 0;
-   int routabilityGradPassRunInterval = 10;
+   float routabilityGradPassSlope = 1.0F;
+   float routabilityGradPassClamp = 10.0F;
+   float routabilityGradPassOffset = 0.3F;
+   float routabilityGradPassPrecondWeight = 0.1F;
+   float routabilityGradPassRange = 100000.0F;
+   int routabilityGradPassFirstIter = 800;
+   int routabilityGradPassRunInterval = 100;
    bool routabilityGradPassUseGrt = false;
 
   void skipIo();

@@ -790,10 +790,12 @@ struct NesterovBaseVars
   const float timing_pass_blend;
 
   // Routability gradient pass parameters
-  const float routability_pass_sharpness;
-  const float routability_pass_weight;
-  const float routability_pass_range;
-  const float routability_pass_offset;
+  const float routability_pass_sharpness;       // softplus knee sharpness
+  const float routability_pass_slope;           // linear region growth rate
+  const float routability_pass_clamp;           // max penalty per tile
+  const float routability_pass_offset;          // congestion threshold
+  const float routability_pass_precond_weight;  // preconditioner weight w
+  const float routability_pass_range;           // neighbourhood radius (DBU)
   const int routability_pass_first_iter;
   const int routability_pass_run_interval;
   const bool routability_pass_use_grt;
@@ -1440,6 +1442,11 @@ class NesterovBase
   int routability_tile_size_ = 0;
   int routability_grid_lx_ = 0;
   int routability_grid_ly_ = 0;
+
+  // Cone volume: Σ_{tiles} decay(r) = Σ max(0, 1 − r/R).
+  // Precomputed once per congestion-map refresh; used for force
+  // normalisation and the preconditioner.
+  float routability_cone_volume_ = 0.0f;
 
   // Helper to compute the timing gradient force for a cell on a violating path.
   // Performs the mathematical gradient calculation (endpoint attraction and

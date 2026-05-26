@@ -90,9 +90,11 @@ static gpl::PlaceOptions getOptions(
     checkKey(keys, "-timing_gradpass_precond_count_weight", options.timingGradPassPrecondCountWeight);
     checkKey(keys, "-timing_gradpass_blend", options.timingGradPassBlend);
     checkKey(keys, "-routability_gradpass_sharpness", options.routabilityGradPassSharpness);
-    checkKey(keys, "-routability_gradpass_weight", options.routabilityGradPassWeight);
-    checkKey(keys, "-routability_gradpass_range", options.routabilityGradPassRange);
+    checkKey(keys, "-routability_gradpass_slope", options.routabilityGradPassSlope);
+    checkKey(keys, "-routability_gradpass_clamp", options.routabilityGradPassClamp);
     checkKey(keys, "-routability_gradpass_offset", options.routabilityGradPassOffset);
+    checkKey(keys, "-routability_gradpass_precond_weight", options.routabilityGradPassPrecondWeight);
+    checkKey(keys, "-routability_gradpass_range", options.routabilityGradPassRange);
     checkKey(keys, "-routability_gradpass_first_iter", options.routabilityGradPassFirstIter);
     checkKey(keys, "-routability_gradpass_run_interval", options.routabilityGradPassRunInterval);
     checkFlag(flags, "-routability_gradpass_use_grt", options.routabilityGradPassUseGrt);

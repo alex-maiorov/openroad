@@ -381,12 +381,15 @@ int Replace::doNesterovPlace(const int threads,
   log_->info(GPL,
              355,
              "Routability gradient pass parameters: "
-             "sharpness={}, weight={}, range={}, offset={}, "
-             "first_iter={}, run_interval={}, use_grt={}",
+             "sharpness={}, slope={}, clamp={}, offset={}, "
+             "precond_weight={}, range={}, first_iter={}, "
+             "run_interval={}, use_grt={}",
              options.routabilityGradPassSharpness,
-             options.routabilityGradPassWeight,
-             options.routabilityGradPassRange,
+             options.routabilityGradPassSlope,
+             options.routabilityGradPassClamp,
              options.routabilityGradPassOffset,
+             options.routabilityGradPassPrecondWeight,
+             options.routabilityGradPassRange,
              options.routabilityGradPassFirstIter,
              options.routabilityGradPassRunInterval,
              options.routabilityGradPassUseGrt);

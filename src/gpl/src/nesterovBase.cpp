@@ -1109,9 +1109,12 @@ NesterovBaseVars::NesterovBaseVars(const PlaceOptions& options)
           options.timingGradPassPrecondCountWeight),
       timing_pass_blend(options.timingGradPassBlend),
       routability_pass_sharpness(options.routabilityGradPassSharpness),
-      routability_pass_weight(options.routabilityGradPassWeight),
-      routability_pass_range(options.routabilityGradPassRange),
+      routability_pass_slope(options.routabilityGradPassSlope),
+      routability_pass_clamp(options.routabilityGradPassClamp),
       routability_pass_offset(options.routabilityGradPassOffset),
+      routability_pass_precond_weight(
+          options.routabilityGradPassPrecondWeight),
+      routability_pass_range(options.routabilityGradPassRange),
       routability_pass_first_iter(options.routabilityGradPassFirstIter),
       routability_pass_run_interval(options.routabilityGradPassRunInterval),
       routability_pass_use_grt(options.routabilityGradPassUseGrt)
@@ -2695,20 +2698,38 @@ FloatPoint NesterovBase::getTimingPreconditioner(const GCell* gCell,
 
 FloatPoint NesterovBase::getRoutabilityPreconditioner(const GCell* gCell) const
 {
-  // FIXME: think about this
-  return FloatPoint(1, 1);
+  // Timing-style bounded pair: the force is normalised by log₂(1+V)/V
+  // and the preconditioner is 1 + w × log₂(1+V).  Together they bound
+  // the effective force at clamp / w regardless of neighbourhood size.
+  float V = routability_cone_volume_;
+  float logV = (V > 0.0f) ? std::log2(1.0f + V) : 0.0f;
+  float precond = 1.0f + nbVars_.routability_pass_precond_weight * logV;
+  return FloatPoint(precond, precond);
 }
 
 void NesterovBase::runRoutabilityGradient(int iter)
 {
   // Self-gating: only run when gradient-based routability is active
   if (est_ == nullptr) {
+    static bool warned = false;
+    if (!warned) {
+      warned = true;
+      debugPrint(log_, GPL, "routability", 1,
+                 "Routability gradient: est_ is null, skipping.");
+    }
     return;
   }
   if (npVars_ == nullptr || !npVars_->routability_driven_mode) {
+    static bool warned = false;
+    if (!warned) {
+      warned = true;
+      debugPrint(log_, GPL, "routability", 1,
+                 "Routability gradient: routability_driven_mode={}, skipping.",
+                 npVars_ ? npVars_->routability_driven_mode : false);
+    }
     return;
   }
-  if (nbVars_.routability_pass_weight <= 0.0f) {
+  if (nbVars_.routability_pass_slope <= 0.0f) {
     return;
   }
   if (iter < nbVars_.routability_pass_first_iter) {
@@ -2727,6 +2748,12 @@ void NesterovBase::runRoutabilityGradient(int iter)
 
   grt::GlobalRouter* grouter = est_->getGlobalRouter();
   if (grouter == nullptr) {
+    static bool warned = false;
+    if (!warned) {
+      warned = true;
+      debugPrint(log_, GPL, "routability", 1,
+                 "Routability gradient: grouter is null, skipping.");
+    }
     return;
   }
 
@@ -2755,7 +2782,7 @@ void NesterovBase::runRoutabilityGradient(int iter)
         const float ratio = rudy->getTile(tx, ty).getRudy() / 100.0f;
         const int idx = ty * grid_x + tx;
         routability_tile_congestion_[idx]
-            = (std::isfinite(ratio)) ? ratio : 0.0f;
+            = std::isfinite(ratio) ? std::clamp(ratio, 0.0f, 10.0f) : 0.0f;
       }
     }
   } else {
@@ -2843,6 +2870,57 @@ void NesterovBase::runRoutabilityGradient(int iter)
       }
     }
   }
+
+  // ── Precompute cone volume (once, after congestion map is populated) ──
+  if (routability_cone_volume_ == 0.0f && routability_tile_size_ > 0) {
+    int tile_range_local = static_cast<int>(
+        std::ceil(static_cast<float>(nbVars_.routability_pass_range)
+                  / static_cast<float>(routability_tile_size_)));
+    float sum_decay = 0.0f;
+    float tile_range_sq = static_cast<float>(
+        tile_range_local * tile_range_local);
+    for (int dx = -tile_range_local; dx <= tile_range_local; dx++) {
+      for (int dy = -tile_range_local; dy <= tile_range_local; dy++) {
+        float dsq = static_cast<float>(dx * dx + dy * dy);
+        if (dsq > tile_range_sq) {
+          continue;
+        }
+        float tile_dist = std::sqrt(dsq);
+        float decay = 1.0f
+                      - (tile_dist
+                         / static_cast<float>(tile_range_local));
+        if (decay > 0.0f) {
+          sum_decay += decay;
+        }
+      }
+    }
+    routability_cone_volume_ = sum_decay;
+    debugPrint(log_, GPL, "routability", 1,
+               "Cone volume: {:.1f} (range={} tiles)",
+               routability_cone_volume_, tile_range_local);
+  }
+
+  // Collect congestion statistics after GRT/RUDY refresh
+  {
+    float min_c = 1e30f, max_c = -1e30f, sum_c = 0.0f;
+    int nz = 0;
+    for (auto c : routability_tile_congestion_) {
+      if (c > 0.0f) {
+        min_c = std::min(min_c, c);
+        max_c = std::max(max_c, c);
+        sum_c += c;
+        nz++;
+      }
+    }
+    debugPrint(log_, GPL, "routability", 1,
+               "Routability pass iter {}: {} tiles {}x{} sz={}, "
+               "cong [{:.3f}, {:.3f}] nz={}/{}",
+               iter, (int)routability_tile_congestion_.size(),
+               routability_tile_cnt_x_, routability_tile_cnt_y_,
+               routability_tile_size_,
+               nz > 0 ? min_c : 0.0f, nz > 0 ? max_c : 0.0f,
+               nz, (int)routability_tile_congestion_.size());
+  }
 }
 
 std::optional<float> NesterovBase::getTileCongestion(int tile_x,
@@ -2876,61 +2954,13 @@ std::pair<int, int> NesterovBase::getCellCoordsFromTileCoords(int tile_x,
 
 FloatPoint NesterovBase::getRoutabilityGradient(const GCell* gCell) const
 {
-  // TODO: Boilerplate code, implement actual algorithm.
-  //
-  // Access pattern for tile congestion data:
-  //
-  //   1. Find which tile this cell falls into:
-  //      int tile_x = (gCell->cx() - routability_grid_lx_) /
-  //      routability_tile_size_; int tile_y = (gCell->cy() -
-  //      routability_grid_ly_) / routability_tile_size_; tile_x =
-  //      std::clamp(tile_x, 0, routability_tile_cnt_x_ - 1); tile_y =
-  //      std::clamp(tile_y, 0, routability_tile_cnt_y_ - 1);
-  //
-  //   2. Access tile congestion:
-  //      int idx = tile_y * routability_tile_cnt_x_ + tile_x;
-  //      float congestion = routability_tile_congestion_[idx];
-  //
-  //   3. Iterate over neighborhood tiles within 'range':
-  //      int range_in_tiles = static_cast<int>(routability_pass_range /
-  //      routability_tile_size_); for (int dy = -range_in_tiles; dy <=
-  //      range_in_tiles; dy++) {
-  //        for (int dx = -range_in_tiles; dx <= range_in_tiles; dx++) {
-  //          int nx = tile_x + dx;
-  //          int ny = tile_y + dy;
-  //          if (nx < 0 || nx >= routability_tile_cnt_x_) continue;
-  //          if (ny < 0 || ny >= routability_tile_cnt_y_) continue;
-  //          int nidx = ny * routability_tile_cnt_x_ + nx;
-  //          float neighbor_congestion = routability_tile_congestion_[nidx];
-  //          // ... compute force contribution from this tile
-  //        }
-  //      }
-  //
-  // Parameters available via nbVars_:
-  //   routability_pass_sharpness  - steepness of congestion response
-  //   routability_pass_weight     - overall scaling factor for the gradient
-  //   routability_pass_range      - neighborhood radius (DBU)
-  //   routability_pass_offset     - offset applied before sharpness
-  //
-
-  // Algorithm: For each routability congestion zone, the formula should be
-  // weight * distance_squared * (exp(sharpness * (congestion - offset)) - 1).
-  // The exponential component should yield a result where faraway stuff is
-  // irrelevant, but nearby low congestion will pull on the cell.
-  // TODO: This shouldn't overpower more important things, and there is no way
-  // to set that right now. WARNING: Keep in mind that the basis direction for
-  // this is FROM THE TILE TO THE CELL, so that positive values push the cell
-  // away from the congested zones
-
-  // FIXME: The first iter + 1 is paranoia to avoid this messing up the
-  // solution. Probably worth doing this whole orechstration differently
-  // honestly.
-  if (!npVars_->routability_driven_mode
-      || iter_ < (nbVars_.routability_pass_first_iter + 1)
-      || routability_tile_size_ == 0) {
+  // Gate: routability mode must be enabled AND the tile-size metadata
+  // must be populated (happens when runRoutabilityGradient first runs).
+  if (!npVars_->routability_driven_mode || routability_tile_size_ == 0) {
     return FloatPoint(0.0f, 0.0f);
   }
-  // TODO: Figure out if this is wise
+
+  // ── Find cell's tile ──────────────────────────────────────────
   int cell_tile_x
       = (gCell->cx() - routability_grid_lx_) / routability_tile_size_;
   int cell_tile_y
@@ -2938,24 +2968,33 @@ FloatPoint NesterovBase::getRoutabilityGradient(const GCell* gCell) const
   cell_tile_x = std::clamp(cell_tile_x, 0, routability_tile_cnt_x_ - 1);
   cell_tile_y = std::clamp(cell_tile_y, 0, routability_tile_cnt_y_ - 1);
 
-  // Not sure if this will be suceptible to round-to-zero problems or other
-  // issues
-  int tile_range = nbVars_.routability_pass_range / routability_tile_size_;
-
-  int upper_x = std::clamp(
-      cell_tile_x, cell_tile_x + tile_range, routability_tile_cnt_x_ - 1);
-  int upper_y = std::clamp(
-      cell_tile_y, cell_tile_y + tile_range, routability_tile_cnt_x_ - 1);
-  int lower_x = std::clamp(
-      cell_tile_x, cell_tile_x - tile_range, routability_tile_cnt_x_ - 1);
-  int lower_y = std::clamp(
-      cell_tile_y, cell_tile_y - tile_range, routability_tile_cnt_x_ - 1);
+  // ── Neighborhood bounds ───────────────────────────────────────
+  int tile_range = static_cast<int>(
+      std::ceil(static_cast<float>(nbVars_.routability_pass_range)
+                / static_cast<float>(routability_tile_size_)));
+  if (tile_range == 0) {
+    return FloatPoint(0.0f, 0.0f);
+  }
+  int lower_x = std::max(cell_tile_x - tile_range, 0);
+  int lower_y = std::max(cell_tile_y - tile_range, 0);
+  int upper_x = std::min(cell_tile_x + tile_range, routability_tile_cnt_x_ - 1);
+  int upper_y = std::min(cell_tile_y + tile_range, routability_tile_cnt_y_ - 1);
 
   float tile_range_squared = float(tile_range * tile_range);
 
-  auto routability_force = FloatPoint(0, 0);
-  // rx and ry are tile-space coordinates that we iterate over the whole
-  // neighborhood of the cell on.
+  // ── Parameters ───────────────────────────────────────────────
+  const float sharpness = nbVars_.routability_pass_sharpness;
+  const float slope = nbVars_.routability_pass_slope;
+  const float clamp_val = nbVars_.routability_pass_clamp;
+  const float threshold = nbVars_.routability_pass_offset;
+
+  // Timing-style normalisation: log₂(1+V) / V  (bounded pair with precond)
+  float V = routability_cone_volume_;
+  float norm_factor = (V > 0.0f) ? (std::log2(1.0f + V) / V) : 0.0f;
+
+  // ── Accumulate per-tile contributions ───────────────────────
+  FloatPoint routability_force(0.0f, 0.0f);
+
   for (int rx = lower_x; rx <= upper_x; rx++) {
     for (int ry = lower_y; ry <= upper_y; ry++) {
       float distance_squared
@@ -2964,30 +3003,43 @@ FloatPoint NesterovBase::getRoutabilityGradient(const GCell* gCell) const
       if (distance_squared > tile_range_squared) {
         continue;
       }
-      auto congestion_opt = getTileCongestion(rx, ry);
 
+      auto congestion_opt = getTileCongestion(rx, ry);
       if (!congestion_opt) {
         continue;
       }
       float congestion = congestion_opt.value();
-      FloatPoint tile_cellspace_coords
-          = FloatPoint(getCellCoordsFromTileCoords(rx, ry));
-      FloatPoint cell_coords = FloatPoint(gCell->cx(), gCell->cy());
-      FloatPoint cell_to_tile_vector
-          = cell_coords
-            - tile_cellspace_coords;  // see warning above about needing this to
-                                      // be tile->cell
 
-      float cell_to_tile_distance = cell_to_tile_vector.magnitude();
-      // We never unit-vectorred the original vector so we only need to multiply
-      // by distance once.
-      float force_weight
-          = cell_to_tile_distance * nbVars_.routability_pass_weight
-            * (std::exp(nbVars_.routability_pass_sharpness
-                        * (congestion - nbVars_.routability_pass_offset))
-               - 1.0f);
-      FloatPoint scaled_vector = cell_to_tile_vector * force_weight;
-      FloatPoint routability_force = routability_force + scaled_vector;
+      // ── Softplus penalty (same math as timing slack weight) ────
+      float penalty = calculateRoutabilityCongestionWeight(
+          congestion, sharpness, threshold, slope, clamp_val);
+      if (penalty <= 0.0f) {
+        continue;
+      }
+
+      // ── Direction: unit vector from tile center → cell ──────
+      FloatPoint tile_center = FloatPoint(
+          getCellCoordsFromTileCoords(rx, ry));
+      FloatPoint cell_pos(gCell->cx(), gCell->cy());
+      FloatPoint direction = cell_pos - tile_center;
+      float dist = direction.magnitude();
+      if (dist <= 0.0f) {
+        continue;  // own tile — undefined direction
+      }
+      direction.x /= dist;
+      direction.y /= dist;
+
+      // ── Distance decay: linear cone, 1 at center → 0 at R ──
+      float tile_dist = std::sqrt(distance_squared);  // in tile-units
+      float decay = 1.0f - (tile_dist / static_cast<float>(tile_range));
+      if (decay <= 0.0f) {
+        continue;
+      }
+
+      // ── Contribution (log₂-normalised, timing-style bounded pair) ──
+      float contrib = decay * penalty * norm_factor;
+      routability_force.x += direction.x * contrib;
+      routability_force.y += direction.y * contrib;
     }
   }
 
@@ -5283,6 +5335,27 @@ static float calculateTimingSlackWeight(float slack,
   float slack_clamp_component
       = slope * softplus_exact(clamp_offset - slack, sharpness * slope);
   return slack_penalty_component - slack_clamp_component;
+}
+
+// Flipped timing-slack-weight for routability: congestion is "worse
+// when higher", the opposite of slack.  The math is identical — only
+// the sign of the input is reversed.
+static float calculateRoutabilityCongestionWeight(float congestion,
+                                                  float sharpness,
+                                                  float threshold,
+                                                  float slope,
+                                                  float clamp)
+{
+  if (slope == 0.0f) {
+    return 0.0f;
+  }
+  float clamp_offset = threshold + (clamp / slope);
+  float congestion_rise
+      = slope * softplus_exact(congestion - threshold, sharpness * slope);
+  float congestion_clamp
+      = slope
+        * softplus_exact(congestion - clamp_offset, sharpness * slope);
+  return congestion_rise - congestion_clamp;
 }
 
 void gpl::NesterovBase::runTimingPassGradient(

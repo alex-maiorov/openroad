@@ -976,9 +976,11 @@ int NesterovPlace::doNesterovPlace(int start_iter)
       log_->logToDbMetadata(utl::GPL, "timing_gradpass_precond_count_weight", fmt::format("{:e}", (double)nbv.timing_pass_precond_count_weight));
       log_->logToDbMetadata(utl::GPL, "timing_gradpass_blend", fmt::format("{:e}", (double)nbv.timing_pass_blend));
       log_->logToDbMetadata(utl::GPL, "routability_gradpass_sharpness", fmt::format("{:e}", (double)nbv.routability_pass_sharpness));
-      log_->logToDbMetadata(utl::GPL, "routability_gradpass_weight", fmt::format("{:e}", (double)nbv.routability_pass_weight));
-      log_->logToDbMetadata(utl::GPL, "routability_gradpass_range", fmt::format("{:e}", (double)nbv.routability_pass_range));
+      log_->logToDbMetadata(utl::GPL, "routability_gradpass_slope", fmt::format("{:e}", (double)nbv.routability_pass_slope));
+      log_->logToDbMetadata(utl::GPL, "routability_gradpass_clamp", fmt::format("{:e}", (double)nbv.routability_pass_clamp));
       log_->logToDbMetadata(utl::GPL, "routability_gradpass_offset", fmt::format("{:e}", (double)nbv.routability_pass_offset));
+      log_->logToDbMetadata(utl::GPL, "routability_gradpass_precond_weight", fmt::format("{:e}", (double)nbv.routability_pass_precond_weight));
+      log_->logToDbMetadata(utl::GPL, "routability_gradpass_range", fmt::format("{:e}", (double)nbv.routability_pass_range));
       log_->logToDbMetadata(utl::GPL, "routability_gradpass_first_iter", std::to_string(nbv.routability_pass_first_iter));
       log_->logToDbMetadata(utl::GPL, "routability_gradpass_run_interval", std::to_string(nbv.routability_pass_run_interval));
       log_->logToDbMetadata(utl::GPL, "routability_gradpass_use_grt", std::to_string(nbv.routability_pass_use_grt));
