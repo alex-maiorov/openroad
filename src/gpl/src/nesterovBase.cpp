@@ -2952,6 +2952,14 @@ std::pair<int, int> NesterovBase::getCellCoordsFromTileCoords(int tile_x,
   return {cx, cy};
 }
 
+// Forward: flipped timing-slack-weight for routability (defined below
+// alongside calculateTimingSlackWeight).
+static float calculateRoutabilityCongestionWeight(float congestion,
+                                                  float sharpness,
+                                                  float threshold,
+                                                  float slope,
+                                                  float clamp);
+
 FloatPoint NesterovBase::getRoutabilityGradient(const GCell* gCell) const
 {
   // Gate: routability mode must be enabled AND the tile-size metadata
