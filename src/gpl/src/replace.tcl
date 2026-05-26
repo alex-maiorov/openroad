@@ -48,13 +48,15 @@ sta::define_cmd_args "global_placement" {\
      [-timing_gradpass_saturation_minl timing_gradpass_saturation_minl]\
      [-timing_gradpass_precond_count_weight timing_gradpass_precond_count_weight]\
      [-timing_gradpass_blend timing_gradpass_blend]\
-     [-routability_gradpass_sharpness routability_gradpass_sharpness]\
-     [-routability_gradpass_weight routability_gradpass_weight]\
-     [-routability_gradpass_range routability_gradpass_range]\
-     [-routability_gradpass_offset routability_gradpass_offset]\
-     [-routability_gradpass_first_iter routability_gradpass_first_iter]\
-     [-routability_gradpass_run_interval routability_gradpass_run_interval]\
-     [-routability_gradpass_use_grt]
+      [-routability_gradpass_sharpness routability_gradpass_sharpness]\
+      [-routability_gradpass_slope routability_gradpass_slope]\
+      [-routability_gradpass_clamp routability_gradpass_clamp]\
+      [-routability_gradpass_offset routability_gradpass_offset]\
+      [-routability_gradpass_precond_weight routability_gradpass_precond_weight]\
+      [-routability_gradpass_range routability_gradpass_range]\
+      [-routability_gradpass_first_iter routability_gradpass_first_iter]\
+      [-routability_gradpass_run_interval routability_gradpass_run_interval]\
+      [-routability_gradpass_use_grt]
 }
 
 proc global_placement { args } {
@@ -88,9 +90,11 @@ proc global_placement { args } {
         -timing_gradpass_precond_count_weight \
         -timing_gradpass_blend \
         -routability_gradpass_sharpness \
-        -routability_gradpass_weight \
-        -routability_gradpass_range \
+        -routability_gradpass_slope \
+        -routability_gradpass_clamp \
         -routability_gradpass_offset \
+        -routability_gradpass_precond_weight \
+        -routability_gradpass_range \
         -routability_gradpass_first_iter \
         -routability_gradpass_run_interval} \
      flags {-skip_initial_place \
