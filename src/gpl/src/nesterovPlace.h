@@ -38,15 +38,15 @@ class NesterovPlace
 {
  public:
   NesterovPlace();
-   NesterovPlace(const NesterovPlaceVars& npVars,
-                 const std::shared_ptr<PlacerBaseCommon>& pbc,
-                 const std::shared_ptr<NesterovBaseCommon>& nbc,
-                 std::vector<std::shared_ptr<PlacerBase>>& pbVec,
-                 std::vector<std::shared_ptr<NesterovBase>>& nbVec,
-                 std::shared_ptr<RouteBase> rb,
-                 sta::dbSta* sta,
-                 std::unique_ptr<AbstractGraphics> graphics,
-                 utl::Logger* log);
+  NesterovPlace(const NesterovPlaceVars& npVars,
+                const std::shared_ptr<PlacerBaseCommon>& pbc,
+                const std::shared_ptr<NesterovBaseCommon>& nbc,
+                std::vector<std::shared_ptr<PlacerBase>>& pbVec,
+                std::vector<std::shared_ptr<NesterovBase>>& nbVec,
+                std::shared_ptr<RouteBase> rb,
+                sta::dbSta* sta,
+                std::unique_ptr<AbstractGraphics> graphics,
+                utl::Logger* log);
 
   ~NesterovPlace();
 
@@ -59,7 +59,10 @@ class NesterovPlace
 
   void updateDb();
 
-  void checkInvalidValues(float wireLengthGradSum, float densityGradSum);
+  void checkInvalidValues(float wireLengthGradSum,
+                          float densityGradSum,
+                          float timingGradSum,
+                          float routabilityGradSum);
 
   float getWireLengthCoefX() const { return wireLengthCoefX_; }
   float getWireLengthCoefY() const { return wireLengthCoefY_; }
@@ -68,7 +71,7 @@ class NesterovPlace
   void setTargetOverflow(float overflow) { npVars_.targetOverflow = overflow; }
   void setMaxIters(int limit) { npVars_.maxNesterovIter = limit; }
 
-   void npUpdatePrevGradient(const std::shared_ptr<NesterovBase>& nb);
+  void npUpdatePrevGradient(const std::shared_ptr<NesterovBase>& nb);
   void npUpdateCurGradient(const std::shared_ptr<NesterovBase>& nb);
   void npUpdateNextGradient(const std::shared_ptr<NesterovBase>& nb);
 
@@ -99,7 +102,8 @@ class NesterovPlace
 
   bool isDiverged(float& diverge_snapshot_WlCoefX,
                   float& diverge_snapshot_WlCoefY,
-                  bool& is_diverge_snapshot_saved);
+                  bool& is_diverge_snapshot_saved,
+                  bool skip_revert = false);
   void routabilitySnapshot(int iter,
                            float curA,
                            const std::string& routability_driven_dir,
@@ -170,6 +174,7 @@ class NesterovPlace
   int64_t prevHpwl_ = 0;
 
   int num_region_diverged_ = 0;
+  int consecutiveDivergeCount_ = 0;
   bool is_routability_need_ = true;
 
   std::string divergeMsg_;

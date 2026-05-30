@@ -8,7 +8,7 @@
 # What it does:
 #   1. Activates the .venv (created by setup_venv.sh).
 #   2. Preprocesses the database (idempotent — skips if already done).
-#   3. Launches all 7 Dash servers in the background, each with --read-only.
+#   3. Launches all 10 Dash servers in the background, each with --read-only.
 #   4. Prints the URLs and waits.  Ctrl+C kills all servers.
 #
 # Pre-requisites:
@@ -27,8 +27,8 @@ TOOLS_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"   # tools/
 if [ $# -lt 1 ]; then
     echo "USAGE: $0 <path/to/database.sqlite>" >&2
     echo "" >&2
-    echo "Preprocesses the database, then launches all 7 Dash analysis GUIs" >&2
-    echo "in read-only mode on ports 8050–8056." >&2
+    echo "Preprocesses the database, then launches all 10 Dash analysis GUIs" >&2
+    echo "in read-only mode on ports 8050–8059." >&2
     exit 1
 fi
 
@@ -85,6 +85,9 @@ TOOLS=(
     "cell_path_stats          8054"
     "path_transience          8055"
     "cell_timing_stability     8056"
+    "pes_viewer               8057"
+    "force_opposition_map     8058"
+    "work_budget_analyzer     8059"
 )
 
 # Collect PIDs so we can kill them on exit
@@ -119,7 +122,7 @@ done
 
 echo ""
 echo "============================================================"
-echo " All 7 Dash servers are running.  Open in your browser:"
+echo " All 10 Dash servers are running.  Open in your browser:"
 echo ""
 echo "   http://localhost:8050  →  Path Visualizer"
 echo "   http://localhost:8051  →  Cell Force Analyzer"
@@ -128,6 +131,9 @@ echo "   http://localhost:8053  →  Cell Trajectory Viewer"
 echo "   http://localhost:8054  →  Cell Path Statistics"
 echo "   http://localhost:8055  →  Path Transience"
 echo "   http://localhost:8056  →  Cell Timing Stability"
+echo "   http://localhost:8057  →  PES Viewer"
+echo "   http://localhost:8058  →  Force Opposition Map"
+echo "   http://localhost:8059  →  Work Budget Analyzer"
 echo ""
 echo " Press Ctrl+C to stop all servers."
 echo "============================================================"

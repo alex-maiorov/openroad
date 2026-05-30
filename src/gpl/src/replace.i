@@ -28,6 +28,10 @@ static gpl::PlaceOptions getOptions(
   checkFlag(flags, "-routability_use_grt", options.routabilityUseRudy, false);
   checkFlag(
       flags, "-disable_revert_if_diverge", options.disableRevertIfDiverge);
+  checkKey(
+      keys,
+      "-diverge_consecutive_threshold",
+      options.divergeConsecutiveThreshold);
   checkFlag(
       flags, "-disable_pin_density_adjust", options.disablePinDensityAdjust);
   checkFlag(

@@ -825,6 +825,7 @@ struct NesterovPlaceVars
   int timingDrivenIterCounter = 0;
   const bool routability_driven_mode;
   const bool disableRevertIfDiverge;
+  const int divergeConsecutiveThreshold;
   bool debug = false;
   int timingGradPassStaRunInterval;
   int timingGradPassFirstIter;
@@ -1093,7 +1094,7 @@ class NesterovBase
   FloatPoint getDensityGradient(const GCell* gCell) const;
 
   FloatPoint getTimingPreconditioner(const GCell* gCell,
-                                      size_t cell_index) const;
+                                     size_t cell_index) const;
 
   FloatPoint getTimingGradient(const GCell* gCell) const;
   FloatPoint getTimingGradient(size_t gCellIndex,
@@ -1190,6 +1191,7 @@ class NesterovBase
   void printStepLength() { printf("stepLength = %f\n", stepLength_); }
 
   bool isDiverged() const { return isDiverged_; }
+  void resetDiverged() { isDiverged_ = false; }
 
   void createCbkGCell(odb::dbInst* db_inst, size_t stor_index);
   std::optional<std::pair<odb::dbInst*, size_t>> destroyCbkGCell(
@@ -1411,6 +1413,15 @@ class NesterovBase
 
   bool isDiverged_ = false;
 
+  // Timing-aware divergence suppression: track WNS/TNS across STA updates.
+  // checkDivergence() requires both WNS and TNS to degrade (become more
+  // negative) between consecutive STA queries before flagging HPWL/overflow
+  // degradation as true divergence in timing-driven mode.
+  float prev_wns_ = 0.0f;
+  float prev_tns_ = 0.0f;
+  bool timing_degraded_ = false;
+  int sta_update_count_ = 0;
+
   const NesterovPlaceVars* npVars_ = nullptr;
 
   float minSumOverflow_ = 1e30;
@@ -1460,8 +1471,6 @@ class NesterovBase
                                           size_t path_length,
                                           bool is_endpoint,
                                           size_t cell_index) const;
-
-
 
  private:
   // TimingPass member variables - now in nbVars_

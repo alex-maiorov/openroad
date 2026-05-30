@@ -1112,8 +1112,7 @@ NesterovBaseVars::NesterovBaseVars(const PlaceOptions& options)
       routability_pass_slope(options.routabilityGradPassSlope),
       routability_pass_clamp(options.routabilityGradPassClamp),
       routability_pass_offset(options.routabilityGradPassOffset),
-      routability_pass_precond_weight(
-          options.routabilityGradPassPrecondWeight),
+      routability_pass_precond_weight(options.routabilityGradPassPrecondWeight),
       routability_pass_range(options.routabilityGradPassRange),
       routability_pass_first_iter(options.routabilityGradPassFirstIter),
       routability_pass_run_interval(options.routabilityGradPassRunInterval),
@@ -1134,6 +1133,7 @@ NesterovPlaceVars::NesterovPlaceVars(const PlaceOptions& options)
       timingDrivenMode(options.timingDrivenMode),
       routability_driven_mode(options.routabilityDrivenMode),
       disableRevertIfDiverge(options.disableRevertIfDiverge),
+      divergeConsecutiveThreshold(options.divergeConsecutiveThreshold),
       timingGradPassStaRunInterval(options.timingGradPassStaRunInterval),
       timingGradPassFirstIter(options.timingGradPassFirstIter),
       routabilityGradPassFirstIter(options.routabilityGradPassFirstIter),
@@ -2689,10 +2689,9 @@ FloatPoint NesterovBase::getTimingPreconditioner(const GCell* gCell,
   if (count <= 0) {
     return FloatPoint(1, 1);
   }
-  const float precond
-      = 1.0f
-        + std::log2(1.0f + static_cast<float>(count))
-              * nbVars_.timing_pass_precond_count_weight;
+  const float precond = 1.0f
+                        + std::log2(1.0f + static_cast<float>(count))
+                              * nbVars_.timing_pass_precond_count_weight;
   return FloatPoint(precond, precond);
 }
 
@@ -2714,7 +2713,10 @@ void NesterovBase::runRoutabilityGradient(int iter)
     static bool warned = false;
     if (!warned) {
       warned = true;
-      debugPrint(log_, GPL, "routability", 1,
+      debugPrint(log_,
+                 GPL,
+                 "routability",
+                 1,
                  "Routability gradient: est_ is null, skipping.");
     }
     return;
@@ -2723,7 +2725,10 @@ void NesterovBase::runRoutabilityGradient(int iter)
     static bool warned = false;
     if (!warned) {
       warned = true;
-      debugPrint(log_, GPL, "routability", 1,
+      debugPrint(log_,
+                 GPL,
+                 "routability",
+                 1,
                  "Routability gradient: routability_driven_mode={}, skipping.",
                  npVars_ ? npVars_->routability_driven_mode : false);
     }
@@ -2751,7 +2756,10 @@ void NesterovBase::runRoutabilityGradient(int iter)
     static bool warned = false;
     if (!warned) {
       warned = true;
-      debugPrint(log_, GPL, "routability", 1,
+      debugPrint(log_,
+                 GPL,
+                 "routability",
+                 1,
                  "Routability gradient: grouter is null, skipping.");
     }
     return;
@@ -2877,8 +2885,8 @@ void NesterovBase::runRoutabilityGradient(int iter)
         std::ceil(static_cast<float>(nbVars_.routability_pass_range)
                   / static_cast<float>(routability_tile_size_)));
     float sum_decay = 0.0f;
-    float tile_range_sq = static_cast<float>(
-        tile_range_local * tile_range_local);
+    float tile_range_sq
+        = static_cast<float>(tile_range_local * tile_range_local);
     for (int dx = -tile_range_local; dx <= tile_range_local; dx++) {
       for (int dy = -tile_range_local; dy <= tile_range_local; dy++) {
         float dsq = static_cast<float>(dx * dx + dy * dy);
@@ -2886,18 +2894,20 @@ void NesterovBase::runRoutabilityGradient(int iter)
           continue;
         }
         float tile_dist = std::sqrt(dsq);
-        float decay = 1.0f
-                      - (tile_dist
-                         / static_cast<float>(tile_range_local));
+        float decay = 1.0f - (tile_dist / static_cast<float>(tile_range_local));
         if (decay > 0.0f) {
           sum_decay += decay;
         }
       }
     }
     routability_cone_volume_ = sum_decay;
-    debugPrint(log_, GPL, "routability", 1,
+    debugPrint(log_,
+               GPL,
+               "routability",
+               1,
                "Cone volume: {:.1f} (range={} tiles)",
-               routability_cone_volume_, tile_range_local);
+               routability_cone_volume_,
+               tile_range_local);
   }
 
   // Collect congestion statistics after GRT/RUDY refresh
@@ -2912,14 +2922,21 @@ void NesterovBase::runRoutabilityGradient(int iter)
         nz++;
       }
     }
-    debugPrint(log_, GPL, "routability", 1,
+    debugPrint(log_,
+               GPL,
+               "routability",
+               1,
                "Routability pass iter {}: {} tiles {}x{} sz={}, "
                "cong [{:.3f}, {:.3f}] nz={}/{}",
-               iter, (int)routability_tile_congestion_.size(),
-               routability_tile_cnt_x_, routability_tile_cnt_y_,
+               iter,
+               (int) routability_tile_congestion_.size(),
+               routability_tile_cnt_x_,
+               routability_tile_cnt_y_,
                routability_tile_size_,
-               nz > 0 ? min_c : 0.0f, nz > 0 ? max_c : 0.0f,
-               nz, (int)routability_tile_congestion_.size());
+               nz > 0 ? min_c : 0.0f,
+               nz > 0 ? max_c : 0.0f,
+               nz,
+               (int) routability_tile_congestion_.size());
   }
 }
 
@@ -3026,8 +3043,7 @@ FloatPoint NesterovBase::getRoutabilityGradient(const GCell* gCell) const
       }
 
       // ── Direction: unit vector from tile center → cell ──────
-      FloatPoint tile_center = FloatPoint(
-          getCellCoordsFromTileCoords(rx, ry));
+      FloatPoint tile_center = FloatPoint(getCellCoordsFromTileCoords(rx, ry));
       FloatPoint cell_pos(gCell->cx(), gCell->cy());
       FloatPoint direction = cell_pos - tile_center;
       float dist = direction.magnitude();
@@ -3977,11 +3993,21 @@ bool NesterovBase::checkConvergence(int gpl_iter_count,
 
 bool NesterovBase::checkDivergence()
 {
+  // When timing-driven mode is active and STA has been queried at least once,
+  // require timing degradation (both WNS and TNS got worse) in addition to
+  // the HPWL/overflow divergence conditions.  This prevents false-positive
+  // divergence exits when the solver legitimately trades wirelength for timing.
+  const bool require_timing_degraded
+      = npVars_->timingDrivenMode && sta_update_count_ > 0;
+
   if (sum_overflow_unscaled_ < 0.2f
       && sum_overflow_unscaled_ - minSumOverflow_ >= 0.02f
       && hpwlWithMinSumOverflow_ * 1.2f < prev_hpwl_) {
-    isDiverged_ = true;
-    log_->warn(GPL, 323, "Divergence detected between consecutive iterations");
+    if (!require_timing_degraded || timing_degraded_) {
+      isDiverged_ = true;
+      log_->warn(
+          GPL, 323, "Divergence detected between consecutive iterations");
+    }
   }
 
   // Check if both overflow and HPWL increase
@@ -3996,13 +4022,15 @@ bool NesterovBase::checkDivergence()
     const float hpwl_acceptance = 0.25f;
     if (overflow_change >= overflow_acceptance
         && hpwl_increase >= hpwl_acceptance) {
-      isDiverged_ = true;
-      log_->warn(GPL,
-                 324,
-                 "Divergence detected between reported values. Overflow "
-                 "change: {:g}, HPWL increase: {:g}%.",
-                 overflow_change,
-                 hpwl_increase * 100.0f);
+      if (!require_timing_degraded || timing_degraded_) {
+        isDiverged_ = true;
+        log_->warn(GPL,
+                   324,
+                   "Divergence detected between reported values. Overflow "
+                   "change: {:g}, HPWL increase: {:g}%.",
+                   overflow_change,
+                   hpwl_increase * 100.0f);
+      }
     }
   }
 
@@ -5361,8 +5389,7 @@ static float calculateRoutabilityCongestionWeight(float congestion,
   float congestion_rise
       = slope * softplus_exact(congestion - threshold, sharpness * slope);
   float congestion_clamp
-      = slope
-        * softplus_exact(congestion - clamp_offset, sharpness * slope);
+      = slope * softplus_exact(congestion - clamp_offset, sharpness * slope);
   return congestion_rise - congestion_clamp;
 }
 
@@ -5788,6 +5815,23 @@ void NesterovBase::updateSTA()
     }
     // Estimate parasitics directly without using the resizer
     est_->estimateParasitics(parasitics_src);
+
+    // Query design-wide WNS/TNS from STA to detect timing degradation.
+    // These are used by checkDivergence() to suppress false-positive
+    // divergence exits when HPWL increases are the result of intentional
+    // timing optimization rather than numerical instability.
+    float current_wns = sta_->worstSlack(sta::MinMax::max());
+    float current_tns = sta_->totalNegativeSlack(sta::MinMax::max());
+
+    if (sta_update_count_ > 0) {
+      // Both WNS and TNS must degrade (become more negative) for timing
+      // to be considered "worsened".  A single metric improving is enough
+      // to treat the iteration as a legitimate timing-for-WL trade-off.
+      timing_degraded_ = (current_wns < prev_wns_) && (current_tns < prev_tns_);
+    }
+    prev_wns_ = current_wns;
+    prev_tns_ = current_tns;
+    sta_update_count_++;
   } else {
     debugPrint(
         log_, GPL, "timing", 1, "Could not update STA, est or sta were null");
@@ -5871,15 +5915,18 @@ void gpl::NesterovBase::dumpBinGrid(int iter)
   std::vector<float> electro_x(num_bins);
   std::vector<float> electro_y(num_bins);
   std::vector<float> density(num_bins);
+  std::vector<float> electro_phi(num_bins);
 
   for (size_t i = 0; i < num_bins; i++) {
     bin_idx[i] = i;
     electro_x[i] = bins[i].electroFieldX();
     electro_y[i] = bins[i].electroFieldY();
     density[i] = bins[i].getDensity();
+    electro_phi[i] = bins[i].electroPhi();
   }
 
-  log_->logToDbBulk<"Iter,BinIdx,ElectroFieldX,ElectroFieldY,Density">(
+  log_->logToDbBulk<
+      "Iter,BinIdx,ElectroFieldX,ElectroFieldY,Density,ElectroPhi">(
       utl::GPL,
       812,
       "gpl_bin_grid",
@@ -5888,7 +5935,8 @@ void gpl::NesterovBase::dumpBinGrid(int iter)
       bin_idx.begin(),
       electro_x.begin(),
       electro_y.begin(),
-      density.begin());
+      density.begin(),
+      electro_phi.begin());
 }
 
 void gpl::NesterovBase::dumpCellDenseGradients(int iter)

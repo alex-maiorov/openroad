@@ -3,10 +3,10 @@
 
 #pragma once
 
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
-#include <limits>
 
 namespace odb {
 class dbDatabase;
@@ -65,6 +65,7 @@ struct PlaceOptions
   int nesterovPlaceMaxIter = 5000;
   bool routabilityUseRudy = true;
   bool disableRevertIfDiverge = false;
+  int divergeConsecutiveThreshold = 1;
   bool disablePinDensityAdjust = false;
   bool enable_routing_congestion = false;
   float minPhiCoef = 0.95;
@@ -94,38 +95,39 @@ struct PlaceOptions
   int padRight = 0;
 
   // TimingPass parameters for gradient-based timing optimization
-   int timingGradPassTopN = 10;
-   int timingGradPassNPathsPerEndpoint = 1;
-   float timingGradPassProjWeight = 1.0F;
-   float timingGradPassEndToEndWeight = 1.0F;
-   float timingGradPassSlackSharpness = 1.0F;
-   float timingGradPassSlackSlope = 0.0F;
-   float timingGradPassSlackClamp = 1e32F;
-   float timingGradPassSlackOffset = 0.0F;
-   float timingGradPassSlackUpper = 0.0F;
-   int timingGradPassStaRunInterval = 10;
-   int timingGradPassFirstIter = 0;
-   float timingGradPassSaturationKL = 3.0F;
-   float timingGradPassSaturationMinL = 1000.0F;
-   float timingGradPassPrecondCountWeight = 1.0F;
-   float timingGradPassBlend = 0.3F;
+  int timingGradPassTopN = 10;
+  int timingGradPassNPathsPerEndpoint = 1;
+  float timingGradPassProjWeight = 1.0F;
+  float timingGradPassEndToEndWeight = 1.0F;
+  float timingGradPassSlackSharpness = 1.0F;
+  float timingGradPassSlackSlope = 0.0F;
+  float timingGradPassSlackClamp = 1e32F;
+  float timingGradPassSlackOffset = 0.0F;
+  float timingGradPassSlackUpper = 0.0F;
+  int timingGradPassStaRunInterval = 10;
+  int timingGradPassFirstIter = 0;
+  float timingGradPassSaturationKL = 3.0F;
+  float timingGradPassSaturationMinL = 1000.0F;
+  float timingGradPassPrecondCountWeight = 1.0F;
+  float timingGradPassBlend = 0.3F;
 
   // RoutabilityGradPass parameters for gradient-based routability optimization
-   // Penalty function mirrors the timing slack-weight pattern:
-   //   penalty = slope × [softplus_exact(congestion − offset, sharpness×slope)
-   //                     − softplus_exact(congestion − clamp_offset, sharpness×slope)]
-   //   where clamp_offset = offset + clamp / slope.
-   // The force is normalised by log₂(1+V)/V (V = cone volume) and the
-   // preconditioner is 1 + w × log₂(1+V), forming a bounded pair → penalty / w.
-   float routabilityGradPassSharpness = 1.0F;
-   float routabilityGradPassSlope = 1.0F;
-   float routabilityGradPassClamp = 10.0F;
-   float routabilityGradPassOffset = 0.3F;
-   float routabilityGradPassPrecondWeight = 0.1F;
-   float routabilityGradPassRange = 100000.0F;
-   int routabilityGradPassFirstIter = 800;
-   int routabilityGradPassRunInterval = 100;
-   bool routabilityGradPassUseGrt = false;
+  // Penalty function mirrors the timing slack-weight pattern:
+  //   penalty = slope × [softplus_exact(congestion − offset, sharpness×slope)
+  //                     − softplus_exact(congestion − clamp_offset,
+  //                     sharpness×slope)]
+  //   where clamp_offset = offset + clamp / slope.
+  // The force is normalised by log₂(1+V)/V (V = cone volume) and the
+  // preconditioner is 1 + w × log₂(1+V), forming a bounded pair → penalty / w.
+  float routabilityGradPassSharpness = 1.0F;
+  float routabilityGradPassSlope = 1.0F;
+  float routabilityGradPassClamp = 10.0F;
+  float routabilityGradPassOffset = 0.3F;
+  float routabilityGradPassPrecondWeight = 0.1F;
+  float routabilityGradPassRange = 100000.0F;
+  int routabilityGradPassFirstIter = 800;
+  int routabilityGradPassRunInterval = 100;
+  bool routabilityGradPassUseGrt = false;
 
   void skipIo();
   void validate(utl::Logger* log);

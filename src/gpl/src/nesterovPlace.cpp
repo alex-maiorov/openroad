@@ -4,6 +4,7 @@
 // Debug controls: npinit, updateGrad, np, updateNextIter
 
 #include "nesterovPlace.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -33,14 +34,14 @@ namespace gpl {
 using utl::GPL;
 
 NesterovPlace::NesterovPlace(const NesterovPlaceVars& npVars,
-                              const std::shared_ptr<PlacerBaseCommon>& pbc,
-                              const std::shared_ptr<NesterovBaseCommon>& nbc,
-                              std::vector<std::shared_ptr<PlacerBase>>& pbVec,
-                              std::vector<std::shared_ptr<NesterovBase>>& nbVec,
-                              std::shared_ptr<RouteBase> rb,
-                              sta::dbSta* sta,
-                              std::unique_ptr<gpl::AbstractGraphics> graphics,
-                              utl::Logger* log)
+                             const std::shared_ptr<PlacerBaseCommon>& pbc,
+                             const std::shared_ptr<NesterovBaseCommon>& nbc,
+                             std::vector<std::shared_ptr<PlacerBase>>& pbVec,
+                             std::vector<std::shared_ptr<NesterovBase>>& nbVec,
+                             std::shared_ptr<RouteBase> rb,
+                             sta::dbSta* sta,
+                             std::unique_ptr<gpl::AbstractGraphics> graphics,
+                             utl::Logger* log)
     : npVars_(npVars)
 {
   pbc_ = pbc;
@@ -56,7 +57,10 @@ NesterovPlace::NesterovPlace(const NesterovPlaceVars& npVars,
   // TRIVIAL CHANGE FOR VERIFICATION
   bool trivial_change_for_verification = true;
   if (trivial_change_for_verification) {
-    log_->info(GPL, 9999, "TRIVIAL CHANGE VERIFIED: {}", trivial_change_for_verification);
+    log_->info(GPL,
+               9999,
+               "TRIVIAL CHANGE VERIFIED: {}",
+               trivial_change_for_verification);
   }
 
   db_cbk_ = std::make_unique<nesterovDbCbk>(this);
@@ -92,6 +96,8 @@ void NesterovPlace::npUpdatePrevGradient(
   nb->nbUpdatePrevGradient(wireLengthCoefX_, wireLengthCoefY_);
   float wireLengthGradSum = nb->getWireLengthGradSum();
   float densityGradSum = nb->getDensityGradSum();
+  float timingGradSum = nb->getTimingGradSum();
+  float routabilityGradSum = nb->getRoutabilityGradSum();
 
   if (wireLengthGradSum == 0
       && recursionCntWlCoef_ < gpl::NesterovPlaceVars::maxRecursionWlCoef) {
@@ -116,7 +122,8 @@ void NesterovPlace::npUpdatePrevGradient(
     return;
   }
 
-  checkInvalidValues(wireLengthGradSum, densityGradSum);
+  checkInvalidValues(
+      wireLengthGradSum, densityGradSum, timingGradSum, routabilityGradSum);
 }
 
 void NesterovPlace::npUpdateCurGradient(const std::shared_ptr<NesterovBase>& nb)
@@ -124,6 +131,8 @@ void NesterovPlace::npUpdateCurGradient(const std::shared_ptr<NesterovBase>& nb)
   nb->nbUpdateCurGradient(wireLengthCoefX_, wireLengthCoefY_);
   float wireLengthGradSum = nb->getWireLengthGradSum();
   float densityGradSum = nb->getDensityGradSum();
+  float timingGradSum = nb->getTimingGradSum();
+  float routabilityGradSum = nb->getRoutabilityGradSum();
 
   if (wireLengthGradSum == 0
       && recursionCntWlCoef_ < gpl::NesterovPlaceVars::maxRecursionWlCoef) {
@@ -148,7 +157,8 @@ void NesterovPlace::npUpdateCurGradient(const std::shared_ptr<NesterovBase>& nb)
     return;
   }
 
-  checkInvalidValues(wireLengthGradSum, densityGradSum);
+  checkInvalidValues(
+      wireLengthGradSum, densityGradSum, timingGradSum, routabilityGradSum);
 }
 
 void NesterovPlace::npUpdateNextGradient(
@@ -158,6 +168,8 @@ void NesterovPlace::npUpdateNextGradient(
 
   float wireLengthGradSum = nb->getWireLengthGradSum();
   float densityGradSum = nb->getDensityGradSum();
+  float timingGradSum = nb->getTimingGradSum();
+  float routabilityGradSum = nb->getRoutabilityGradSum();
 
   if (wireLengthGradSum == 0
       && recursionCntWlCoef_ < gpl::NesterovPlaceVars::maxRecursionWlCoef) {
@@ -181,7 +193,8 @@ void NesterovPlace::npUpdateNextGradient(
     npUpdateNextGradient(nb);
     return;
   }
-  checkInvalidValues(wireLengthGradSum, densityGradSum);
+  checkInvalidValues(
+      wireLengthGradSum, densityGradSum, timingGradSum, routabilityGradSum);
 }
 
 void NesterovPlace::init()
@@ -273,6 +286,7 @@ void NesterovPlace::reset()
   wireLengthCoefX_ = wireLengthCoefY_ = 0;
   prevHpwl_ = 0;
   num_region_diverged_ = 0;
+  consecutiveDivergeCount_ = 0;
   is_routability_need_ = true;
 
   divergeMsg_ = "";
@@ -382,22 +396,21 @@ void NesterovPlace::updateIterGraphics(
 }
 
 void NesterovPlace::runTimingPass(int iter,
-                                   const std::string& timing_driven_dir,
-                                   int routability_driven_revert_count,
-                                   int& timing_driven_count,
-                                   int64_t& td_accumulated_delta_area,
-                                   bool is_routability_gpl_iter)
+                                  const std::string& timing_driven_dir,
+                                  int routability_driven_revert_count,
+                                  int& timing_driven_count,
+                                  int64_t& td_accumulated_delta_area,
+                                  bool is_routability_gpl_iter)
 {
-
   if (npVars_.timingDrivenMode) {
     updateDb();
 
-
-
     // Query STA and store violating paths for later gradient computation
     // This is called once per tp_sta_run_interval iterations
-    if (iter >= npVars_.timingGradPassFirstIter &&
-        ((iter - npVars_.timingGradPassFirstIter) % npVars_.timingGradPassStaRunInterval) == 0) {
+    if (iter >= npVars_.timingGradPassFirstIter
+        && ((iter - npVars_.timingGradPassFirstIter)
+            % npVars_.timingGradPassStaRunInterval)
+               == 0) {
       log_->info(GPL,
                  103,
                  "Timing-pass iteration {}",
@@ -410,14 +423,14 @@ void NesterovPlace::runTimingPass(int iter,
       ++timing_driven_count;
     }
 
-
     updateDb();
   }
 }
 
 bool NesterovPlace::isDiverged(float& diverge_snapshot_WlCoefX,
                                float& diverge_snapshot_WlCoefY,
-                               bool& is_diverge_snapshot_saved)
+                               bool& is_diverge_snapshot_saved,
+                               bool skip_revert)
 {
   // diverge detection on
   // large max_phi_cof value + large design
@@ -474,6 +487,11 @@ bool NesterovPlace::isDiverged(float& diverge_snapshot_WlCoefX,
     //   is_routability_need_ = false;
     // } else
     if (!npVars_.disableRevertIfDiverge && is_diverge_snapshot_saved) {
+      if (skip_revert) {
+        // Defer the revert — caller is counting consecutive divergences.
+        // Still return true so caller knows divergence was detected.
+        return true;
+      }
       // In case diverged and not in routability mode, finish with min hpwl
       // stored since overflow below 0.25
       log_->warn(GPL,
@@ -701,9 +719,8 @@ void NesterovPlace::runAllRoutabilityGradients(
                                           timing_driven_count);
 
     graphics_->saveLabeledImage(
-        fmt::format("{}/density_routability_{:05d}.png",
-                    routability_driven_dir,
-                    iter),
+        fmt::format(
+            "{}/density_routability_{:05d}.png", routability_driven_dir, iter),
         label,
         "Heat Maps/Placement Density");
 
@@ -731,8 +748,7 @@ void NesterovPlace::runAllRoutabilityGradients(
     }
 
     graphics_->addFrameLabel(bbox, label, label_name);
-    graphics_->setDisplayControl("Heat Maps/Estimated Congestion (RUDY)",
-                                 true);
+    graphics_->setDisplayControl("Heat Maps/Estimated Congestion (RUDY)", true);
     graphics_->gifAddFrame(
         routability_gif_key_, region, width_px, dbu_per_pixel, delay);
     graphics_->setDisplayControl("Heat Maps/Estimated Congestion (RUDY)",
@@ -944,51 +960,149 @@ int NesterovPlace::doNesterovPlace(int start_iter)
 {
   static bool metadata_logged = false;
   if (!metadata_logged) {
-    log_->logToDbMetadata(utl::GPL, "maxNesterovIter", std::to_string(npVars_.maxNesterovIter));
-    log_->logToDbMetadata(utl::GPL, "maxBackTrack", std::to_string(npVars_.maxBackTrack));
-    log_->logToDbMetadata(utl::GPL, "initDensityPenalty", fmt::format("{:e}", (double)npVars_.initDensityPenalty));
-    log_->logToDbMetadata(utl::GPL, "initWireLengthCoef", fmt::format("{:e}", (double)npVars_.initWireLengthCoef));
-    log_->logToDbMetadata(utl::GPL, "targetOverflow", fmt::format("{:e}", (double)npVars_.targetOverflow));
-    log_->logToDbMetadata(utl::GPL, "minPreconditioner", fmt::format("{:e}", (double)npVars_.minPreconditioner));
-    log_->logToDbMetadata(utl::GPL, "initialPrevCoordiUpdateCoef", fmt::format("{:e}", (double)npVars_.initialPrevCoordiUpdateCoef));
-    log_->logToDbMetadata(utl::GPL, "referenceHpwl", fmt::format("{:e}", (double)npVars_.referenceHpwl));
-    log_->logToDbMetadata(utl::GPL, "routability_end_overflow", fmt::format("{:e}", (double)npVars_.routability_end_overflow));
-    log_->logToDbMetadata(utl::GPL, "routability_snapshot_overflow", fmt::format("{:e}", (double)npVars_.routability_snapshot_overflow));
-    log_->logToDbMetadata(utl::GPL, "timingDrivenMode", std::to_string(npVars_.timingDrivenMode));
-    log_->logToDbMetadata(utl::GPL, "routability_driven_mode", std::to_string(npVars_.routability_driven_mode));
-    log_->logToDbMetadata(utl::GPL, "timingGradPassStaRunInterval", std::to_string(npVars_.timingGradPassStaRunInterval));
-    log_->logToDbMetadata(utl::GPL, "timingGradPassFirstIter", std::to_string(npVars_.timingGradPassFirstIter));
+    log_->logToDbMetadata(
+        utl::GPL, "maxNesterovIter", std::to_string(npVars_.maxNesterovIter));
+    log_->logToDbMetadata(
+        utl::GPL, "maxBackTrack", std::to_string(npVars_.maxBackTrack));
+    log_->logToDbMetadata(
+        utl::GPL,
+        "initDensityPenalty",
+        fmt::format("{:e}", (double) npVars_.initDensityPenalty));
+    log_->logToDbMetadata(
+        utl::GPL,
+        "initWireLengthCoef",
+        fmt::format("{:e}", (double) npVars_.initWireLengthCoef));
+    log_->logToDbMetadata(utl::GPL,
+                          "targetOverflow",
+                          fmt::format("{:e}", (double) npVars_.targetOverflow));
+    log_->logToDbMetadata(
+        utl::GPL,
+        "minPreconditioner",
+        fmt::format("{:e}", (double) npVars_.minPreconditioner));
+    log_->logToDbMetadata(
+        utl::GPL,
+        "initialPrevCoordiUpdateCoef",
+        fmt::format("{:e}", (double) npVars_.initialPrevCoordiUpdateCoef));
+    log_->logToDbMetadata(utl::GPL,
+                          "referenceHpwl",
+                          fmt::format("{:e}", (double) npVars_.referenceHpwl));
+    log_->logToDbMetadata(
+        utl::GPL,
+        "routability_end_overflow",
+        fmt::format("{:e}", (double) npVars_.routability_end_overflow));
+    log_->logToDbMetadata(
+        utl::GPL,
+        "routability_snapshot_overflow",
+        fmt::format("{:e}", (double) npVars_.routability_snapshot_overflow));
+    log_->logToDbMetadata(
+        utl::GPL, "timingDrivenMode", std::to_string(npVars_.timingDrivenMode));
+    log_->logToDbMetadata(utl::GPL,
+                          "routability_driven_mode",
+                          std::to_string(npVars_.routability_driven_mode));
+    log_->logToDbMetadata(utl::GPL,
+                          "timingGradPassStaRunInterval",
+                          std::to_string(npVars_.timingGradPassStaRunInterval));
+    log_->logToDbMetadata(utl::GPL,
+                          "timingGradPassFirstIter",
+                          std::to_string(npVars_.timingGradPassFirstIter));
 
     // Log timing weight parameters from NesterovBaseVars
     if (!nbVec_.empty()) {
       const auto& nbv = nbVec_[0]->getNbVars();
-      log_->logToDbMetadata(utl::GPL, "timing_gradpass_top_n", std::to_string(nbv.timing_pass_top_n));
-      log_->logToDbMetadata(utl::GPL, "timing_gradpass_n_paths_per_endpoint", std::to_string(nbv.timing_pass_n_paths_per_endpoint));
-      log_->logToDbMetadata(utl::GPL, "timing_gradpass_proj_weight", fmt::format("{:e}", (double)nbv.timing_pass_proj_weight));
-      log_->logToDbMetadata(utl::GPL, "timing_gradpass_end_to_end_weight", fmt::format("{:e}", (double)nbv.timing_pass_end_to_end_weight));
-      log_->logToDbMetadata(utl::GPL, "timing_gradpass_slack_sharpness", fmt::format("{:e}", (double)nbv.timing_pass_slack_sharpness));
-      log_->logToDbMetadata(utl::GPL, "timing_gradpass_slack_slope", fmt::format("{:e}", (double)nbv.timing_pass_slack_slope));
-      log_->logToDbMetadata(utl::GPL, "timing_gradpass_slack_clamp", fmt::format("{:e}", (double)nbv.timing_pass_slack_clamp));
-      log_->logToDbMetadata(utl::GPL, "timing_gradpass_slack_offset", fmt::format("{:e}", (double)nbv.timing_pass_slack_offset));
-      log_->logToDbMetadata(utl::GPL, "timing_gradpass_slack_upper", fmt::format("{:e}", (double)nbv.timing_pass_slack_upper));
-      log_->logToDbMetadata(utl::GPL, "timing_gradpass_saturation_kl", fmt::format("{:e}", (double)nbv.timing_pass_saturation_kL));
-      log_->logToDbMetadata(utl::GPL, "timing_gradpass_saturation_minl", fmt::format("{:e}", (double)nbv.timing_pass_saturation_minL));
-      log_->logToDbMetadata(utl::GPL, "timing_gradpass_precond_count_weight", fmt::format("{:e}", (double)nbv.timing_pass_precond_count_weight));
-      log_->logToDbMetadata(utl::GPL, "timing_gradpass_blend", fmt::format("{:e}", (double)nbv.timing_pass_blend));
-      log_->logToDbMetadata(utl::GPL, "routability_gradpass_sharpness", fmt::format("{:e}", (double)nbv.routability_pass_sharpness));
-      log_->logToDbMetadata(utl::GPL, "routability_gradpass_slope", fmt::format("{:e}", (double)nbv.routability_pass_slope));
-      log_->logToDbMetadata(utl::GPL, "routability_gradpass_clamp", fmt::format("{:e}", (double)nbv.routability_pass_clamp));
-      log_->logToDbMetadata(utl::GPL, "routability_gradpass_offset", fmt::format("{:e}", (double)nbv.routability_pass_offset));
-      log_->logToDbMetadata(utl::GPL, "routability_gradpass_precond_weight", fmt::format("{:e}", (double)nbv.routability_pass_precond_weight));
-      log_->logToDbMetadata(utl::GPL, "routability_gradpass_range", fmt::format("{:e}", (double)nbv.routability_pass_range));
-      log_->logToDbMetadata(utl::GPL, "routability_gradpass_first_iter", std::to_string(nbv.routability_pass_first_iter));
-      log_->logToDbMetadata(utl::GPL, "routability_gradpass_run_interval", std::to_string(nbv.routability_pass_run_interval));
-      log_->logToDbMetadata(utl::GPL, "routability_gradpass_use_grt", std::to_string(nbv.routability_pass_use_grt));
+      log_->logToDbMetadata(utl::GPL,
+                            "timing_gradpass_top_n",
+                            std::to_string(nbv.timing_pass_top_n));
+      log_->logToDbMetadata(
+          utl::GPL,
+          "timing_gradpass_n_paths_per_endpoint",
+          std::to_string(nbv.timing_pass_n_paths_per_endpoint));
+      log_->logToDbMetadata(
+          utl::GPL,
+          "timing_gradpass_proj_weight",
+          fmt::format("{:e}", (double) nbv.timing_pass_proj_weight));
+      log_->logToDbMetadata(
+          utl::GPL,
+          "timing_gradpass_end_to_end_weight",
+          fmt::format("{:e}", (double) nbv.timing_pass_end_to_end_weight));
+      log_->logToDbMetadata(
+          utl::GPL,
+          "timing_gradpass_slack_sharpness",
+          fmt::format("{:e}", (double) nbv.timing_pass_slack_sharpness));
+      log_->logToDbMetadata(
+          utl::GPL,
+          "timing_gradpass_slack_slope",
+          fmt::format("{:e}", (double) nbv.timing_pass_slack_slope));
+      log_->logToDbMetadata(
+          utl::GPL,
+          "timing_gradpass_slack_clamp",
+          fmt::format("{:e}", (double) nbv.timing_pass_slack_clamp));
+      log_->logToDbMetadata(
+          utl::GPL,
+          "timing_gradpass_slack_offset",
+          fmt::format("{:e}", (double) nbv.timing_pass_slack_offset));
+      log_->logToDbMetadata(
+          utl::GPL,
+          "timing_gradpass_slack_upper",
+          fmt::format("{:e}", (double) nbv.timing_pass_slack_upper));
+      log_->logToDbMetadata(
+          utl::GPL,
+          "timing_gradpass_saturation_kl",
+          fmt::format("{:e}", (double) nbv.timing_pass_saturation_kL));
+      log_->logToDbMetadata(
+          utl::GPL,
+          "timing_gradpass_saturation_minl",
+          fmt::format("{:e}", (double) nbv.timing_pass_saturation_minL));
+      log_->logToDbMetadata(
+          utl::GPL,
+          "timing_gradpass_precond_count_weight",
+          fmt::format("{:e}", (double) nbv.timing_pass_precond_count_weight));
+      log_->logToDbMetadata(
+          utl::GPL,
+          "timing_gradpass_blend",
+          fmt::format("{:e}", (double) nbv.timing_pass_blend));
+      log_->logToDbMetadata(
+          utl::GPL,
+          "routability_gradpass_sharpness",
+          fmt::format("{:e}", (double) nbv.routability_pass_sharpness));
+      log_->logToDbMetadata(
+          utl::GPL,
+          "routability_gradpass_slope",
+          fmt::format("{:e}", (double) nbv.routability_pass_slope));
+      log_->logToDbMetadata(
+          utl::GPL,
+          "routability_gradpass_clamp",
+          fmt::format("{:e}", (double) nbv.routability_pass_clamp));
+      log_->logToDbMetadata(
+          utl::GPL,
+          "routability_gradpass_offset",
+          fmt::format("{:e}", (double) nbv.routability_pass_offset));
+      log_->logToDbMetadata(
+          utl::GPL,
+          "routability_gradpass_precond_weight",
+          fmt::format("{:e}", (double) nbv.routability_pass_precond_weight));
+      log_->logToDbMetadata(
+          utl::GPL,
+          "routability_gradpass_range",
+          fmt::format("{:e}", (double) nbv.routability_pass_range));
+      log_->logToDbMetadata(utl::GPL,
+                            "routability_gradpass_first_iter",
+                            std::to_string(nbv.routability_pass_first_iter));
+      log_->logToDbMetadata(utl::GPL,
+                            "routability_gradpass_run_interval",
+                            std::to_string(nbv.routability_pass_run_interval));
+      log_->logToDbMetadata(utl::GPL,
+                            "routability_gradpass_use_grt",
+                            std::to_string(nbv.routability_pass_use_grt));
     }
 
     // Log routability iteration parameters from NesterovPlaceVars
-    log_->logToDbMetadata(utl::GPL, "routabilityGradPassFirstIter", std::to_string(npVars_.routabilityGradPassFirstIter));
-    log_->logToDbMetadata(utl::GPL, "routabilityGradPassRunInterval", std::to_string(npVars_.routabilityGradPassRunInterval));
+    log_->logToDbMetadata(utl::GPL,
+                          "routabilityGradPassFirstIter",
+                          std::to_string(npVars_.routabilityGradPassFirstIter));
+    log_->logToDbMetadata(
+        utl::GPL,
+        "routabilityGradPassRunInterval",
+        std::to_string(npVars_.routabilityGradPassRunInterval));
     metadata_logged = true;
   }
 
@@ -1108,7 +1222,6 @@ int NesterovPlace::doNesterovPlace(int start_iter)
       ++npVars_.maxNesterovIter;
     }
 
-
     runTimingPass(nesterov_iter,
                   timing_driven_dir,
                   routability_driven_revert_count,
@@ -1118,15 +1231,51 @@ int NesterovPlace::doNesterovPlace(int start_iter)
 
     if (isDiverged(diverge_snapshot_WlCoefX,
                    diverge_snapshot_WlCoefY,
-                   is_diverge_snapshot_saved)) {
-      log_->info(GPL,
-                 372,
-                 "[EXIT C] HPWL/overflow divergence at iter {} "
-                 "(code {}). {} region(s) affected.",
+                   is_diverge_snapshot_saved,
+                   /* skip_revert */ true)) {
+      consecutiveDivergeCount_++;
+      log_->warn(GPL,
+                 380,
+                 "HPWL/overflow divergence detected at iter {} "
+                 "({}/{} consecutive).",
                  nesterov_iter,
-                 divergeCode_,
-                 num_region_diverged_);
-      break;
+                 consecutiveDivergeCount_,
+                 npVars_.divergeConsecutiveThreshold);
+      if (consecutiveDivergeCount_ >= npVars_.divergeConsecutiveThreshold) {
+        // Hit the threshold — trigger the actual revert and exit.
+        if (!npVars_.disableRevertIfDiverge && is_diverge_snapshot_saved) {
+          log_->warn(GPL,
+                     1000,
+                     "Divergence threshold reached, reverting to snapshot "
+                     "with min hpwl.");
+          wireLengthCoefX_ = diverge_snapshot_WlCoefX;
+          wireLengthCoefY_ = diverge_snapshot_WlCoefY;
+          nbc_->updateWireLengthForceWA(wireLengthCoefX_, wireLengthCoefY_);
+          for (auto& nb : nbVec_) {
+            nb->revertToSnapshot();
+          }
+        } else {
+          divergeCode_ = 307;
+          divergeMsg_ = "RePlAce divergence detected after "
+                        + std::to_string(consecutiveDivergeCount_)
+                        + " consecutive divergent iterations.";
+        }
+        log_->info(GPL,
+                   372,
+                   "[EXIT C] HPWL/overflow divergence at iter {} "
+                   "(code {}). {} consecutive divergent iterations.",
+                   nesterov_iter,
+                   divergeCode_,
+                   consecutiveDivergeCount_);
+        break;
+      }
+      // Not at threshold yet — reset divergence state and keep going.
+      num_region_diverged_ = 0;
+      for (auto& nb : nbVec_) {
+        nb->resetDiverged();
+      }
+    } else {
+      consecutiveDivergeCount_ = 0;
     }
 
     // routabilitySnapshot(nesterov_iter,
@@ -1242,16 +1391,19 @@ void NesterovPlace::updateDb()
 }
 
 // divergence detection on
-// Wirelength / density gradient calculation
-// FIXME: add the timing and routability stuff
+// Wirelength / density / timing / routability gradient calculation
 void NesterovPlace::checkInvalidValues(float wireLengthGradSum,
-                                       float densityGradSum)
+                                       float densityGradSum,
+                                       float timingGradSum,
+                                       float routabilityGradSum)
 {
   if (std::isnan(wireLengthGradSum) || std::isnan(densityGradSum)
-      || std::isinf(wireLengthGradSum) || std::isinf(densityGradSum)) {
+      || std::isnan(timingGradSum) || std::isnan(routabilityGradSum)
+      || std::isinf(wireLengthGradSum) || std::isinf(densityGradSum)
+      || std::isinf(timingGradSum) || std::isinf(routabilityGradSum)) {
     divergeMsg_
-        = "RePlAce diverged at wire/density gradient Sum. An internal value is "
-          "NaN or Inf.";
+        = "RePlAce diverged at gradient Sum (wire/density/timing/routability). "
+          "An internal value is NaN or Inf.";
     divergeCode_ = 306;
     num_region_diverged_ = 1;
     return;

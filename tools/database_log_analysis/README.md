@@ -22,7 +22,7 @@ database_log_analysis/
 ├── preprocess_db.py                # standalone CLI to preprocess before analysis
 ├── plotting.py                     # convenience matplotlib plots
 ├── setup_venv.sh                   # shell: create .venv + install deps
-├── run_analysis_suite.sh           # shell: preprocess + launch all 7 tools
+├── run_analysis_suite.sh           # shell: preprocess + launch all 10 tools
 ├── path_visualizer.py              # Dash: path tracing with force arrows  (port 8050)
 ├── cell_force_analyzer.py          # Dash: cell force statistics  (port 8051)
 ├── path_similarity_analyzer.py     # Dash: path similarity        (port 8052)
@@ -30,6 +30,9 @@ database_log_analysis/
 ├── cell_path_stats.py              # Dash: cell-path statistics   (port 8054)
 ├── path_transience.py              # Dash: path lifecycle         (port 8055)
 ├── cell_timing_stability.py        # Dash: timing stability       (port 8056)
+├── pes_viewer.py                   # Dash: potential energy surface (port 8057)
+├── force_opposition_map.py         # Dash: force opposition map   (port 8058)
+├── work_budget_analyzer.py         # Dash: work budget analysis   (port 8059)
 ├── requirements.txt                # pinned Python dependencies
 └── README.md
 ```
@@ -73,6 +76,7 @@ df = gpl.cell_timing_gradients(cell_ids=[0, 1, 2])
 info = gpl.cell_static_info()
 scalars = gpl.iteration_scalars()
 bins = gpl.bin_grid(iter_range=(0, 50))
+phi  = gpl.bin_potential(iter_range=(50, 50))   # lightweight: potential only
 
 # Precomputed derived data
 metrics = gpl.cell_gradient_metrics(iter_range=(100, 200))
@@ -173,6 +177,9 @@ network interface.
 | `cell_path_stats.py` | 8054 | Force scatter, distributions, and movement statistics by path count |
 | `path_transience.py` | 8055 | Path lifecycle heatmaps, turnover, and cell-path scatter |
 | `cell_timing_stability.py` | 8056 | Oscillation, opposition, and wander detection under timing forces |
+| `pes_viewer.py` | 8057 | **NEW** Electrostatic potential surface heatmap + cell force opposition overlay |
+| `force_opposition_map.py` | 8058 | **NEW** Spatial & temporal structure of WL vs timing/routability force conflict |
+| `work_budget_analyzer.py` | 8059 | **NEW** Timing work vs. potential barrier — can timing forces escape density basins? |
 
 Launch any tool with:
 
@@ -202,8 +209,8 @@ it automatically.
 
 ### `run_analysis_suite.sh` — preprocess + launch everything
 
-Preprocesses a GPL database and then launches **all 7 analysis tools**
-simultaneously in read-only mode on their dedicated ports (8050–8056).
+Preprocesses a GPL database and then launches **all 10 analysis tools**
+simultaneously in read-only mode on their dedicated ports (8050–8059).
 
 ```bash
 ./run_analysis_suite.sh <path/to/database.sqlite>
@@ -214,7 +221,7 @@ simultaneously in read-only mode on their dedicated ports (8050–8056).
 1. Activates the ``.venv`` (created by ``setup_venv.sh``).
 2. Runs the standalone preprocessor (idempotent — skips derived tables
    that already exist).
-3. Launches all 7 Dash servers in the background, each with ``--read-only``.
+3. Launches all 10 Dash servers in the background, each with ``--read-only``.
 4. Prints the URLs and waits.  Press ``Ctrl+C`` to stop all servers.
 
 All 7 tools run concurrently and bind to ``0.0.0.0``:
@@ -228,6 +235,9 @@ All 7 tools run concurrently and bind to ``0.0.0.0``:
 | 8054 | Cell Path Statistics |
 | 8055 | Path Transience |
 | 8056 | Cell Timing Stability |
+| 8057 | PES Viewer |
+| 8058 | Force Opposition Map |
+| 8059 | Work Budget Analyzer |
 
 **Customizing:**
 
@@ -250,7 +260,8 @@ returned.
 | `cell_dense_gradients()` | `gpl_cell_dense_gradients` | `iter_range`, `cell_ids` | Pos, WL, density, sum gradients (PosX/Y, WlX/Y, DensX/Y, SumX/Y) every cell every iter |
 | `cell_timing_gradients()` | `gpl_cell_timing_gradients` | `iter_range`, `cell_ids` | Timing gradient (TimX, TimY) — sparse |
 | `iteration_scalars()` | `gpl_iteration_scalars` | — | StepLength, DensityPenalty, WlCoefX/Y, BaseWlCoef, SumOverflow per iter |
-| `bin_grid()` | `gpl_bin_grid` | `iter_range` | ElectroFieldX/Y, Density per (iter, bin) |
+| `bin_grid()` | `gpl_bin_grid` | `iter_range` | ElectroFieldX/Y, Density, ElectroPhi per (iter, bin) |
+| `bin_potential()` | `gpl_bin_grid` | `iter_range` | Lightweight: only Iter, BinIdx, ElectroPhi (the scalar potential φ) |
 | `path_slacks()` | `gpl_path_slacks` | — | Slack per (PathId, Iter) |
 | `path_cells()` | `gpl_path_cells` | `iter_range`, `path_ids` | CellId, PathSeq, slack per stage on timing paths |
 
@@ -347,6 +358,116 @@ Default batch size = 25 iterations; tune with `batch_size=`.
 | `gpl_cell_gradient_metrics` | 1 per (cell, iter) | 22M (derived) |
 | `gpl_cell_density_forces` | 1 per (cell, iter) | 22M (derived) |
 | `gpl_path_signatures` | 1 per (path, iter) | 38k (derived) |
+
+## Potential Energy Surface (PES) framework
+
+Three new tools (ports 8057–8059) provide a **potential-energy** view of
+global placement dynamics.  They are built on the electrostatic potential
+φ (column ``ElectroPhi`` in ``gpl_bin_grid``) which is computed every
+Nesterov iteration by the FFT-based density solver and now logged to the
+database.
+
+### Conceptual model
+
+The ePlace density force is **conservative:** ``F_dens = −∇φ`` where φ is
+obtained by solving ∇²φ = −ρ (Poisson's equation) via FFT.  Together with
+the wirelength force, φ defines a "consensus landscape" — cells descend
+into local minima (basins) following the WL + density gradient.
+
+**Timing** and **routability** forces are *non-conservative* — they can
+push cells *against* the gradient and out of their current basin.  This is
+the fundamental instability mechanism: the density penalty builds higher
+barriers between basins, while timing forces deliver "work" that can
+overcome those barriers.
+
+### Tool descriptions
+
+| Port | Tool | Question answered |
+|------|------|-------------------|
+| 8057 | **PES Viewer** | Where are the basins? Which cells are being pushed against the gradient? |
+| 8058 | **Force Opposition Map** | Is the conflict spatially concentrated or diffuse? Does it persist or decay? |
+| 8059 | **Work Budget Analyzer** | *Can* timing forces overcome the potential barriers around cells? Do they actually *cause* escapes? |
+
+#### PES Viewer (port 8057)
+
+Plots the electrostatic potential φ(x,y) as a 2D heatmap background
+(blue = deep basins, yellow = high-potential ridges).  Cell positions
+are overlaid, coloured by **force opposition** — cos(θ) between the
+conservative forces (WL + density) and the adversarial forces
+(timing + routability):
+
+- **Red = fighting** (cos < −0.3): timing pushes against the landscape
+- **Yellow/blue = aligned** (cos > −0.3): timing helps or is orthogonal
+
+Timing force arrows are drawn on opposing cells, showing the direction
+timing is pulling relative to the basin floor.  An iteration slider lets
+you scrub through the optimisation and observe when/where opposition
+flares up.
+
+**Key instability signal:** Opposition concentrated along basin boundaries
+late in the run, combined with large force arrows — timing is actively
+trying to pull cells over potential ridges.
+
+#### Force Opposition Map (port 8058)
+
+Analyses the **full spatio-temporal structure** of conflict across an
+iteration range with three linked panels:
+
+1. **Spatial heatmap** — cells binned onto a grid, coloured by mean
+   cos(θ) per bin.  Red regions = systemic conflict (many neighbouring
+   cells fighting).  Green regions = timing helping placement.
+
+2. **Opposition histogram** — shows the distribution of cos(θ) values.
+   A bimodal distribution (peaks near +1 and −1) indicates that timing
+   forces are either fully helping or fully opposing, with little middle
+   ground — a signature of an optimisation with sharply conflicting goals.
+
+3. **Time series** — fraction of cells in conflict (cos < threshold) and
+   mean cos(θ) over iterations.  Vertical dots mark timing-pass iterations.
+   A growing "in conflict" fraction over time indicates escalating
+   disagreement between timing and placement objectives.
+
+#### Work Budget Analyzer (port 8059)
+
+The most mechanistic of the three tools.  For every cell involved in a
+timing path at every timing-pass iteration, it computes:
+
+- **Barrier height** — the minimum potential difference between the
+  cell's current position and a perimeter at radius R (configurable).
+  A large barrier = the cell is deep in a basin.
+
+- **Available timing work** — ``|F_tim| × stepLength``, the distance the
+  timing force can move the cell in one Nesterov step.
+
+These are plotted on a log-log scatter:
+
+    X = barrier height   (cost to escape)
+    Y = timing work      (budget available)
+
+Points *above* the y=x diagonal are energetically capable of escaping
+(W > Barrier).  Points below are contained.  Cells that actually *did*
+escape (moved > threshold nm in subsequent iterations) are marked with
+red crosses.
+
+Four panels:
+
+1. **Scatter** — barrier vs. work, coloured by escape outcome
+2. **Ratio histogram** — distribution of log₁₀(Work / Barrier)
+3. **Barrier & work time series** — do they co-evolve or diverge?
+4. **Escape rate time series** — fraction of timing events causing escapes
+
+**Operational insight:** When barriers grow with density penalty but
+available work does not decrease, timing dominates placement.  When
+escape rate is high late in optimisation, the density penalty may
+need to be increased to "freeze" the landscape before timing is
+allowed to operate.
+
+### C++ datasource
+
+The ``ElectroPhi`` column was added to ``gpl_bin_grid`` via a one-line
+change to ``dumpBinGrid()`` in ``src/gpl/src/nesterovBase.cpp``.  The
+value was already computed by the FFT pass (``Bin::electroPhi_``) but
+was not previously logged to the database.
 
 ## Testing
 

@@ -45,6 +45,10 @@ class GplDb(DbConnection):
     batch_size : int
         Iterations per batch during preprocessing (default 25).
         Smaller values reduce peak RAM at the cost of more passes.
+    fast_readonly : bool
+        If True, open read-only, skip ALL preprocessing and indexing.
+        Use for one-shot metric extraction where the database will be
+        deleted immediately afterwards.  (default: False)
     """
 
     def __init__(
@@ -52,7 +56,11 @@ class GplDb(DbConnection):
         db_path: str,
         must_be_preprocessed: bool = False,
         batch_size: int = 25,
+        fast_readonly: bool = False,
     ):
+        if fast_readonly:
+            super().__init__(db_path, read_only=True)
+            return
         if must_be_preprocessed:
             super().__init__(db_path, read_only=True)
             self._ensure_preprocessed()
@@ -758,7 +766,16 @@ class GplDb(DbConnection):
     def bin_grid(
         self, iter_range: Optional[Tuple[int, int]] = None
     ) -> pd.DataFrame:
-        """Electrostatic bin grid (field + density) per iteration."""
+        """Electrostatic bin grid per iteration.
+
+        Returns columns: Iter, BinIdx, ElectroFieldX, ElectroFieldY,
+        Density, ElectroPhi.
+
+        ``ElectroPhi`` is the scalar electrostatic potential φ such
+        that ElectroField ≈ -∇φ.  It is the fundamental field for
+        potential-energy-surface (PES) reconstruction, basin detection,
+        and barrier-height analysis.
+        """
         sql, params = self._make_select(
             "gpl_bin_grid",
             iter_range=iter_range,
@@ -766,6 +783,25 @@ class GplDb(DbConnection):
         )
         if not sql:
             return pd.DataFrame()
+        return self.query(sql, params)
+
+    def bin_potential(
+        self, iter_range: Optional[Tuple[int, int]] = None
+    ) -> pd.DataFrame:
+        """Lightweight accessor: only ElectroPhi (the scalar potential).
+
+        Use this instead of :meth:`bin_grid` when you only need the
+        potential surface and want to avoid fetching the full field
+        vectors.
+
+        Returns columns: Iter, BinIdx, ElectroPhi.
+        """
+        sql = "SELECT Iter, BinIdx, ElectroPhi FROM gpl_bin_grid"
+        params: tuple = ()
+        if iter_range is not None:
+            sql += " WHERE Iter BETWEEN ? AND ?"
+            params = tuple(iter_range)
+        sql += " ORDER BY Iter, BinIdx"
         return self.query(sql, params)
 
     # ================================================================
