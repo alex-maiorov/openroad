@@ -30,6 +30,7 @@ sta::define_cmd_args "global_placement" {\
     [-routability_rc_coefficients routability_rc_coefficients]\
     [-pad_left pad_left]\
     [-pad_right pad_right]\
+    [-diverge_consecutive_threshold diverge_consecutive_threshold]\
     [-disable_revert_if_diverge]\
     [-disable_pin_density_adjust]\
     [-enable_routing_congestion]\
@@ -74,6 +75,7 @@ proc global_placement { args } {
       -routability_max_inflation_ratio \
       -routability_rc_coefficients \
       -pad_left -pad_right \
+      -diverge_consecutive_threshold \
       -timing_gradpass_top_n \
       -timing_gradpass_n_paths_per_endpoint \
       -timing_gradpass_proj_weight \
