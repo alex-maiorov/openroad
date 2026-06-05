@@ -5527,7 +5527,7 @@ FloatPoint NesterovBase::calculateTimingGradientValue(
   auto apply_pseudo_huber = [L](const FloatPoint& offset, float weight) {
     FloatPoint raw = FloatPoint(offset.x * weight, offset.y * weight);
     const float d = std::sqrt(offset.x * offset.x + offset.y * offset.y);
-    if (d < 1e-12f) {
+    if (d < std::numeric_limits<float>::epsilon) {
       return FloatPoint(0.0f, 0.0f);
     }
     const float scale = (L / d) * std::tanh(d / L);
