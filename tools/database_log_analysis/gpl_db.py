@@ -757,6 +757,24 @@ class GplDb(DbConnection):
             return pd.DataFrame()
         return self.query(sql, params)
 
+    def cell_routability_gradients(
+        self,
+        iter_range: Optional[Tuple[int, int]] = None,
+        cell_ids: Optional[List[int]] = None,
+    ) -> pd.DataFrame:
+        """Routability gradient components (sparse — missing == zero force)."""
+        if not self._exists("gpl_cell_routability_gradients"):
+            return pd.DataFrame()
+        sql, params = self._make_select(
+            "gpl_cell_routability_gradients",
+            iter_range=iter_range,
+            cell_ids=cell_ids,
+            order_by="Iter, CellId",
+        )
+        if not sql:
+            return pd.DataFrame()
+        return self.query(sql, params)
+
     def iteration_scalars(self) -> pd.DataFrame:
         """Per-iteration scalar values (step length, penalty, overflow)."""
         return self.query(

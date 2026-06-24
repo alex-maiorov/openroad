@@ -299,6 +299,12 @@ def make_app(gpl: GplDb) -> dash.Dash:
         # Slack in picoseconds
         path_iter["Slack_ps"] = path_iter["Slack"] * 1e12
 
+        # ── Build previous-iteration-slot lookup ───────────────
+        unique_iters = sorted(path_iter["Iter"].unique())
+        iter_to_prev = {}
+        for i, it in enumerate(unique_iters):
+            iter_to_prev[it] = unique_iters[i - 1] if i > 0 else None
+
         # ── Classify each (PhysId, Iter) as new/continuing/returning ─
         print("[transience] Classifying path categories...")
         pi_sorted = path_iter.sort_values(["PhysicalPathId", "Iter"])
@@ -315,10 +321,12 @@ def make_app(gpl: GplDb) -> dash.Dash:
             min_it = min(iters)
             if it == min_it:
                 categories.append("new")
-            elif (it - 10) in iters:
-                categories.append("continuing")
             else:
-                categories.append("returning")
+                prev_slot = iter_to_prev.get(it)
+                if prev_slot is not None and prev_slot in iters:
+                    categories.append("continuing")
+                else:
+                    categories.append("returning")
         path_iter["category"] = categories
 
         # ── Per-path summary ──────────────────────────────────
@@ -395,17 +403,17 @@ def make_app(gpl: GplDb) -> dash.Dash:
             phys_iters.setdefault(pid, []).append(it)
 
         turnover_rows = []
-        unique_iters = sorted(path_iter["Iter"].unique())
         for it in unique_iters:
             new_cnt = 0
             continuing_cnt = 0
             returning_cnt = 0
+            prev_slot = iter_to_prev.get(it)
             for pid, iters in phys_iters.items():
                 if it not in iters:
                     continue
                 if iters[0] == it:
                     new_cnt += 1
-                elif it - 10 in iters:  # appeared at previous query slot
+                elif prev_slot is not None and prev_slot in iters:
                     continuing_cnt += 1
                 else:
                     returning_cnt += 1

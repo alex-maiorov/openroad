@@ -222,7 +222,7 @@ def make_app(gpl: GplDb) -> dash.Dash:
         # Create Plot 3: Force Magnitudes (timing vs other forces)
         fig3 = go.Figure()
         fig3.update_layout(
-            title="Force Magnitude Over Time",
+            title="Net Force Magnitude Over Time",
             xaxis_title="Iteration",
             yaxis_title="|Force|",
             hovermode="x unified",
@@ -252,26 +252,12 @@ def make_app(gpl: GplDb) -> dash.Dash:
                     name=label,
                 ))
                 
-                # Magnitudes plot: timing force as solid line, WL + density as faint
+                # Magnitudes plot: net force magnitude
                 fig3.add_trace(go.Scatter(
-                    x=c_f["Iter"], y=c_f["mag_tim"],
+                    x=c_f["Iter"], y=c_f["mag_eff"],
                     mode="lines",
-                    name=f"{label} |Tim|",
+                    name=label,
                     line=dict(color=color, width=2),
-                ))
-                fig3.add_trace(go.Scatter(
-                    x=c_f["Iter"], y=c_f["mag_wl"],
-                    mode="lines",
-                    name=f"{label} |WL|",
-                    line=dict(color=color, width=1, dash="dot"),
-                    showlegend=False,
-                ))
-                fig3.add_trace(go.Scatter(
-                    x=c_f["Iter"], y=c_f["mag_dens"],
-                    mode="lines",
-                    name=f"{label} |Dens|",
-                    line=dict(color=color, width=1, dash="dash"),
-                    showlegend=False,
                 ))
                     
         return fig1, fig2, fig3
