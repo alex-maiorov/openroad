@@ -12,6 +12,7 @@
 *.vscode
 *.sw[opqr]
 *.code-workspace
+*.sif
 TAGS
 *~
 \#*#

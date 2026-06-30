@@ -1,0 +1,26 @@
+Bootstrap: docker
+From: ubuntu:24.04
+
+%environment
+    export LANG=C.UTF-8
+    export LC_ALL=C.UTF-8
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    export TZ=America/Los_Angeles
+    export LANG=C.UTF-8
+    export LC_ALL=C.UTF-8
+
+    /opt/DependencyInstaller.sh -ci -base
+    /opt/DependencyInstaller.sh -ci -common -save-deps-prefixes=/opt/openroad_deps_prefixes.txt
+
+    strip --remove-section=.note.ABI-tag /usr/lib/x86_64-linux-gnu/libQt5Core.so || true
+    rm -rf /var/lib/apt/lists/*
+    rm -f /opt/DependencyInstaller.sh
+
+%files
+    etc/DependencyInstaller.sh /opt/DependencyInstaller.sh
+
+%labels
+    Author OpenROAD Project
+    Description OpenROAD build prerequisites
